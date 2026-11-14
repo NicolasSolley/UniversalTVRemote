@@ -24,6 +24,14 @@ struct RemoteCapabilities {
     let supportsApps: Bool
     let supportsSeparatePause: Bool
     let supportsPlayback: Bool
+    /// The phone's mic can drive the TV's voice input (hold the mic
+    /// button and talk). Only Android TV: its Remote v2 protocol
+    /// carries voice as 16-bit PCM mono 8 kHz on the remote session.
+    /// Roku ECP cannot stream phone audio (its Search key only opens
+    /// the TV's voice UI); Samsung's KEY_BT_VOICE only activates the
+    /// TV's own voice recognition, which listens via the TV / physical
+    /// remote mic, not the phone; LG has no public voice-injection API.
+    let supportsVoice: Bool
     /// Pairing needs an on-TV Allow prompt (Samsung, LG).
     let needsTVPrompt: Bool
     /// Pairing needs a code shown on the TV typed into the app (Android TV).
@@ -35,30 +43,31 @@ struct RemoteCapabilities {
             return RemoteCapabilities(
                 supportsDigits: false, supportsTextInput: true, supportsApps: true,
                 supportsSeparatePause: false, supportsPlayback: true,
-                needsTVPrompt: false, needsPairingCode: false)
+                supportsVoice: false, needsTVPrompt: false, needsPairingCode: false)
         case .samsung:
             return RemoteCapabilities(
                 supportsDigits: true, supportsTextInput: true, supportsApps: false,
                 supportsSeparatePause: true, supportsPlayback: true,
-                needsTVPrompt: true, needsPairingCode: false)
+                supportsVoice: false, needsTVPrompt: true, needsPairingCode: false)
         case .lg:
             return RemoteCapabilities(
                 supportsDigits: true, supportsTextInput: true, supportsApps: false,
                 supportsSeparatePause: true, supportsPlayback: true,
-                needsTVPrompt: true, needsPairingCode: false)
+                supportsVoice: false, needsTVPrompt: true, needsPairingCode: false)
         case .androidTV:
             // Text input is not implemented (IME batch edits need live
             // counters that cannot be verified without a real TV), so the
-            // keyboard is hidden for Android TV.
+            // keyboard is hidden for Android TV. Voice IS implemented:
+            // the remote session carries 8 kHz PCM (see AndroidTVRemote).
             return RemoteCapabilities(
                 supportsDigits: true, supportsTextInput: false, supportsApps: false,
                 supportsSeparatePause: true, supportsPlayback: true,
-                needsTVPrompt: false, needsPairingCode: true)
+                supportsVoice: true, needsTVPrompt: false, needsPairingCode: true)
         case .airPlay, .other:
             return RemoteCapabilities(
                 supportsDigits: false, supportsTextInput: false, supportsApps: false,
                 supportsSeparatePause: false, supportsPlayback: false,
-                needsTVPrompt: false, needsPairingCode: false)
+                supportsVoice: false, needsTVPrompt: false, needsPairingCode: false)
         }
     }
 }
@@ -81,12 +90,22 @@ final class RemoteSession: ObservableObject {
     /// The pairing code the user typed (6 hex characters for Android TV).
     @Published var pairingCode = ""
     @Published var rokuApps: [RokuRemote.RokuApp] = []
+    /// True while the mic is capturing for a voice utterance.
+    @Published var isRecordingVoice = false
 
     private let samsung = SamsungRemote()
     private let lg: LGRemote
     private let androidTV = AndroidTVRemote()
     /// Continuation the Android TV code provider is waiting on.
     private var codeContinuation: CheckedContinuation<String, Error>?
+    private let voiceCapture = VoiceCapture()
+    /// Session id of the utterance in progress, if any.
+    private var voiceSessionId: Int?
+    /// Audio chunks flow capture -> continuation -> pump -> TV, in
+    /// order: the AsyncStream preserves chunk order, so speech cannot
+    /// arrive scrambled.
+    private var voiceContinuation: AsyncStream<Data>.Continuation?
+    private var voicePumpTask: Task<Void, Never>?
 
     init(device: TVDevice) {
         self.device = device
@@ -192,6 +211,12 @@ final class RemoteSession: ObservableObject {
                 if let probe = await androidTV.lastNoIdentityProbe {
                     text += " \(probe)"
                 }
+                // And the handshake recorder: what the TV actually sends
+                // back during a raw TLS handshake — the evidence for
+                // why the mutual-TLS handshake dies with -9808.
+                if let record = await androidTV.lastHandshakeRecord {
+                    text += " \(record)"
+                }
                 status = text
             } catch {
                 isConnected = false
@@ -203,6 +228,7 @@ final class RemoteSession: ObservableObject {
     }
 
     func disconnect() {
+        stopVoiceCapture()
         codeContinuation?.resume(throwing: CancellationError())
         codeContinuation = nil
         awaitingPairingCode = false
@@ -210,6 +236,71 @@ final class RemoteSession: ObservableObject {
         Task { await lg.disconnect() }
         Task { await androidTV.disconnect() }
         isConnected = false
+    }
+
+    /// Starts a voice utterance (Android TV only): opens the mic, sends
+    /// RemoteVoiceBegin, and streams 8 kHz PCM until stopVoice().
+    /// Hold-to-talk: the UI calls this on press-down and stopVoice() on
+    /// release. A no-op when voice is unsupported or already recording.
+    func startVoice() async {
+        guard capabilities.supportsVoice, !isRecordingVoice else { return }
+        guard isConnected else {
+            status = "Not connected — tap a button to connect first."
+            return
+        }
+        // AsyncStream.makeStream() needs iOS 17; the closure init below
+        // works back to iOS 15 (the app's deployment target).
+        var streamContinuation: AsyncStream<Data>.Continuation!
+        let stream = AsyncStream<Data> { streamContinuation = $0 }
+        voiceContinuation = streamContinuation
+        do {
+            try await voiceCapture.start { [weak self] samples in
+                self?.voiceContinuation?.yield(samples)
+            }
+            let id = try await androidTV.beginVoice()
+            voiceSessionId = id
+            voicePumpTask = Task {
+                for await samples in stream {
+                    try? await androidTV.sendVoiceSamples(samples, sessionId: id)
+                }
+            }
+            isRecordingVoice = true
+            status = "Listening… speak now."
+        } catch let error as VoiceCapture.VoiceCaptureError {
+            stopVoiceCapture()
+            status = error.localizedDescription
+        } catch {
+            stopVoiceCapture()
+            status = "Couldn't start voice input."
+        }
+    }
+
+    /// Ends a voice utterance: stops capture, drains the remaining
+    /// audio to the TV in order, then sends RemoteVoiceEnd.
+    func stopVoice() async {
+        guard isRecordingVoice, let id = voiceSessionId else { return }
+        voiceCapture.stop()
+        voiceContinuation?.finish()
+        voiceContinuation = nil
+        await voicePumpTask?.value
+        voicePumpTask = nil
+        voiceSessionId = nil
+        isRecordingVoice = false
+        try? await androidTV.endVoice(sessionId: id)
+        status = "Sent."
+    }
+
+    /// Stop capture and drop all voice state without sending
+    /// RemoteVoiceEnd — used on error paths and disconnect, where the
+    /// session is gone or was never begun.
+    private func stopVoiceCapture() {
+        voiceCapture.stop()
+        voiceContinuation?.finish()
+        voiceContinuation = nil
+        voicePumpTask?.cancel()
+        voicePumpTask = nil
+        voiceSessionId = nil
+        isRecordingVoice = false
     }
 
     /// Called by the pairing-code UI when the user submits the code.

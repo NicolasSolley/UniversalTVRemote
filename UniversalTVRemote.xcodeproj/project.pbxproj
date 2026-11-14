@@ -22,6 +22,8 @@
 		FF07ED2A82D64CC5A3D66B69 /* TVDevice.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7774389067A4C1C9F6ACCF6 /* TVDevice.swift */; };
 		EB2C0BDC8D62439E8D0EA0C5 /* UniversalTVRemoteApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CBEB188AB8744F7B202E1AD /* UniversalTVRemoteApp.swift */; };
 		B14983B2B4B94BACBCDD8925 /* X509.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8477BEAB10E2447A9FCAB9A8 /* X509.swift */; };
+		3B20C4BB31B041A783B1A4A1 /* TLSHandshakeRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75B0B754E2BE4B589AA2EDD8 /* TLSHandshakeRecorder.swift */; };
+		872AF0FE11C84D3FB903AF66 /* VoiceInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAE10D5E61874C9C975930A1 /* VoiceInput.swift */; };
 		041547DB8A35806CE609C942 /* UniversalTVRemoteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E337D5391F45CC9E22AA4BE /* UniversalTVRemoteTests.swift */; };
 		EBD11B9EC1324CF79C2D0EE2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9AF4BF83DEBB406CBEFB6EF6 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
@@ -42,6 +44,8 @@
 		D7774389067A4C1C9F6ACCF6 /* TVDevice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVDevice.swift; sourceTree = "<group>"; };
 		5CBEB188AB8744F7B202E1AD /* UniversalTVRemoteApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UniversalTVRemoteApp.swift; sourceTree = "<group>"; };
 		8477BEAB10E2447A9FCAB9A8 /* X509.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = X509.swift; sourceTree = "<group>"; };
+		75B0B754E2BE4B589AA2EDD8 /* TLSHandshakeRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TLSHandshakeRecorder.swift; sourceTree = "<group>"; };
+		AAE10D5E61874C9C975930A1 /* VoiceInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceInput.swift; sourceTree = "<group>"; };
 		972A40E4CA0C442CA69E7D7B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		9AF4BF83DEBB406CBEFB6EF6 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A369EC5675FA4FD78AF1EFA3 /* UniversalTVRemote.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = UniversalTVRemote.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -96,6 +100,8 @@
 				D7774389067A4C1C9F6ACCF6 /* TVDevice.swift */,
 				5CBEB188AB8744F7B202E1AD /* UniversalTVRemoteApp.swift */,
 				8477BEAB10E2447A9FCAB9A8 /* X509.swift */,
+				75B0B754E2BE4B589AA2EDD8 /* TLSHandshakeRecorder.swift */,
+				AAE10D5E61874C9C975930A1 /* VoiceInput.swift */,
 				972A40E4CA0C442CA69E7D7B /* Info.plist */,
 				9AF4BF83DEBB406CBEFB6EF6 /* Assets.xcassets */,
 			);
@@ -251,6 +257,8 @@
 				FF07ED2A82D64CC5A3D66B69 /* TVDevice.swift in Sources */,
 				EB2C0BDC8D62439E8D0EA0C5 /* UniversalTVRemoteApp.swift in Sources */,
 				B14983B2B4B94BACBCDD8925 /* X509.swift in Sources */,
+				3B20C4BB31B041A783B1A4A1 /* TLSHandshakeRecorder.swift in Sources */,
+				872AF0FE11C84D3FB903AF66 /* VoiceInput.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

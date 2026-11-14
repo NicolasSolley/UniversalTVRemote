@@ -47,17 +47,14 @@ struct ContentView: View {
 // MARK: - Discovery
 
 /// Device picker, modeled on the reference "Select a TV Device" screen:
-/// a header row (X, centered title, empty right), one dark card holding
-/// the whole TV list, the same-wifi note underneath, and a small spinner
-/// as the only scanning indicator. The scan runs automatically and
-/// silently on launch (see ContentView); there is no scan button and no
-/// scan progress UI — the list simply populates as TVs are found.
-/// Pull-to-refresh re-scans.
+/// a centered title, one dark card holding the whole TV list, the
+/// same-wifi note underneath, and a small spinner as the only scanning
+/// indicator. The scan runs automatically and silently on launch (see
+/// ContentView); there is no scan button and no scan progress UI — the
+/// list simply populates as TVs are found. Pull-to-refresh re-scans.
 private struct DiscoveryListView: View {
     @ObservedObject var discovery: DiscoveryManager
     var onSelect: (TVDevice) -> Void
-
-    @Environment(\.dismiss) private var dismiss
 
     /// True once a scan has finished at least once — drives the empty
     /// state (still scanning vs. nothing found). View-side only; the
@@ -67,29 +64,13 @@ private struct DiscoveryListView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
-                // Header: X on the left, title centered, right kept
-                // empty so the title stays centered. There is no ?
-                // button (deliberately left out). The X dismisses this
-                // screen; the device list is the app's root, so there
-                // is no previous screen to return to and dismiss() is
-                // a no-op here — the button exists to match the
-                // reference layout.
-                HStack {
-                    Button { dismiss() } label: {
-                        Image(systemName: "xmark")
-                            .font(.headline)
-                            .foregroundStyle(.white)
-                            .frame(width: 44, height: 44)
-                    }
-                    .buttonStyle(.plain)
-                    Spacer()
-                    Text("Select a TV Device")
-                        .font(.headline.bold())
-                        .foregroundStyle(.white)
-                    Spacer()
-                    Color.clear.frame(width: 44, height: 44)
-                }
-                .padding(.horizontal, 8)
+                // Header: just the centered title. The X from the
+                // reference is gone (Nick's call, v1.0.9): the device
+                // list is the app's root, so there is no previous
+                // screen for it to return to. No ? button either.
+                Text("Select a TV Device")
+                    .font(.headline.bold())
+                    .foregroundStyle(.white)
 
                 // One dark card holding the whole TV list.
                 VStack(spacing: 0) {
@@ -241,13 +222,44 @@ private struct DiscoveryListView: View {
 
 // MARK: - Remote
 
+/// Apple TV-style remote, modeled on the reference "TV Remote" screen:
+/// a header row (keyboard button, centered "TV Remote" title), a row
+/// with Home, a D-pad/touchpad toggle, and Power, a big circular D-pad
+/// (or the touchpad, behind the toggle), a button grid with a tall VOL
+/// rocker on the right, and app shortcut cards at the bottom. Dark and
+/// neutral throughout — no accent color, no ads, no promos. The screen
+/// title in the navigation bar stays the TV's name (it identifies
+/// which TV is being controlled); the in-content header reads
+/// "TV Remote" as in the reference.
+/// The big circular D-pad is the main navigation (default on open).
+/// The touchpad stays as the alternate behind the toggle, but it is a
+/// modest 230×230 square — the same footprint as the D-pad — not a
+/// giant pad dominating the screen. Voice: a hold-to-talk mic button
+/// in the lower section (Android TV only — the only platform whose
+/// protocol carries phone mic audio).
+/// Dropped to keep the layout clean: the number pad (digits were the
+/// only way to type channel numbers directly) and the channel rocker
+/// (channel up/down were the only way to change channels directly) —
+/// neither has a replacement on this screen; use the TV's own remote
+/// or the on-screen guide for channels. The Stop button is gone too
+/// (no slot in the reference; Play/Pause covers transport). The
+/// Input/exit button from the reference is omitted: no brand controller
+/// has a verified source/input key, so it would be a dead button.
+/// Replay sends Rewind (the closest transport command — the row below
+/// has a Rewind button too, so both rewind). Star sends Info (on Roku
+/// the * key IS the options/info key). Menu takes the omitted mic
+/// button's slot in the last grid row. Play/Pause is one button with a
+/// local toggle: it assumes the TV is playing, so the first tap sends
+/// Pause, then it alternates — the TV's real play state is not tracked.
 private struct RemoteView: View {
     @ObservedObject var session: RemoteSession
     var onBack: () -> Void
 
-    @State private var navMode: NavMode = .touchpad
+    @State private var navMode: NavMode = .dpad
     @State private var keyboardText = ""
-    @State private var showDigits = false
+    @State private var showKeyboard = false
+    /// Assume the TV is playing until the user taps Play/Pause.
+    @State private var isPlaying = true
 
     enum NavMode: String, CaseIterable {
         case touchpad = "Touchpad"
@@ -286,101 +298,34 @@ private struct RemoteView: View {
                     .padding(.horizontal)
                 }
 
-                // Power
+                // Header: keyboard button on the left (only where the
+                // platform supports text input), "TV Remote" centered,
+                // right kept empty (cast is out of scope — nothing in
+                // its place).
                 HStack {
-                    Spacer()
-                    Button { send(.power) } label: {
-                        Image(systemName: "power")
-                            .font(.title2.bold())
-                            .foregroundStyle(.white)
-                            .frame(width: 64, height: 64)
-                            .background(Color.red.opacity(0.85), in: Circle())
-                            .shadow(color: .red.opacity(0.4), radius: 14, y: 4)
-                    }
-                    .buttonStyle(.plain)
-                    Spacer()
-                }
-                if session.device.brand == .lg {
-                    Text("Power turns the TV off. Turn it back on with the TV's own remote.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                }
-
-                // Navigation: touchpad or D-pad
-                Picker("Navigation", selection: $navMode) {
-                    ForEach(NavMode.allCases, id: \.self) { mode in
-                        Text(mode.rawValue).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal)
-
-                if navMode == .touchpad {
-                    TouchpadView { send($0) }
-                } else {
-                    DPadView { send($0) }
-                }
-
-                // Volume + channel rockers
-                HStack(spacing: 32) {
-                    RockerView(
-                        topIcon: "plus", topLabel: "Vol +",
-                        centerIcon: "speaker.wave.2",
-                        bottomIcon: "minus", bottomLabel: "Vol −",
-                        onTop: { send(.volumeUp) },
-                        onCenter: { send(.mute) },
-                        onBottom: { send(.volumeDown) })
-                    RockerView(
-                        topIcon: "chevron.up", topLabel: "Ch +",
-                        centerIcon: "list.bullet",
-                        bottomIcon: "chevron.down", bottomLabel: "Ch −",
-                        onTop: { send(.channelUp) },
-                        onCenter: { send(.info) },
-                        onBottom: { send(.channelDown) })
-                }
-
-                // Back / Home / Menu
-                HStack(spacing: 18) {
-                    remoteButton("Back", systemImage: "arrow.uturn.backward") { send(.back) }
-                    remoteButton("Home", systemImage: "house") { send(.home) }
-                    remoteButton("Menu", systemImage: "line.3.horizontal") { send(.menu) }
-                }
-
-                // Playback
-                if session.capabilities.supportsPlayback {
-                    HStack(spacing: 18) {
-                        remoteButton(nil, systemImage: "backward.fill") { send(.rewind) }
-                        remoteButton(nil, systemImage: "play.fill") { send(.play) }
-                        if session.capabilities.supportsSeparatePause {
-                            remoteButton(nil, systemImage: "pause.fill") { send(.pause) }
-                            remoteButton(nil, systemImage: "stop.fill") { send(.stop) }
+                    if session.capabilities.supportsTextInput {
+                        Button { showKeyboard.toggle() } label: {
+                            Image(systemName: "keyboard")
+                                .font(.headline)
+                                .foregroundStyle(.white)
+                                .frame(width: 44, height: 44)
+                                .background(Color.white.opacity(0.10), in: Circle())
                         }
-                        remoteButton(nil, systemImage: "forward.fill") { send(.fastForward) }
+                        .buttonStyle(.plain)
+                    } else {
+                        Color.clear.frame(width: 44, height: 44)
                     }
+                    Spacer()
+                    Text("TV Remote")
+                        .font(.headline.bold())
+                        .foregroundStyle(.white)
+                    Spacer()
+                    Color.clear.frame(width: 44, height: 44)
                 }
+                .padding(.horizontal, 8)
 
-                // Digits
-                if session.capabilities.supportsDigits {
-                    DisclosureGroup("Number pad", isExpanded: $showDigits) {
-                        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 3), spacing: 10) {
-                            ForEach(1...9, id: \.self) { n in
-                                digitButton(n)
-                            }
-                            Color.clear.frame(height: 44)
-                            digitButton(0)
-                            Color.clear.frame(height: 44)
-                        }
-                        .padding(.top, 8)
-                    }
-                    .padding(12)
-                    .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16))
-                    .padding(.horizontal)
-                }
-
-                // Keyboard / text input
-                if session.capabilities.supportsTextInput {
+                // Keyboard / text input, revealed by the header button.
+                if showKeyboard, session.capabilities.supportsTextInput {
                     HStack {
                         TextField("Type on the TV…", text: $keyboardText)
                             .textFieldStyle(.roundedBorder)
@@ -398,7 +343,54 @@ private struct RemoteView: View {
                     .padding(.horizontal)
                 }
 
-                // Roku apps
+                // Home / nav toggle / Power.
+                HStack {
+                    remoteSquareButton(systemImage: "house") { send(.home) }
+                    Spacer()
+                    navToggle
+                    Spacer()
+                    remoteSquareButton(systemImage: "power", tint: .red) { send(.power) }
+                }
+                .padding(.horizontal)
+                if session.device.brand == .lg {
+                    Text("Power turns the TV off. Turn it back on with the TV's own remote.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                }
+
+                // Navigation: big circular D-pad or touchpad, behind the toggle.
+                if navMode == .dpad {
+                    CircularDPadView { send($0) }
+                } else {
+                    TouchpadView { send($0) }
+                }
+
+                // Button grid + tall VOL rocker on the right.
+                HStack(alignment: .top, spacing: 12) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 3), spacing: 12) {
+                        remoteButton(nil, systemImage: "arrow.left") { send(.back) }
+                        remoteButton(nil, systemImage: "arrow.counterclockwise") { send(.rewind) }
+                        remoteButton(nil, systemImage: "star.fill") { send(.info) }
+                        if session.capabilities.supportsPlayback {
+                            remoteButton(nil, systemImage: "backward.fill") { send(.rewind) }
+                            remoteButton(nil, systemImage: isPlaying ? "pause.fill" : "play.fill") {
+                                isPlaying.toggle()
+                                send(isPlaying ? .pause : .play)
+                            }
+                            remoteButton(nil, systemImage: "forward.fill") { send(.fastForward) }
+                        }
+                        remoteButton(nil, systemImage: "line.3.horizontal") { send(.menu) }
+                        remoteButton(nil, systemImage: "speaker.slash.fill") { send(.mute) }
+                    }
+                    VolRockerView(onUp: { send(.volumeUp) }, onDown: { send(.volumeDown) })
+                }
+                .padding(.horizontal)
+
+                // Roku apps: only the apps actually installed on the TV
+                // (Netflix, YouTube, Apple TV first when present). An
+                // empty list hides the row entirely — no dead buttons.
                 if session.capabilities.supportsApps, !session.rokuApps.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Apps")
@@ -406,16 +398,53 @@ private struct RemoteView: View {
                             .padding(.horizontal)
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 10) {
-                                ForEach(session.rokuApps) { app in
+                                ForEach(sortedRokuApps) { app in
                                     Button(app.name) {
                                         Task { await session.launchRokuApp(app) }
                                     }
-                                    .buttonStyle(.bordered)
+                                    .font(.subheadline.bold())
                                     .lineLimit(1)
+                                    .padding(.horizontal, 16)
+                                    .frame(height: 56)
+                                    .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
+                                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.08), lineWidth: 1))
+                                    .buttonStyle(.plain)
                                 }
                             }
                             .padding(.horizontal)
                         }
+                    }
+                }
+
+                // Voice (Android TV only): hold the mic button and
+                // talk — the TV acts on it. Shown only where voice is
+                // actually implemented; never a dead button. Sits in
+                // the lower section, near the app shortcuts.
+                if session.capabilities.supportsVoice {
+                    VStack(spacing: 8) {
+                        ZStack {
+                            Circle()
+                                .fill(session.isRecordingVoice
+                                      ? Color.red.opacity(0.85)
+                                      : Color.white.opacity(0.10))
+                            Circle()
+                                .stroke(Color.white.opacity(session.isRecordingVoice ? 0.4 : 0.08), lineWidth: 1)
+                            Image(systemName: session.isRecordingVoice ? "mic.fill" : "mic")
+                                .font(.title2)
+                                .foregroundStyle(.white)
+                        }
+                        .frame(width: 72, height: 72)
+                        .accessibilityLabel("Hold to talk")
+                        .onLongPressGesture(minimumDuration: 0.15, pressing: { pressing in
+                            if pressing {
+                                Task { await session.startVoice() }
+                            } else {
+                                Task { await session.stopVoice() }
+                            }
+                        }, perform: {})
+                        Text(session.isRecordingVoice ? "Listening…" : "Hold to talk")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                 }
 
@@ -469,6 +498,44 @@ private struct RemoteView: View {
         Task { await session.send(command) }
     }
 
+    /// Segmented D-pad / touchpad toggle: two icon segments in a dark
+    /// pill; the selected segment is highlighted. The keyboard is NOT
+    /// part of this toggle — it has its own button in the header.
+    private var navToggle: some View {
+        HStack(spacing: 0) {
+            toggleSegment(icon: "dpad", selected: navMode == .dpad, label: "D-Pad") { navMode = .dpad }
+            toggleSegment(icon: "hand.tap", selected: navMode == .touchpad, label: "Touchpad") { navMode = .touchpad }
+        }
+        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func toggleSegment(icon: String, selected: Bool, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.title3)
+                .foregroundStyle(selected ? .white : .secondary)
+                .frame(width: 56, height: 44)
+                .background(selected ? Color.white.opacity(0.16) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
+                .padding(2)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
+
+    /// Dark rounded-square button for Home and Power in the header row.
+    /// Power's icon is red; Home's is white.
+    private func remoteSquareButton(systemImage: String, tint: Color = .white, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.title3.bold())
+                .foregroundStyle(tint)
+                .frame(width: 56, height: 56)
+                .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.08), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+    }
+
     @ViewBuilder
     private func remoteButton(_ title: String?, systemImage: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -476,7 +543,7 @@ private struct RemoteView: View {
                 Image(systemName: systemImage).font(.title3.bold())
                 if let title { Text(title).font(.caption2) }
             }
-            .frame(minWidth: 58, minHeight: 56)
+            .frame(maxWidth: .infinity, minHeight: 56)
             .padding(.horizontal, 6)
             .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
             .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.08), lineWidth: 1))
@@ -484,16 +551,19 @@ private struct RemoteView: View {
         .buttonStyle(.plain)
     }
 
-    private func digitButton(_ n: Int) -> some View {
-        Button("\(n)") { send(.digit(n)) }
-            .font(.title3.bold())
-            .frame(maxWidth: .infinity, minHeight: 44)
-            .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.08), lineWidth: 1))
-            .buttonStyle(.plain)
+    /// Installed Roku apps with the three big ones first (Netflix,
+    /// YouTube, Apple TV) when the TV has them, then the rest in the
+    /// TV's own order. Only installed apps are ever shown — no dead
+    /// shortcut buttons.
+    private var sortedRokuApps: [RokuRemote.RokuApp] {
+        let priority = ["netflix", "youtube", "apple tv"]
+        return session.rokuApps.sorted { a, b in
+            let aRank = priority.firstIndex(of: a.name.lowercased()) ?? Int.max
+            let bRank = priority.firstIndex(of: b.name.lowercased()) ?? Int.max
+            return aRank < bRank
+        }
     }
 }
-
 // MARK: - Touchpad
 
 private struct TouchpadView: View {
@@ -520,8 +590,7 @@ private struct TouchpadView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .frame(height: 190)
-            .padding(.horizontal)
+            .frame(width: 230, height: 230)
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onEnded { value in
@@ -538,80 +607,124 @@ private struct TouchpadView: View {
     }
 }
 
-// MARK: - D-Pad
+// MARK: - Circular D-Pad
 
-private struct DPadView: View {
+/// Big circular D-pad: four curved directional segments (annular
+/// sectors with small gaps) around a central round OK button. Dark and
+/// neutral — no accent color. Taps are hit-tested against the sector
+/// shape itself, so the corners of the square frame do nothing.
+private struct CircularDPadView: View {
     var onCommand: (RemoteCommand) -> Void
 
+    private let size: CGFloat = 230
+    private let gap: CGFloat = 3 // degrees of gap on each side of a sector
+
     var body: some View {
-        VStack(spacing: 10) {
-            dpadButton(.up, systemImage: "chevron.up")
-            HStack(spacing: 24) {
-                dpadButton(.left, systemImage: "chevron.left")
-                dpadButton(.enter, systemImage: "checkmark.circle.fill")
-                dpadButton(.right, systemImage: "chevron.right")
+        ZStack {
+            // Base disc: shows through the gaps between segments.
+            Circle()
+                .fill(Color.white.opacity(0.05))
+                .frame(width: size, height: size)
+            sector(.up, systemImage: "chevron.up", startAngle: -135, endAngle: -45)
+            sector(.right, systemImage: "chevron.right", startAngle: -45, endAngle: 45)
+            sector(.down, systemImage: "chevron.down", startAngle: 45, endAngle: 135)
+            sector(.left, systemImage: "chevron.left", startAngle: 135, endAngle: 225)
+            // Central OK button.
+            Button {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                onCommand(.enter)
+            } label: {
+                Text("OK")
+                    .font(.headline.bold())
+                    .foregroundStyle(.white)
+                    .frame(width: 84, height: 84)
+                    .background(Color.white.opacity(0.12), in: Circle())
+                    .overlay(Circle().stroke(Color.white.opacity(0.10), lineWidth: 1))
             }
-            dpadButton(.down, systemImage: "chevron.down")
+            .buttonStyle(.plain)
         }
+        .frame(width: size, height: size)
     }
 
-    private func dpadButton(_ command: RemoteCommand, systemImage: String) -> some View {
-        Button {
+    private func sector(_ command: RemoteCommand, systemImage: String, startAngle: Double, endAngle: Double) -> some View {
+        let shape = AnnularSector(startAngle: .degrees(startAngle + gap), endAngle: .degrees(endAngle - gap))
+        let midAngle = (startAngle + endAngle) / 2
+        let midRadius = (size / 2) * (1 + 0.38) / 2 // between inner and outer radius
+        let radians = midAngle * .pi / 180
+        let x = size / 2 + midRadius * cos(radians)
+        let y = size / 2 + midRadius * sin(radians)
+        return Button {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             onCommand(command)
         } label: {
-            Image(systemName: systemImage)
-                .font(.title2.bold())
-                .frame(width: 64, height: 56)
-                .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
-                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.08), lineWidth: 1))
+            ZStack {
+                shape.fill(Color.white.opacity(0.10))
+                Image(systemName: systemImage)
+                    .font(.title3.bold())
+                    .foregroundStyle(.white)
+                    .position(x: x, y: y)
+            }
+            .frame(width: size, height: size)
         }
         .buttonStyle(.plain)
+        .contentShape(shape)
     }
 }
 
-// MARK: - Rocker (volume / channel)
+/// One annular sector (a ring segment): an outer arc, an inner arc back,
+/// closed. Angles use SwiftUI's convention (0° = east, positive =
+/// clockwise, since y grows downward).
+private struct AnnularSector: Shape {
+    var startAngle: Angle
+    var endAngle: Angle
+    var innerFraction: CGFloat = 0.38
 
-private struct RockerView: View {
-    var topIcon: String
-    var topLabel: String
-    var centerIcon: String
-    var bottomIcon: String
-    var bottomLabel: String
-    var onTop: () -> Void
-    var onCenter: () -> Void
-    var onBottom: () -> Void
+    func path(in rect: CGRect) -> Path {
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let outer = min(rect.width, rect.height) / 2
+        let inner = outer * innerFraction
+        var path = Path()
+        path.addArc(center: center, radius: outer, startAngle: startAngle, endAngle: endAngle, clockwise: false)
+        path.addArc(center: center, radius: inner, startAngle: endAngle, endAngle: startAngle, clockwise: true)
+        path.closeSubpath()
+        return path
+    }
+}
+
+// MARK: - Volume rocker
+
+/// Tall volume rocker: + on top, a VOL label in the middle, − at the
+/// bottom. It stretches to the height of the button grid beside it.
+/// (The old volume/channel rocker pair is gone with the channel rocker;
+/// mute is a grid button now.)
+private struct VolRockerView: View {
+    var onUp: () -> Void
+    var onDown: () -> Void
 
     var body: some View {
-        VStack(spacing: 6) {
-            Button(action: onTop) {
-                VStack(spacing: 2) {
-                    Image(systemName: topIcon).font(.title3.bold())
-                    Text(topLabel).font(.caption2).foregroundStyle(.secondary)
-                }
-                .frame(width: 76, height: 56)
-                .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
-                .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.08), lineWidth: 1))
+        VStack(spacing: 0) {
+            Button(action: onUp) {
+                Image(systemName: "plus")
+                    .font(.title3.bold())
+                    .foregroundStyle(.white)
+                    .frame(width: 64, height: 56)
             }
             .buttonStyle(.plain)
-            Button(action: onCenter) {
-                Image(systemName: centerIcon)
-                    .font(.title3)
-                    .frame(width: 76, height: 44)
-                    .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
-                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.08), lineWidth: 1))
-            }
-            .buttonStyle(.plain)
-            Button(action: onBottom) {
-                VStack(spacing: 2) {
-                    Image(systemName: bottomIcon).font(.title3.bold())
-                    Text(bottomLabel).font(.caption2).foregroundStyle(.secondary)
-                }
-                .frame(width: 76, height: 56)
-                .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
-                .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.08), lineWidth: 1))
+            Spacer()
+            Text("VOL")
+                .font(.caption2.bold())
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button(action: onDown) {
+                Image(systemName: "minus")
+                    .font(.title3.bold())
+                    .foregroundStyle(.white)
+                    .frame(width: 64, height: 56)
             }
             .buttonStyle(.plain)
         }
+        .frame(width: 64, maxHeight: .infinity)
+        .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.08), lineWidth: 1))
     }
 }

@@ -228,3 +228,173 @@ final class PinningTests: XCTestCase {
             "This TV's certificate changed since you paired it. Forget the TV and pair again.")
     }
 }
+
+final class TLSHandshakeRecorderTests: XCTestCase {
+
+    private func tlsRecord(type: UInt8, payload: Data) -> Data {
+        var data = Data([type, 0x03, 0x03])
+        data.append(TLSHandshakeRecorder.u16(UInt16(payload.count)))
+        data.append(payload)
+        return data
+    }
+
+    private func handshakeMessage(type: UInt8, body: Data) -> Data {
+        var message = Data([type])
+        message.append(TLSHandshakeRecorder.u24(body.count))
+        message.append(body)
+        return message
+    }
+
+    /// Minimal ServerHello: version + cipher, no extensions.
+    private func serverHello(version: UInt16, cipher: UInt16) -> Data {
+        var body = Data()
+        body.append(contentsOf: [UInt8(version >> 8), UInt8(version & 0xFF)])
+        body.append(Data(repeating: 0, count: 32)) // random
+        body.append(0) // session_id length
+        body.append(contentsOf: [UInt8(cipher >> 8), UInt8(cipher & 0xFF)])
+        body.append(0) // compression
+        body.append(contentsOf: [0x00, 0x00]) // extensions length
+        return handshakeMessage(type: 2, body: body)
+    }
+
+    private func certificateMessage(certDER: Data) -> Data {
+        var list = Data()
+        list.append(TLSHandshakeRecorder.u24(certDER.count))
+        list.append(certDER)
+        var body = Data()
+        body.append(TLSHandshakeRecorder.u24(list.count))
+        body.append(list)
+        return handshakeMessage(type: 11, body: body)
+    }
+
+    private func mintedCert() throws -> Data {
+        var publicKey: SecKey?
+        var privateKey: SecKey?
+        let parameters: [String: Any] = [
+            kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
+            kSecAttrKeySizeInBits as String: 2048,
+        ]
+        XCTAssertEqual(SecKeyGeneratePair(parameters as CFDictionary, &publicKey, &privateKey),
+                       errSecSuccess)
+        return try X509.makeSelfSigned(
+            commonName: "UniversalTVRemote",
+            keyPair: (publicKey: try XCTUnwrap(publicKey), privateKey: try XCTUnwrap(privateKey)))
+    }
+
+    func testClientHelloStructure() {
+        let hello = TLSHandshakeRecorder.clientHello()
+        // TLS record: handshake (0x16), legacy version 0x0301, length.
+        XCTAssertEqual(hello[hello.startIndex], 0x16)
+        XCTAssertEqual(hello[hello.startIndex + 1], 0x03)
+        XCTAssertEqual(hello[hello.startIndex + 2], 0x01)
+        XCTAssertEqual(hello.count - 5, Int(hello[hello.startIndex + 3]) << 8
+                       | Int(hello[hello.startIndex + 4]))
+        // Handshake: ClientHello (0x01), legacy_version TLS 1.2.
+        XCTAssertEqual(hello[hello.startIndex + 5], 0x01)
+        XCTAssertEqual(hello[hello.startIndex + 9], 0x03)
+        XCTAssertEqual(hello[hello.startIndex + 10], 0x03)
+        // Offers supported_versions (extension 0x002B: TLS 1.3 + 1.2).
+        XCTAssertTrue(hello.contains(Data([0x00, 0x2B])))
+    }
+
+    func testSummarizeServerHelloAndCertificate() throws {
+        let der = try mintedCert()
+        let bytes = tlsRecord(type: 0x16, payload: serverHello(version: 0x0303, cipher: 0xC02F))
+            + tlsRecord(type: 0x16, payload: certificateMessage(certDER: der))
+        let summary = try XCTUnwrap(TLSHandshakeRecorder.summarize(bytes))
+        XCTAssertTrue(summary.contains("TLS 1.2"), summary)
+        XCTAssertTrue(summary.contains("0xC02F"), summary)
+        XCTAssertTrue(summary.contains("1 cert"), summary)
+        XCTAssertTrue(summary.contains("CN=UniversalTVRemote"), summary)
+        XCTAssertTrue(summary.contains("serial=0x3E8"), summary)
+        XCTAssertTrue(summary.contains("sig=sha256WithRSAEncryption"), summary)
+    }
+
+    func testSummarizeServerHelloAndCertificateInOneRecord() throws {
+        let der = try mintedCert()
+        let bytes = tlsRecord(type: 0x16, payload: serverHello(version: 0x0303, cipher: 0xC02F)
+            + certificateMessage(certDER: der))
+        let summary = try XCTUnwrap(TLSHandshakeRecorder.summarize(bytes))
+        XCTAssertTrue(summary.contains("TLS 1.2"), summary)
+        XCTAssertTrue(summary.contains("CN=UniversalTVRemote"), summary)
+    }
+
+    func testSummarizeAlert() {
+        let bytes = tlsRecord(type: 21, payload: Data([2, 70]))
+        let summary = TLSHandshakeRecorder.summarize(bytes)
+        XCTAssertEqual(summary, "alert fatal 70 (protocol_version)")
+    }
+
+    func testSummarizeNeedsMoreData() {
+        XCTAssertNil(TLSHandshakeRecorder.summarize(Data()))
+        XCTAssertNil(TLSHandshakeRecorder.summarize(Data([0x16, 0x03])))
+        // A lone ServerHello settles nothing yet — the Certificate may follow.
+        XCTAssertNil(TLSHandshakeRecorder.summarize(
+            tlsRecord(type: 0x16, payload: serverHello(version: 0x0303, cipher: 0xC02F))))
+    }
+
+    func testSummarizeServerHelloDoneWithoutCertificate() {
+        let bytes = tlsRecord(type: 0x16, payload: serverHello(version: 0x0303, cipher: 0xC02F)
+            + handshakeMessage(type: 14, body: Data()))
+        let summary = try XCTUnwrap(TLSHandshakeRecorder.summarize(bytes))
+        XCTAssertTrue(summary.contains("no Certificate message"), summary)
+    }
+
+    func testSummarizeTLS13Encrypted() {
+        let bytes = tlsRecord(type: 0x16, payload: serverHello(version: 0x0304, cipher: 0x1301))
+            + tlsRecord(type: 0x23, payload: Data([1, 2, 3]))
+        let summary = try XCTUnwrap(TLSHandshakeRecorder.summarize(bytes))
+        XCTAssertTrue(summary.contains("TLS 1.3"), summary)
+        XCTAssertTrue(summary.contains("encrypted"), summary)
+    }
+
+    func testDescribeIncomplete() {
+        XCTAssertTrue(TLSHandshakeRecorder.describeIncomplete(Data())
+            .contains("without sending anything"))
+        let closed = TLSHandshakeRecorder.describeIncomplete(
+            tlsRecord(type: 0x16, payload: serverHello(version: 0x0303, cipher: 0xC02F)))
+        XCTAssertTrue(closed.contains("ServerHello TLS 1.2"), closed)
+        XCTAssertTrue(closed.contains("no Certificate"), closed)
+    }
+
+    func testX509SignatureAlgorithmAndSerialHex() throws {
+        let der = try mintedCert()
+        XCTAssertEqual(X509.signatureAlgorithm(certificateDER: der), "sha256WithRSAEncryption")
+        XCTAssertEqual(X509.serialNumberHex(certificateDER: der), "0x3E8")
+        XCTAssertNil(X509.signatureAlgorithm(certificateDER: Data()))
+        XCTAssertNil(X509.serialNumberHex(certificateDER: Data()))
+    }
+}
+
+final class VoiceMessageTests: XCTestCase {
+
+    func testVoiceBeginMessageBytes() {
+        // RemoteMessage field 30 (tag 0xF2 0x01) + len 2 + RemoteVoiceBegin { session_id = 1 }.
+        XCTAssertEqual(AndroidTVRemote.voiceBeginMessage(sessionId: 1),
+                       Data([0xF2, 0x01, 0x02, 0x08, 0x01]))
+    }
+
+    func testVoicePayloadMessageBytes() {
+        // Field 31 (tag 0xFA 0x01): { session_id = 1, samples = [0x00, 0x01] }.
+        XCTAssertEqual(AndroidTVRemote.voicePayloadMessage(sessionId: 1, samples: Data([0x00, 0x01])),
+                       Data([0xFA, 0x01, 0x06, 0x08, 0x01, 0x12, 0x02, 0x00, 0x01]))
+    }
+
+    func testVoiceEndMessageBytes() {
+        // Field 32 (tag 0x82 0x02) + len 2 + { session_id = 1 }.
+        XCTAssertEqual(AndroidTVRemote.voiceEndMessage(sessionId: 1),
+                       Data([0x82, 0x02, 0x02, 0x08, 0x01]))
+    }
+
+    func testVoicePayloadChunking() {
+        XCTAssertEqual(AndroidTVRemote.voicePayloadChunks(samples: Data()), [])
+        let samples = Data(repeating: 0xAB, count: 25_000)
+        let chunks = AndroidTVRemote.voicePayloadChunks(samples: samples)
+        XCTAssertEqual(chunks.count, 2)
+        XCTAssertEqual(chunks[0].count, 20 * 1024)
+        XCTAssertEqual(chunks[1].count, 25_000 - 20 * 1024)
+        XCTAssertEqual(Data(chunks.flatMap { $0 }), samples)
+        // Exactly one full chunk stays one chunk.
+        XCTAssertEqual(AndroidTVRemote.voicePayloadChunks(samples: Data(repeating: 0, count: 20 * 1024)).count, 1)
+    }
+}

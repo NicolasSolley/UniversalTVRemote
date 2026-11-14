@@ -342,6 +342,44 @@ enum X509 {
         return value
     }
 
+    /// The certificate's serial number as a minimal hex string ("0x3E8"
+    /// for serial 1000). Unlike `serialNumber`, this cannot overflow:
+    /// a TV certificate's serial may be far wider than a Swift Int,
+    /// and reading it with `<<` would trap.
+    static func serialNumberHex(certificateDER: Data) -> String? {
+        guard let cert = readTLV(certificateDER, offset: 0), cert.tag == 0x30 else { return nil }
+        let certFields = children(of: cert.content)
+        guard certFields.count == 3 else { return nil }
+        let tbsFields = children(of: certFields[0].content)
+        guard tbsFields.count >= 2, tbsFields[1].tag == 0x02 else { return nil }
+        let minimal = minimalIntegerBytes(tbsFields[1].content)
+        return "0x" + minimal.map { String(format: "%02X", $0) }.joined()
+    }
+
+    /// Signature algorithm of the certificate (tbsCertificate.signature
+    /// OID) as a readable name, or the dotted OID when unknown.
+    static func signatureAlgorithm(certificateDER: Data) -> String? {
+        guard let cert = readTLV(certificateDER, offset: 0), cert.tag == 0x30 else { return nil }
+        let certFields = children(of: cert.content)
+        guard certFields.count == 3 else { return nil }
+        let tbsFields = children(of: certFields[0].content)
+        guard tbsFields.count >= 3 else { return nil }
+        let algorithm = children(of: tbsFields[2].content)
+        guard let oidTLV = algorithm.first, oidTLV.tag == 0x06,
+              let oid = oidComponents(oidTLV.content) else { return nil }
+        switch oid {
+        case [1, 2, 840, 113549, 1, 1, 5]: return "sha1WithRSAEncryption"
+        case [1, 2, 840, 113549, 1, 1, 11]: return "sha256WithRSAEncryption"
+        case [1, 2, 840, 113549, 1, 1, 12]: return "sha384WithRSAEncryption"
+        case [1, 2, 840, 113549, 1, 1, 13]: return "sha512WithRSAEncryption"
+        case [1, 2, 840, 113549, 1, 1, 10]: return "rsassaPSS"
+        case [1, 2, 840, 10045, 4, 3, 2]: return "ecdsaWithSHA256"
+        case [1, 2, 840, 10045, 4, 3, 3]: return "ecdsaWithSHA384"
+        case [1, 2, 840, 10045, 4, 3, 4]: return "ecdsaWithSHA512"
+        default: return "OID " + oid.map(String.init).joined(separator: ".")
+        }
+    }
+
     /// The certificate's extensions ([3] of the TBSCertificate), in
     /// order. Nil when the certificate cannot be parsed that far — the
     /// callers that use this to decide "keep or regenerate" treat nil

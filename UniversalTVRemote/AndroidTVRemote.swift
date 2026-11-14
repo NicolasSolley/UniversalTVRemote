@@ -142,6 +142,14 @@ actor AndroidTVRemote {
     /// mutual-TLS handshake dies with errSSLBadCert (-9808), our own
     /// client identity is what SecureTransport rejects.
     private(set) var lastNoIdentityProbe: String?
+    /// What the raw-TLS handshake recorder saw on ports 6467 and 6466
+    /// — appended to the status if pairing then fails too. The recorder
+    /// opens a plain TCP connection, sends its own ClientHello, and
+    /// reports the first thing the TV sends back (ServerHello version
+    /// and cipher, whether a Certificate message arrived, and the
+    /// certificate's CN / serial / signature algorithm) — the evidence
+    /// for why the mutual-TLS handshake dies with -9808.
+    private(set) var lastHandshakeRecord: String?
 
     // MARK: - Public API
 
@@ -155,6 +163,7 @@ actor AndroidTVRemote {
         lastProbeNote = nil
         lastTCPCheck = nil
         lastNoIdentityProbe = nil
+        lastHandshakeRecord = nil
         // Diagnostic only, run first: the sweep proved BSD sockets +
         // URLSession reach the TV from the guest, but the control path
         // uses NWConnection. If plain NW TCP also fails, the guest's
@@ -169,6 +178,15 @@ actor AndroidTVRemote {
         // identity — not the TV. Never thrown; note only, never changes
         // the control path. 5s worst case, milliseconds when healthy.
         lastNoIdentityProbe = await Self.noIdentityTLSProbe(host: host, port: 6467)
+        // Diagnostic only, same pattern: a raw-TLS handshake recorder
+        // that sends its own ClientHello over plain TCP and reports
+        // what the TV sends back. Both ports run at once (async let)
+        // so the worst case is one 5s timeout, not two. Never thrown;
+        // notes only, never changes the control path.
+        async let record6467 = TLSHandshakeRecorder.record(host: host, port: 6467)
+        async let record6466 = TLSHandshakeRecorder.record(host: host, port: 6466)
+        let (rec6467, rec6466) = await (record6467, record6466)
+        lastHandshakeRecord = "\(rec6467) \(rec6466)"
 
         // Try the remote session first: if the TV already trusts our
         // certificate (paired before, or the local flag was lost), this
@@ -249,6 +267,81 @@ actor AndroidTVRemote {
             + Protobuf.varintField(2, 3) // RemoteDirection.SHORT
         let message = Protobuf.messageField(10, inject)
         remoteConnection?.send(Protobuf.varint(UInt64(message.count)) + message)
+    }
+
+    // MARK: - Voice (port 6466 remote session)
+
+    /// Voice messages (remotemessage.proto, verified against
+    /// tronikos/androidtvremote2 main 387de891):
+    /// RemoteVoiceBegin = RemoteMessage field 30 { session_id field 1,
+    /// package_name field 2 — not required when sending audio };
+    /// RemoteVoicePayload = field 31 { session_id field 1, samples
+    /// field 2 — 16-bit PCM mono 8 kHz, split into 20 KB messages };
+    /// RemoteVoiceEnd = field 32 { session_id field 1 }.
+    /// One session id per utterance (incrementing), consistent across
+    /// begin/payload/end. Sent on the same TLS remote session as key
+    /// events — so on a TV whose handshake fails (-9808) voice cannot
+    /// start either. No feature bit is requested for voice: the
+    /// reference sends these messages on the established session.
+    static let maxVoicePayloadBytes = 20 * 1024
+
+    /// RemoteVoiceBegin for `sessionId` (no package_name — not required
+    /// when sending audio).
+    static func voiceBeginMessage(sessionId: Int) -> Data {
+        Protobuf.messageField(30, Protobuf.varintField(1, UInt64(sessionId)))
+    }
+
+    /// RemoteVoicePayload carrying `samples` for `sessionId`.
+    static func voicePayloadMessage(sessionId: Int, samples: Data) -> Data {
+        Protobuf.messageField(31, Protobuf.varintField(1, UInt64(sessionId))
+            + Protobuf.bytesField(2, samples))
+    }
+
+    /// RemoteVoiceEnd for `sessionId`.
+    static func voiceEndMessage(sessionId: Int) -> Data {
+        Protobuf.messageField(32, Protobuf.varintField(1, UInt64(sessionId)))
+    }
+
+    /// Split PCM samples into ≤20 KB payloads (the reference's message
+    /// size). Empty input yields no chunks.
+    static func voicePayloadChunks(samples: Data) -> [Data] {
+        guard !samples.isEmpty else { return [] }
+        var chunks: [Data] = []
+        var offset = 0
+        while offset < samples.count {
+            let end = min(offset + maxVoicePayloadBytes, samples.count)
+            chunks.append(samples[offset..<end])
+            offset = end
+        }
+        return chunks
+    }
+
+    private var voiceSessionId = 0
+
+    /// Begin a voice utterance: sends RemoteVoiceBegin and returns the
+    /// session id to use for its payloads and end. Throws notConnected
+    /// when the remote session is not up.
+    func beginVoice() async throws -> Int {
+        guard remoteConnection != nil else { throw AndroidTVError.notConnected }
+        voiceSessionId += 1
+        let id = voiceSessionId
+        sendRemoteMessage(Self.voiceBeginMessage(sessionId: id))
+        return id
+    }
+
+    /// Stream one chunk of 8 kHz mono Int16 PCM for the utterance
+    /// `sessionId`, split into ≤20 KB payload messages.
+    func sendVoiceSamples(_ samples: Data, sessionId: Int) async throws {
+        guard remoteConnection != nil else { throw AndroidTVError.notConnected }
+        for chunk in Self.voicePayloadChunks(samples: samples) {
+            sendRemoteMessage(Self.voicePayloadMessage(sessionId: sessionId, samples: chunk))
+        }
+    }
+
+    /// End a voice utterance.
+    func endVoice(sessionId: Int) async throws {
+        guard remoteConnection != nil else { throw AndroidTVError.notConnected }
+        sendRemoteMessage(Self.voiceEndMessage(sessionId: sessionId))
     }
 
     // MARK: - Remote session (port 6466)
@@ -438,7 +531,7 @@ actor AndroidTVRemote {
     }
 
     /// TLS handshake to the pairing port WITHOUT a client identity,
-    /// diagnostic only. Same TLS 1.2 pin and verify block as the real
+    /// diagnostic only. Same TLS options and verify block as the real
     /// path, but no local identity is set, so SecureTransport has
     /// nothing of ours to reject. Reports whether the TV presents its
     /// certificate when we offer no identity at all — the decisive
@@ -847,17 +940,19 @@ final class TLSConnection {
         return presentedDER == expectedDER
     }
 
-    /// TLS options shared by both paths: pinned to TLS 1.2 only. On at
-    /// least one TV (TCL QM7, v1.0.4) the handshake died before the TV
-    /// presented its certificate, which is consistent with the TV's TLS
-    /// stack choking on a TLS 1.3 ClientHello (extensions/groups it
-    /// doesn't understand). The reference implementation negotiates
-    /// TLS 1.2 with these TVs.
+    /// TLS options shared by both paths: minimum TLS 1.2, maximum
+    /// unset so the handshake negotiates the highest version the TV
+    /// offers (TLS 1.3 included). v1.0.5 pinned min+max to TLS 1.2 on
+    /// the hypothesis that the TCL QM7's TLS stack choked on a TLS 1.3
+    /// ClientHello — but the no-identity probe ran with the same pin
+    /// and failed identically, and EVOLLY's iPhone app pairs the QM7
+    /// fine, so the pin was not the fix and may itself be the problem
+    /// if the TV requires TLS 1.3. The client identity, verify block,
+    /// and trust-on-first-use pinning are unchanged; nothing here
+    /// disables TLS security.
     private static func baseTLSOptions() -> NWProtocolTLS.Options {
         let tlsOptions = NWProtocolTLS.Options()
         sec_protocol_options_set_min_tls_protocol_version(
-            tlsOptions.securityProtocolOptions, .TLSv12)
-        sec_protocol_options_set_max_tls_protocol_version(
             tlsOptions.securityProtocolOptions, .TLSv12)
         return tlsOptions
     }
@@ -886,8 +981,8 @@ final class TLSConnection {
                                   using: parameters)
     }
 
-    /// No-identity TLS connection (diagnostic probe only): same TLS 1.2
-    /// pin and verify block as the mutual-TLS path, but no client
+    /// No-identity TLS connection (diagnostic probe only): same TLS
+    /// options and verify block as the mutual-TLS path, but no client
     /// certificate is presented, so SecureTransport has nothing of ours
     /// to reject. Never used for pairing or control.
     init(host: String, port: UInt16) {
