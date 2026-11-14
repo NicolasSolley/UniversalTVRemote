@@ -506,10 +506,10 @@ final class TLSConnection {
             tlsOptions.securityProtocolOptions, { [weak self] _, trust, complete in
                 // The verify block hands us a `sec_trust_t` (an `any OS_sec_trust`
                 // existential); the Security APIs want a concrete `SecTrust`.
-                // The cast always succeeds — it is the same underlying trust
-                // object — so it must be unconditional, not `as?`.
+                // The value is always a real SecTrust, but the compiler only
+                // accepts a forced downcast here (`as!`), not `as` or `as?`.
                 if let trust {
-                    let secTrust = trust as SecTrust
+                    let secTrust = trust as! SecTrust
                     if let certificate = SecTrustGetCertificateAtIndex(secTrust, 0) {
                         let der = SecCertificateCopyData(certificate) as Data
                         self?.onServerCertificate?(der)
