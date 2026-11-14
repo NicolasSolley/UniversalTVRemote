@@ -12,16 +12,16 @@ final class X509Tests: XCTestCase {
 
     /// Mint a fresh RSA keypair + self-signed certificate, as the app does.
     private func mintedCert(commonName: String = "UniversalTVRemote") throws -> (der: Data, publicKeyDER: Data) {
-        var publicKey: SecKey?
-        var privateKey: SecKey?
+        var publicKeyOpt: SecKey?
+        var privateKeyOpt: SecKey?
         let parameters: [String: Any] = [
             kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
             kSecAttrKeySizeInBits as String: 2048,
         ]
-        let status = SecKeyGeneratePair(parameters as CFDictionary, &publicKey, &privateKey)
+        let status = SecKeyGeneratePair(parameters as CFDictionary, &publicKeyOpt, &privateKeyOpt)
         XCTAssertEqual(status, errSecSuccess)
-        let publicKey = try XCTUnwrap(publicKey)
-        let privateKey = try XCTUnwrap(privateKey)
+        let publicKey = try XCTUnwrap(publicKeyOpt)
+        let privateKey = try XCTUnwrap(privateKeyOpt)
         let publicKeyDER = SecKeyCopyExternalRepresentation(publicKey, nil) as Data?
         let der = try X509.makeSelfSigned(
             commonName: commonName,
