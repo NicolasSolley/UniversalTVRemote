@@ -9,6 +9,8 @@
 # - Every v* tag push: the IPA is also attached to a GitHub Release, so it
 #   can be downloaded directly on the iPhone and opened in LiveContainer.
 name: Build unsigned IPA
+permissions:
+  contents: write
 
 on:
   push:
