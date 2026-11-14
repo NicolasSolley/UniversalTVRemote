@@ -18,16 +18,26 @@ provisioning profile, or signing step is needed.
 Scan-only — there is no way to type in an IP address, by design. If a TV
 doesn't answer the scan, it simply doesn't appear.
 
-1. **SSDP (primary).** The app sends M-SEARCH requests to the multicast
+1. **Subnet sweep (primary).** The app reads the phone's Wi-Fi address
+   and probes every host on that subnet directly (unicast HTTP/TCP):
+   Roku on :8060, Samsung on :8001, DIAL on :8008, Android TV Remote
+   on :6466/:6467, LG webOS on :3001. This is the path that works in
+   LiveContainer — SSDP multicast and Bonjour are both dead there (see
+   below), so the sweep is what actually finds TVs under LiveContainer.
+   A plain Chromecast dongle is listed as discovery-only, never as a
+   controllable Android TV: it serves DIAL but has no remote service.
+2. **SSDP (secondary).** The app sends M-SEARCH requests to the multicast
    address 239.255.255.250:1900, several rounds, and reads each reply's
-   device description to identify the brand and model. This works in
-   LiveContainer.
-2. **Bonjour (secondary).** NetService browsing for Roku, Samsung, LG,
+   device description to identify the brand and model. This works on a
+   normally installed app, but **not in LiveContainer**: multicast needs
+   Apple's `com.apple.developer.networking.multicast` entitlement, which
+   the sideloaded LiveContainer host does not have, so the packets never
+   go out (v1.0.2 found zero TVs in the field for exactly this reason).
+3. **Bonjour (secondary).** NetService browsing for Roku, Samsung, LG,
    Android TV, AirPlay, and Chromecast service types. In LiveContainer
    the guest app's Bonjour service list is ignored by iOS (the host app
-   gates it), so Bonjour discovery silently finds nothing there — SSDP
-   is what actually discovers TVs under LiveContainer. On a normally
-   installed app both paths work.
+   gates it), so Bonjour discovery silently finds nothing there. On a
+   normally installed app all three paths work.
 
 Only real responses are shown. Nothing is invented or guessed.
 
@@ -98,7 +108,8 @@ Release.
 ## Limitations
 
 - Compile-verified only — no live-TV testing yet (see above).
-- LiveContainer gates Bonjour, so discovery there is SSDP-only.
+- LiveContainer gates Bonjour and blocks SSDP multicast, so discovery
+  there is sweep-only (unicast probing of the Wi-Fi subnet).
 - LG power button turns the TV off only; turn it back on with the TV's
   own remote.
 - Android TV has no text input in this build.

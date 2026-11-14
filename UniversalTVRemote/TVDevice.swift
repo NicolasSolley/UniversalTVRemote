@@ -28,6 +28,7 @@ struct TVDevice: Identifiable, Hashable {
 
     enum Source {
         case ssdp
+        case sweep
         case bonjour
     }
 

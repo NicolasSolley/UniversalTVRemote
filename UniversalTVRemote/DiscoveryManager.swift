@@ -3,15 +3,19 @@ import Combine
 
 /// Discovers TVs on the local network, scan-only.
 ///
-/// Primary path is SSDP (UDP multicast M-SEARCH): it works inside
-/// LiveContainer, where Bonjour browsing is gated by the host app's
-/// `NSBonjourServices` list. Bonjour (`NetServiceBrowser`) runs as a
-/// secondary path for devices SSDP misses. There is no manual IP entry —
-/// if a TV does not answer the scan, it simply does not appear.
+/// Primary path is the unicast subnet sweep (`SubnetSweep`): it works
+/// inside LiveContainer, where SSDP multicast M-SEARCH is blocked (no
+/// multicast entitlement) and Bonjour browsing is gated by the host
+/// app's `NSBonjourServices` list. SSDP and Bonjour (`NetServiceBrowser`)
+/// run as secondary paths for devices the sweep misses — and as the
+/// primary paths when the app is installed normally. There is no manual
+/// IP entry — if a TV does not answer the scan, it simply does not appear.
 ///
-/// Devices are merged by host address: the same TV found via both paths
-/// appears once, and entries are updated in place so a selection survives
-/// address resolution.
+/// Devices are merged by host address: the same TV found via several
+/// paths appears once, and entries are updated in place so a selection
+/// survives address resolution. A merge never downgrades a controllable
+/// brand to a non-controllable one: one path's vaguer description must
+/// not erase another path's verified identification.
 @MainActor
 final class DiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDelegate, NetServiceDelegate {
     @Published private(set) var devices: [TVDevice] = []
@@ -21,7 +25,9 @@ final class DiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
     private let browser = NetServiceBrowser()
     private var services: [NetService] = []
     private let ssdp = SSDPDiscovery()
+    private let sweep = SubnetSweep()
     private var ssdpDone = false
+    private var sweepDone = false
     private var bonjourDone = false
 
     /// Bonjour service types browsed as a secondary path.
@@ -44,6 +50,12 @@ final class DiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
         ssdp.onFinished = { [weak self] in
             Task { @MainActor in self?.ssdpFinished() }
         }
+        sweep.onDevice = { [weak self] device in
+            Task { @MainActor in self?.mergeSweep(device) }
+        }
+        sweep.onFinished = { [weak self] in
+            Task { @MainActor in self?.sweepFinished() }
+        }
     }
 
     func scan() {
@@ -51,9 +63,18 @@ final class DiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
         devices.removeAll()
         services.removeAll()
         ssdpDone = false
+        sweepDone = false
         bonjourDone = false
         isScanning = true
-        status = "Scanning your Wi-Fi network…"
+        // The sweep is the primary path in LiveContainer, where SSDP
+        // multicast and Bonjour are both dead. It runs alongside them:
+        // SSDP/Bonjour still find TVs when the app is installed normally.
+        sweep.start()
+        if let label = sweep.subnetLabel {
+            status = "Scanning \(label)…"
+        } else {
+            status = "Scanning your Wi-Fi network…"
+        }
         ssdp.start(rounds: 3, roundInterval: 1.5, totalDuration: 7.0)
         for type in types {
             browser.searchForServices(ofType: type, inDomain: "local.")
@@ -63,6 +84,7 @@ final class DiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
     func stop() {
         browser.stop()
         ssdp.stop()
+        sweep.stop()
         isScanning = false
         if devices.isEmpty {
             status = "No TVs found. Make sure your TV is on and on the same Wi-Fi network, then scan again."
@@ -74,13 +96,18 @@ final class DiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
     // MARK: - Merging
 
     /// Merge an SSDP result: update the existing entry for the same host in
-    /// place (keeping its stable id), or append a new device.
+    /// place (keeping its stable id), or append a new device. SSDP
+    /// carries richer info (model/manufacturer), so prefer it — except
+    /// never downgrade a controllable brand to a non-controllable one:
+    /// a sweep-verified Android TV (port 6466 open) must not become
+    /// "Other" just because its SSDP description says nothing Google.
     private func mergeSSDP(_ found: SSDPDevice) {
         if let index = devices.firstIndex(where: { $0.host == found.host }) {
             var existing = devices[index]
-            // SSDP carries richer info (model/manufacturer); prefer it.
-            existing.name = found.name
-            existing.brand = found.brand
+            if found.brand.supportsControl || !existing.brand.supportsControl {
+                existing.brand = found.brand
+            }
+            if found.name != found.host { existing.name = found.name }
             existing.model = found.model ?? existing.model
             existing.manufacturer = found.manufacturer ?? existing.manufacturer
             existing.source = .ssdp
@@ -102,10 +129,48 @@ final class DiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
         maybeFinish()
     }
 
+    /// Merge a sweep result: update the existing entry for the same host
+    /// in place (keeping its stable id), or append a new device. A
+    /// controllable brand from the sweep never downgrades an existing
+    /// controllable brand, and a non-controllable sweep result never
+    /// downgrades one either; a name that is just the IP never replaces
+    /// a real friendly name.
+    private func mergeSweep(_ found: SweptDevice) {
+        if let index = devices.firstIndex(where: { $0.host == found.host }) {
+            var existing = devices[index]
+            if found.brand.supportsControl {
+                existing.brand = found.brand
+                if found.name != found.host { existing.name = found.name }
+                existing.model = found.model ?? existing.model
+                existing.manufacturer = found.manufacturer ?? existing.manufacturer
+                existing.port = found.port
+            } else if !existing.brand.supportsControl {
+                if found.name != found.host { existing.name = found.name }
+                existing.brand = found.brand
+                existing.model = found.model ?? existing.model
+                existing.manufacturer = found.manufacturer ?? existing.manufacturer
+            }
+            devices[index] = existing
+            return
+        }
+        let device = TVDevice(id: "sweep:\(found.host)", name: found.name, brand: found.brand,
+                              host: found.host, port: found.port, model: found.model,
+                              manufacturer: found.manufacturer, source: .sweep)
+        devices.append(device)
+        sortDevices()
+        status = "Found \(devices.count) device\(devices.count == 1 ? "" : "s")."
+    }
+
+    private func sweepFinished() {
+        sweepDone = true
+        maybeFinish()
+    }
+
     private func maybeFinish() {
-        guard ssdpDone else { return }
-        // Bonjour keeps browsing in the background; the SSDP pass is the
-        // timed scan. End the scanning state once SSDP completes.
+        guard ssdpDone, sweepDone else { return }
+        // Bonjour keeps browsing in the background; the SSDP pass and the
+        // sweep are the timed scan. End the scanning state once both
+        // complete.
         if isScanning {
             isScanning = false
             if devices.isEmpty {
@@ -152,8 +217,8 @@ final class DiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
             ?? sender.hostName?.trimmingCharacters(in: CharacterSet(charactersIn: "."))
         let id = "bonjour:\(sender.name)|\(sender.type)"
         guard let index = devices.firstIndex(where: { $0.id == id }) else { return }
-        // If an SSDP entry already covers this host, drop the Bonjour duplicate.
-        if let host, let ssdpIndex = devices.firstIndex(where: { $0.host == host && $0.source == .ssdp }) {
+        // If an SSDP or sweep entry already covers this host, drop the Bonjour duplicate.
+        if let host, let ssdpIndex = devices.firstIndex(where: { $0.host == host && ($0.source == .ssdp || $0.source == .sweep) }) {
             if ssdpIndex != index { devices.remove(at: index) }
             return
         }
@@ -167,8 +232,8 @@ final class DiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
     }
 
     func netServiceBrowser(_ browser: NetServiceBrowser, didNotSearch errorDict: [String: NSNumber]) {
-        // Bonjour errors are non-fatal: SSDP is the primary path.
-        // Keep scanning state; the SSDP pass will finish the scan.
+        // Bonjour errors are non-fatal: the sweep and SSDP are the timed
+        // scan paths. Keep scanning state; they will finish the scan.
     }
 
     /// Extract a dotted-quad IPv4 address from the resolved service addresses.
