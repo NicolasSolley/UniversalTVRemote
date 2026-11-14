@@ -180,6 +180,12 @@ final class RemoteSession: ObservableObject {
                 if let note = await androidTV.lastProbeNote {
                     text += " \(note)"
                 }
+                // Same for the plain-TCP Network.framework check: it says
+                // whether the guest's NWConnection path itself reaches
+                // the TV, as opposed to the TLS handshake failing.
+                if let check = await androidTV.lastTCPCheck {
+                    text += " \(check)"
+                }
                 status = text
             } catch {
                 isConnected = false

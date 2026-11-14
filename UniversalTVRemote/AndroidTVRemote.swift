@@ -126,6 +126,10 @@ actor AndroidTVRemote {
     /// What the (non-fatal) 6466 probe saw, when it failed — appended to
     /// the status if pairing then fails too, so the probe step is visible.
     private(set) var lastProbeNote: String?
+    /// What the plain-TCP Network.framework check saw — appended to the
+    /// status if pairing then fails too. Separates "Network.framework
+    /// can't reach the TV from this guest" from "the TLS handshake fails".
+    private(set) var lastTCPCheck: String?
 
     // MARK: - Public API
 
@@ -137,6 +141,14 @@ actor AndroidTVRemote {
         if remoteHost == host, remoteConnection != nil { return }
         disconnect()
         lastProbeNote = nil
+        lastTCPCheck = nil
+        // Diagnostic only, run first: the sweep proved BSD sockets +
+        // URLSession reach the TV from the guest, but the control path
+        // uses NWConnection. If plain NW TCP also fails, the guest's
+        // Network.framework path is broken — not the TLS handshake.
+        // Cheap when healthy (ready arrives in milliseconds); 3s worst
+        // case. Never thrown; the note is only surfaced if pairing fails.
+        lastTCPCheck = await Self.plainTCPCheck(host: host, port: 6467)
 
         let paired = UserDefaults.standard.bool(forKey: "androidtv.paired.\(host)")
         if !paired {
@@ -210,8 +222,8 @@ actor AndroidTVRemote {
         connection.onMessage = { [weak self] data in
             Task { await self?.handleRemoteMessage(data) }
         }
-        connection.onFailure = { [weak self] _ in
-            Task { await self?.remoteFailed() }
+        connection.onFailure = { [weak self] error in
+            Task { await self?.remoteFailed(error) }
         }
         connection.start()
         do {
@@ -258,8 +270,12 @@ actor AndroidTVRemote {
         secretContinuation = nil
     }
 
-    private func remoteFailed() {
-        let detail = failureDetail(from: remoteConnection)
+    /// The error is passed in by the onFailure handler instead of being
+    /// re-read from the connection: the handler's error is the one that
+    /// killed the connection, and re-reading `lastFailure` loses it when
+    /// the receive error beats the state update (the v1.0.4 race).
+    private func remoteFailed(_ error: Error) {
+        let detail = failureDetail(from: remoteConnection, error: error)
         readyContinuation?.resume(throwing: AndroidTVError.remoteSessionFailed(detail: detail))
         readyContinuation = nil
         remoteConnection = nil
@@ -271,9 +287,11 @@ actor AndroidTVRemote {
     /// Server-cert-seen + handshake failure points at our client
     /// certificate being rejected; no cert seen means the handshake died
     /// before the TV's certificate arrived (TCP/TLS-level failure).
-    private func failureDetail(from connection: TLSConnection?) -> String {
+    /// The error passed in by the onFailure handler wins; `lastFailure`
+    /// is only a fallback for paths that have no error to pass.
+    private func failureDetail(from connection: TLSConnection?, error: Error?) -> String {
         var parts: [String] = []
-        if let error = connection?.lastFailure {
+        if let error = error ?? connection?.lastFailure {
             parts.append(Self.describeError(error))
         }
         if let connection {
@@ -301,6 +319,45 @@ actor AndroidTVRemote {
             return "TLS error \(status)"
         @unknown default:
             return String(describing: nw)
+        }
+    }
+
+    // MARK: - Diagnostics
+
+    /// Plain-TCP reachability via Network.framework, diagnostic only.
+    /// Opens a non-TLS NWConnection to the pairing port and reports the
+    /// outcome as a one-line note. Runs on its own serial queue so it
+    /// never blocks the actor; the continuation is resumed exactly once.
+    private static func plainTCPCheck(host: String, port: UInt16,
+                                      timeout: TimeInterval = 3) async -> String {
+        await withCheckedContinuation { (continuation: CheckedContinuation<String, Never>) in
+            let connection = NWConnection(host: NWEndpoint.Host(host),
+                                          port: NWEndpoint.Port(rawValue: port)!,
+                                          using: .tcp)
+            let queue = DispatchQueue(label: "com.nicolassolley.universaltvremote.tcpcheck")
+            var finished = false
+            let finish: (String) -> Void = { note in
+                guard !finished else { return }
+                finished = true
+                connection.cancel()
+                continuation.resume(returning: note)
+            }
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    finish("NW TCP to \(port): connected")
+                case .failed(let error):
+                    finish("NW TCP to \(port) failed: \(describeError(error))")
+                case .cancelled:
+                    finish("NW TCP to \(port): cancelled")
+                default:
+                    break
+                }
+            }
+            connection.start(queue: queue)
+            queue.asyncAfter(deadline: .now() + timeout) {
+                finish("NW TCP to \(port): no answer in \(Int(timeout))s")
+            }
         }
     }
 
@@ -386,8 +443,8 @@ actor AndroidTVRemote {
         connection.onMessage = { [weak self] data in
             Task { await self?.handlePairingMessage(data) }
         }
-        connection.onFailure = { [weak self] _ in
-            Task { await self?.pairingFailed() }
+        connection.onFailure = { [weak self] error in
+            Task { await self?.pairingFailed(error) }
         }
         connection.onReady = { [weak self] in
             Task { await self?.tlsReadyFired() }
@@ -518,8 +575,8 @@ actor AndroidTVRemote {
         }
     }
 
-    private func pairingFailed() {
-        let detail = failureDetail(from: pairingConnection)
+    private func pairingFailed(_ error: Error) {
+        let detail = failureDetail(from: pairingConnection, error: error)
         let error = AndroidTVError.pairingTLSFailed(detail: detail)
         tlsReadyContinuation?.resume(throwing: error)
         tlsReadyContinuation = nil
@@ -650,6 +707,15 @@ final class TLSConnection {
         // (older examples show a three-argument form that no longer exists).
         sec_protocol_options_set_local_identity(
             tlsOptions.securityProtocolOptions, secIdentity)
+        // Pin to TLS 1.2 only: on at least one TV (TCL QM7, v1.0.4) the
+        // handshake died before the TV presented its certificate, which
+        // is consistent with the TV's TLS stack choking on a TLS 1.3
+        // ClientHello (extensions/groups it doesn't understand). The
+        // reference implementation negotiates TLS 1.2 with these TVs.
+        sec_protocol_options_set_min_tls_protocol_version(
+            tlsOptions.securityProtocolOptions, .TLSv12)
+        sec_protocol_options_set_max_tls_protocol_version(
+            tlsOptions.securityProtocolOptions, .TLSv12)
         self.tlsOptions = tlsOptions
         let parameters = NWParameters(tls: tlsOptions)
         // No `.interactive` case exists; `.responsiveData` is the service
@@ -716,6 +782,12 @@ final class TLSConnection {
                 self.drainMessages()
             }
             if let error {
+                // Record the failure here too: the stateUpdateHandler's
+                // .failed branch is a separate, racy delivery, and if
+                // this receive error wins the race the actor would
+                // otherwise read lastFailure == nil and lose the real
+                // NWError text entirely (exactly what v1.0.4 showed).
+                self.lastFailure = error
                 self.onFailure?(error)
                 return
             }
