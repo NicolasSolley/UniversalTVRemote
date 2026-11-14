@@ -21,7 +21,6 @@
 		FF07ED2A82D64CC5A3D66B69 /* TVDevice.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7774389067A4C1C9F6ACCF6 /* TVDevice.swift */; };
 		EB2C0BDC8D62439E8D0EA0C5 /* UniversalTVRemoteApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CBEB188AB8744F7B202E1AD /* UniversalTVRemoteApp.swift */; };
 		B14983B2B4B94BACBCDD8925 /* X509.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8477BEAB10E2447A9FCAB9A8 /* X509.swift */; };
-		041547DB8A35806CE609C942 /* UniversalTVRemoteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E337D5391F45CC9E22AA4BE /* UniversalTVRemoteTests.swift */; };
 		EBD11B9EC1324CF79C2D0EE2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9AF4BF83DEBB406CBEFB6EF6 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
@@ -43,19 +42,10 @@
 		972A40E4CA0C442CA69E7D7B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		9AF4BF83DEBB406CBEFB6EF6 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A369EC5675FA4FD78AF1EFA3 /* UniversalTVRemote.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = UniversalTVRemote.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		9E337D5391F45CC9E22AA4BE /* UniversalTVRemoteTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UniversalTVRemoteTests.swift; sourceTree = "<group>"; };
-		5B7917B04C0D358BE11E1C75 /* UniversalTVRemoteTests.xctest */ = {isa = PBXFileReference; explicitFileType = "wrapper.cfbundle"; includeInIndex = 0; path = UniversalTVRemoteTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		1A8D0BCC4D774DACB0D1F6B2 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		51C7371996A90F6AAE1CAA2D /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -69,9 +59,6 @@
 			isa = PBXGroup;
 			children = (
 				118B269D6EFF470C8C757E36 /* UniversalTVRemote */,
-				9014E3523F7C4F68A07AA65B /* Products */,
-				118B269D6EFF470C8C757E36 /* UniversalTVRemote */,
-				F8052A272864FE18EDB0E53C /* UniversalTVRemoteTests */,
 				9014E3523F7C4F68A07AA65B /* Products */,
 			);
 			sourceTree = "<group>";
@@ -99,22 +86,10 @@
 			path = UniversalTVRemote;
 			sourceTree = "<group>";
 		};
-		F8052A272864FE18EDB0E53C /* UniversalTVRemoteTests */ = {
-			isa = PBXGroup;
-			children = (
-				9E337D5391F45CC9E22AA4BE /* UniversalTVRemoteTests.swift */,
-			);
-			path = UniversalTVRemoteTests;
-			sourceTree = "<group>";
-		};
 		9014E3523F7C4F68A07AA65B = {
 			isa = PBXGroup;
 			children = (
 				A369EC5675FA4FD78AF1EFA3 /* UniversalTVRemote.app */,
-			);
-			children = (
-				A369EC5675FA4FD78AF1EFA3 /* UniversalTVRemote.app */,
-				5B7917B04C0D358BE11E1C75 /* UniversalTVRemoteTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -139,23 +114,6 @@
 			productReference = A369EC5675FA4FD78AF1EFA3 /* UniversalTVRemote.app */;
 			productType = "com.apple.product-type.application";
 		};
-		268ADEB3E8C8F3B97F4AFCDD /* UniversalTVRemoteTests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 3EBE33444901EE81D8A2C991 /* Build configuration list for PBXNativeTarget "UniversalTVRemoteTests" */;
-			buildPhases = (
-				43CC735874CF0D74BBFB9942 /* Sources */,
-				51C7371996A90F6AAE1CAA2D /* Frameworks */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				EE26A32CFE10785D19114D10 /* PBXTargetDependency */,
-			);
-			name = UniversalTVRemoteTests;
-			productName = UniversalTVRemoteTests;
-			productReference = 5B7917B04C0D358BE11E1C75 /* UniversalTVRemoteTests.xctest */;
-			productType = "com.apple.product-type.bundle.unit-test";
-		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -167,12 +125,6 @@
 				LastUpgradeCheck = 1500;
 				TargetAttributes = {
 					144B1851522148CA86D58D5A = {
-						CreatedOnToolsVersion = 15.0;
-					};
-					144B1851522148CA86D58D5A = {
-						CreatedOnToolsVersion = 15.0;
-					};
-					268ADEB3E8C8F3B97F4AFCDD = {
 						CreatedOnToolsVersion = 15.0;
 					};
 				};
@@ -192,29 +144,7 @@
 			targets = (
 				144B1851522148CA86D58D5A /* UniversalTVRemote */,
 			);
-			targets = (
-				144B1851522148CA86D58D5A /* UniversalTVRemote */,
-				268ADEB3E8C8F3B97F4AFCDD /* UniversalTVRemoteTests */,
-			);
 		};
-
-/* Begin PBXTargetDependency section */
-		EE26A32CFE10785D19114D10 /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 144B1851522148CA86D58D5A /* UniversalTVRemote */;
-			targetProxy = 86FF9D128E4083C7273E2E3E /* PBXContainerItemProxy */;
-		};
-/* End PBXTargetDependency section */
-
-/* Begin PBXContainerItemProxy section */
-		86FF9D128E4083C7273E2E3E /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 9E78762B51C0418A89649FB2 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 144B1851522148CA86D58D5A;
-			remoteInfo = UniversalTVRemote;
-		};
-/* End PBXContainerItemProxy section */
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
@@ -247,14 +177,6 @@
 				FF07ED2A82D64CC5A3D66B69 /* TVDevice.swift in Sources */,
 				EB2C0BDC8D62439E8D0EA0C5 /* UniversalTVRemoteApp.swift in Sources */,
 				B14983B2B4B94BACBCDD8925 /* X509.swift in Sources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		43CC735874CF0D74BBFB9942 /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				041547DB8A35806CE609C942 /* UniversalTVRemoteTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -423,48 +345,6 @@
 			};
 			name = Release;
 		};
-		E11A493A36A119D4928656F4 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@loader_path/Frameworks",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.nicolassolley.universaltvremote.tests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/UniversalTVRemote.app/UniversalTVRemote";
-			};
-			name = Debug;
-		};
-		5237D46247A745080947FD5A /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				GENERATE_INFOPLIST_FILE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
-				LD_RUNPATH_SEARCH_PATHS = (
-					"$(inherited)",
-					"@executable_path/Frameworks",
-					"@loader_path/Frameworks",
-				);
-				PRODUCT_BUNDLE_IDENTIFIER = com.nicolassolley.universaltvremote.tests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/UniversalTVRemote.app/UniversalTVRemote";
-			};
-			name = Release;
-		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -482,15 +362,6 @@
 			buildConfigurations = (
 				3E0DD9966D694D2EB2C82AD0 /* Debug */,
 				DB08D3A0CC5247EDB6F190ED /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		3EBE33444901EE81D8A2C991 /* Build configuration list for PBXNativeTarget "UniversalTVRemoteTests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				E11A493A36A119D4928656F4 /* Debug */,
-				5237D46247A745080947FD5A /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
