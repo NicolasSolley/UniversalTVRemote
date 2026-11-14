@@ -17,6 +17,7 @@
 		1EFF77A258A84BD982F8AC5E /* RokuRemote.swift in Sources */ = {isa = PBXBuildFile; fileRef = D73B4AB6E24F45E3ADA1872A /* RokuRemote.swift */; };
 		D3FC0157A2D34CA1BBD6994E /* SSDPDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D65539DD7E44C289EB6C23A /* SSDPDiscovery.swift */; };
 		44D4062A836C40BABB739745 /* SamsungRemote.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D9FA26B157E48029FE78890 /* SamsungRemote.swift */; };
+		0A641D675E1380DCE6F12907 /* SubnetSweep.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A2A7AE1F572DF83190FC71D /* SubnetSweep.swift */; };
 		FF07ED2A82D64CC5A3D66B69 /* TVDevice.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7774389067A4C1C9F6ACCF6 /* TVDevice.swift */; };
 		EB2C0BDC8D62439E8D0EA0C5 /* UniversalTVRemoteApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CBEB188AB8744F7B202E1AD /* UniversalTVRemoteApp.swift */; };
 		B14983B2B4B94BACBCDD8925 /* X509.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8477BEAB10E2447A9FCAB9A8 /* X509.swift */; };
@@ -34,6 +35,7 @@
 		D73B4AB6E24F45E3ADA1872A /* RokuRemote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RokuRemote.swift; sourceTree = "<group>"; };
 		0D65539DD7E44C289EB6C23A /* SSDPDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSDPDiscovery.swift; sourceTree = "<group>"; };
 		3D9FA26B157E48029FE78890 /* SamsungRemote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SamsungRemote.swift; sourceTree = "<group>"; };
+		5A2A7AE1F572DF83190FC71D /* SubnetSweep.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubnetSweep.swift; sourceTree = "<group>"; };
 		D7774389067A4C1C9F6ACCF6 /* TVDevice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVDevice.swift; sourceTree = "<group>"; };
 		5CBEB188AB8744F7B202E1AD /* UniversalTVRemoteApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UniversalTVRemoteApp.swift; sourceTree = "<group>"; };
 		8477BEAB10E2447A9FCAB9A8 /* X509.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = X509.swift; sourceTree = "<group>"; };
@@ -74,6 +76,7 @@
 				D73B4AB6E24F45E3ADA1872A /* RokuRemote.swift */,
 				0D65539DD7E44C289EB6C23A /* SSDPDiscovery.swift */,
 				3D9FA26B157E48029FE78890 /* SamsungRemote.swift */,
+				5A2A7AE1F572DF83190FC71D /* SubnetSweep.swift */,
 				D7774389067A4C1C9F6ACCF6 /* TVDevice.swift */,
 				5CBEB188AB8744F7B202E1AD /* UniversalTVRemoteApp.swift */,
 				8477BEAB10E2447A9FCAB9A8 /* X509.swift */,
@@ -170,6 +173,7 @@
 				1EFF77A258A84BD982F8AC5E /* RokuRemote.swift in Sources */,
 				D3FC0157A2D34CA1BBD6994E /* SSDPDiscovery.swift in Sources */,
 				44D4062A836C40BABB739745 /* SamsungRemote.swift in Sources */,
+				0A641D675E1380DCE6F12907 /* SubnetSweep.swift in Sources */,
 				FF07ED2A82D64CC5A3D66B69 /* TVDevice.swift in Sources */,
 				EB2C0BDC8D62439E8D0EA0C5 /* UniversalTVRemoteApp.swift in Sources */,
 				B14983B2B4B94BACBCDD8925 /* X509.swift in Sources */,
