@@ -245,10 +245,15 @@ final class SubnetSweep {
     /// Android TV Remote service: control on 6466, pairing on 6467.
     /// Either open means a real Android/Google TV is listening; the
     /// pairing/control handshake confirms it when the user taps the TV.
+    /// (The two results are awaited into locals first: `||` takes its
+    /// operands as autoclosures, and an `async let` variable cannot be
+    /// captured in an autoclosure.)
     private static func probeAndroidTVPorts(host: String) async -> Bool {
         async let control = tcpPortOpen(host: host, port: 6466)
         async let pairing = tcpPortOpen(host: host, port: 6467)
-        return await control || pairing
+        let controlOpen = await control
+        let pairingOpen = await pairing
+        return controlOpen || pairingOpen
     }
 
     /// LG webOS wss port, as a fallback when the TV's DIAL server does
