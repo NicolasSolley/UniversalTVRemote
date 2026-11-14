@@ -293,16 +293,6 @@ private struct RemoteView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
                     .padding(.bottom, 24)
-
-                // Android TV pairing can be reset: clears the pinned
-                // certificate and the paired flag so the next connect
-                // pairs from scratch (needed when the TV's certificate
-                // changed, e.g. after a TV reset).
-                if session.device.brand == .androidTV {
-                    Button("Forget this TV", role: .destructive) { session.forgetPairedTV() }
-                        .buttonStyle(.bordered)
-                        .padding(.bottom, 24)
-                }
             }
             .padding(.top, 8)
         }
