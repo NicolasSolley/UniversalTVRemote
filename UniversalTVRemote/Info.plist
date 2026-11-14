@@ -3,11 +3,12 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleDisplayName</key><string>Universal Remote</string>
+    <key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
     <key>CFBundleIdentifier</key><string>com.nicolassolley.universaltvremote</string>
     <key>CFBundleName</key><string>UniversalTVRemote</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>1.0</string>
-    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleShortVersionString</key><string>1.0.2</string>
+    <key>CFBundleVersion</key><string>2</string>
     <key>LSRequiresIPhoneOS</key><true/>
     <key>NSLocalNetworkUsageDescription</key><string>Find and control TVs on your local Wi-Fi network.</string>
     <key>NSBonjourServices</key>
