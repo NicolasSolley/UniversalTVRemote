@@ -124,10 +124,12 @@ enum X509 {
 
     /// Mint a minimal self-signed RSA certificate for `commonName`.
     /// Valid 10 years from now. The TV does not validate the chain — it
-    /// binds this certificate during pairing — but the reference
-    /// implementations mint it with `basicConstraints CA:TRUE` and a
-    /// subjectAltName, and at least one TV has been seen rejecting a cert
-    /// without them, so both extensions are included.
+    /// binds this certificate during pairing — but the shape must match
+    /// the reference implementation (tronikos/androidtvremote2
+    /// certificate_generator.py) exactly: basicConstraints CA:TRUE with
+    /// path_length 0, NON-critical, plus a subjectAltName, serial 1000.
+    /// v1.0.3 minted a critical CA:TRUE cert with no path length, and
+    /// some TLS stacks reject a client certificate shaped that way.
     static func makeSelfSigned(commonName: String, keyPair: (publicKey: SecKey, privateKey: SecKey)) throws -> Data {
         guard let publicKeyDER = SecKeyCopyExternalRepresentation(keyPair.publicKey, nil) as Data? else {
             throw NSError(domain: "X509", code: 1,
@@ -139,18 +141,19 @@ enum X509 {
         let now = Date()
         let validity = sequence(utcTime(now) + utcTime(now.addingTimeInterval(10 * 365 * 24 * 3600)))
         let spki = sequence(sequence(oid(rsaEncryptionOID) + null()) + bitString(publicKeyDER))
-        // Extensions [3]: basicConstraints CA:TRUE (critical) + SAN dNSName.
-        // The dNSName GeneralName is context-specific primitive tag [2] (0x82).
+        // Extensions [3]: basicConstraints CA:TRUE, path_length 0,
+        // NON-critical, + SAN dNSName. The dNSName GeneralName is
+        // context-specific primitive tag [2] (0x82).
         let extensions = explicit(3, sequence(
-            extensionItem(oidComponents: basicConstraintsOID, critical: true,
-                          value: sequence(boolean(true)))
+            extensionItem(oidComponents: basicConstraintsOID, critical: false,
+                          value: sequence(boolean(true) + integer(0)))
             + extensionItem(oidComponents: subjectAltNameOID, critical: false,
                             value: sequence(tlv(tag: 0x82, content: Data(commonName.utf8))))
         ))
 
         let tbs = sequence(
             explicit(0, integer(2)) +
-            integer(1) +
+            integer(1000) +
             algorithm +
             name +
             validity +

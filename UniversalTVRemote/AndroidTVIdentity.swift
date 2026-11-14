@@ -8,15 +8,12 @@ enum AndroidTVIdentity {
     private static let keyTag = "com.nicolassolley.universaltvremote.androidtv.key"
     private static let certLabel = "UniversalTVRemote AndroidTV"
 
-    /// The certificate's common name, unique per install and persisted.
-    /// The TV dedupes paired certificates by subject, so two phones
-    /// sharing one CN knock each other off pairing.
+    /// The certificate's common name. It must equal the PairingRequest
+    /// client_name: the reference implementation mints its certificate
+    /// with CN == SAN == client_name. (An earlier build used a per-install
+    /// UUID CN; identities minted that way are dropped by load(), below.)
     private static func clientCommonName() -> String {
-        let key = "androidtv.clientCN"
-        if let existing = UserDefaults.standard.string(forKey: key) { return existing }
-        let name = "UniversalTVRemote-" + UUID().uuidString
-        UserDefaults.standard.set(name, forKey: key)
-        return name
+        AndroidTVRemote.clientName
     }
 
     struct Loaded {
@@ -35,8 +32,27 @@ enum AndroidTVIdentity {
     private static func load() throws -> Loaded? {
         guard let identity = loadIdentity(),
               let certificate = loadCertificate() else { return nil }
+        // Drop identities minted under the old scheme (per-install UUID
+        // CN, critical CA:TRUE cert) — they can never pair. A nil CN
+        // lookup is treated as "unknown, keep it", so a lookup quirk can
+        // never force a fresh identity on every launch (which would break
+        // re-pairing with an already-paired TV).
+        if let cn = certificateCommonName(certificate),
+           cn != AndroidTVRemote.clientName {
+            return nil
+        }
         let certDER = SecCertificateCopyData(certificate) as Data
         return Loaded(identity: identity, certificateDER: certDER)
+    }
+
+    /// The certificate's subject common name, if readable.
+    private static func certificateCommonName(_ certificate: SecCertificate) -> String? {
+        guard let values = SecCertificateCopyValues(certificate, [kSecOIDCommonName] as CFArray, nil) as? [String: Any],
+              let entry = values[kSecOIDCommonName as String] as? [String: Any],
+              let value = entry[kSecPropertyKeyValue as String] as? String else {
+            return nil
+        }
+        return value
     }
 
     private static func create() throws -> Loaded {

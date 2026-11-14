@@ -174,7 +174,13 @@ final class RemoteSession: ObservableObject {
                 status = "Pairing cancelled."
             } catch let error as AndroidTVRemote.AndroidTVError {
                 isConnected = false
-                status = error.localizedDescription
+                var text = error.localizedDescription
+                // The 6466 probe is non-fatal, but if pairing then fails
+                // too, what the probe saw is the first diagnostic clue.
+                if let note = await androidTV.lastProbeNote {
+                    text += " \(note)"
+                }
+                status = text
             } catch {
                 isConnected = false
                 status = "Couldn't connect to the TV. Make sure it's on and on the same Wi-Fi network."
