@@ -24,14 +24,17 @@ struct ContentView: View {
                 DiscoveryListView(discovery: discovery) { device in
                     session = RemoteSession(device: device)
                 }
-                .navigationTitle("Universal Remote")
+                // The list draws its own header ("Select a TV Device"),
+                // so the navigation bar stays hidden here. The remote
+                // screen shows the bar again with its own title.
+                .navigationBarHidden(true)
             }
         }
         .preferredColorScheme(.dark)
         .task {
-            // Scan automatically on launch. The manual Scan button stays
-            // available for re-scans; discovery itself is unchanged
-            // (subnet sweep, scan-only, no manual IP entry).
+            // Scan automatically and silently on launch. There is no
+            // scan button — pull-to-refresh re-scans. Discovery itself
+            // is unchanged (subnet sweep, scan-only, no manual IP entry).
             guard !didAutoScan else { return }
             didAutoScan = true
             if !discovery.isScanning {
@@ -43,9 +46,18 @@ struct ContentView: View {
 
 // MARK: - Discovery
 
+/// Device picker, modeled on the reference "Select a TV Device" screen:
+/// a header row (X, centered title, empty right), one dark card holding
+/// the whole TV list, the same-wifi note underneath, and a small spinner
+/// as the only scanning indicator. The scan runs automatically and
+/// silently on launch (see ContentView); there is no scan button and no
+/// scan progress UI — the list simply populates as TVs are found.
+/// Pull-to-refresh re-scans.
 private struct DiscoveryListView: View {
     @ObservedObject var discovery: DiscoveryManager
     var onSelect: (TVDevice) -> Void
+
+    @Environment(\.dismiss) private var dismiss
 
     /// True once a scan has finished at least once — drives the empty
     /// state (still scanning vs. nothing found). View-side only; the
@@ -53,162 +65,176 @@ private struct DiscoveryListView: View {
     @State private var hasCompletedScan = false
 
     var body: some View {
-        VStack(spacing: 16) {
-            VStack(spacing: 10) {
-                ZStack {
-                    Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [.cyan.opacity(0.35), .blue.opacity(0.25)],
-                                startPoint: .topLeading, endPoint: .bottomTrailing)
-                        )
-                        .frame(width: 84, height: 84)
-                    Image(systemName: "tv.and.mediabox")
-                        .font(.system(size: 36))
-                        .foregroundStyle(.cyan)
+        ScrollView {
+            VStack(spacing: 20) {
+                // Header: X on the left, title centered, right kept
+                // empty so the title stays centered. There is no ?
+                // button (deliberately left out). The X dismisses this
+                // screen; the device list is the app's root, so there
+                // is no previous screen to return to and dismiss() is
+                // a no-op here — the button exists to match the
+                // reference layout.
+                HStack {
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark")
+                            .font(.headline)
+                            .foregroundStyle(.white)
+                            .frame(width: 44, height: 44)
+                    }
+                    .buttonStyle(.plain)
+                    Spacer()
+                    Text("Select a TV Device")
+                        .font(.headline.bold())
+                        .foregroundStyle(.white)
+                    Spacer()
+                    Color.clear.frame(width: 44, height: 44)
                 }
-                Text("Find TVs on your Wi-Fi")
-                    .font(.title2.bold())
-                Text("Connect your iPhone and TV to the same Wi-Fi network, then scan. Only TVs that answer the scan appear here.")
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal)
-            }
-            .padding(.top, 12)
+                .padding(.horizontal, 8)
 
-            HStack {
-                Button {
-                    discovery.scan()
-                } label: {
-                    Label(discovery.isScanning ? "Scanning…" : "Scan network",
-                          systemImage: "dot.radiowaves.left.and.right")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(discovery.isScanning)
-                Button("Stop") { discovery.stop() }
-                    .buttonStyle(.bordered)
-                    .disabled(!discovery.isScanning)
-            }
-            .padding(.horizontal)
-
-            HStack(spacing: 6) {
-                if discovery.isScanning { ProgressView().controlSize(.small) }
-                Text(discovery.status)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal)
-
-            if discovery.devices.isEmpty {
-                emptyState
-            } else {
-                List(discovery.devices) { device in
-                    Button { onSelect(device) } label: {
-                        HStack(spacing: 12) {
-                            ZStack {
-                                RoundedRectangle(cornerRadius: 12)
-                                    .fill(brandTint(for: device.brand).opacity(0.18))
-                                    .frame(width: 48, height: 48)
-                                Image(systemName: brandIcon(for: device.brand))
-                                    .font(.title3)
-                                    .foregroundStyle(brandTint(for: device.brand))
-                            }
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(device.name)
-                                    .font(.headline)
-                                    .foregroundStyle(.primary)
-                                Text(subtitle(for: device))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                            if device.brand.supportsControl {
-                                Image(systemName: "chevron.right").foregroundStyle(.tertiary)
-                            } else {
-                                Text("Discovery only")
-                                    .font(.caption2)
-                                    .padding(.horizontal, 8).padding(.vertical, 4)
-                                    .background(Color.white.opacity(0.08), in: Capsule())
-                                    .foregroundStyle(.secondary)
+                // One dark card holding the whole TV list.
+                VStack(spacing: 0) {
+                    if discovery.devices.isEmpty {
+                        emptyRow
+                    } else {
+                        ForEach(discovery.devices) { device in
+                            deviceRow(device)
+                            if device.id != discovery.devices.last?.id {
+                                Divider()
+                                    .background(Color.white.opacity(0.08))
+                                    .padding(.leading, 76)
                             }
                         }
-                        .padding(.vertical, 6)
                     }
-                    .disabled(!device.brand.supportsControl)
-                    .listRowBackground(Color.white.opacity(0.05))
                 }
-                .listStyle(.insetGrouped)
-                .refreshable { discovery.scan() }
+                .padding(.vertical, 6)
+                .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 20))
+                .padding(.horizontal)
+
+                Text("Make sure your phone and TV are connected to the same wifi network.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+
+                // The only scanning indicator.
+                if discovery.isScanning {
+                    ProgressView()
+                        .controlSize(.small)
+                }
             }
+            .padding(.top, 8)
+            .padding(.bottom, 24)
         }
+        .refreshable { discovery.scan() }
         .onChange(of: discovery.isScanning) { scanning in
             if !scanning { hasCompletedScan = true }
         }
     }
 
-    /// Shown when no devices are listed yet: a scanning state while a
-    /// scan is running (or has never run), and a "nothing found" state
-    /// once a scan has finished empty.
-    private var emptyState: some View {
-        VStack(spacing: 12) {
+    /// The card's single row while no devices are listed: a looking
+    /// state while a scan is running (or has never run), and a
+    /// "nothing found" state once a scan has finished empty.
+    private var emptyRow: some View {
+        HStack {
+            Spacer()
             if discovery.isScanning || !hasCompletedScan {
-                ProgressView()
-                    .controlSize(.large)
-                Text("Scanning for TVs…")
-                    .font(.headline)
-                Text("This usually takes a few seconds.")
+                Text("Looking for TVs…")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             } else {
-                Image(systemName: "tv.slash")
-                    .font(.system(size: 44))
-                    .foregroundStyle(.secondary)
                 Text("No TVs found")
-                    .font(.headline)
-                Text("Make sure your TV is on and on the same Wi-Fi network, then scan again.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
-                Button("Scan again") { discovery.scan() }
-                    .buttonStyle(.borderedProminent)
-                    .padding(.top, 4)
             }
+            Spacer()
         }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 32)
+        .padding(.vertical, 16)
     }
 
-    private func subtitle(for device: TVDevice) -> String {
-        var parts: [String] = [device.brand.rawValue]
-        if let model = device.model { parts.append(model) }
-        parts.append(device.addressLine)
-        if !device.brand.supportsControl {
-            parts.append("— no public remote API")
+    private func deviceRow(_ device: TVDevice) -> some View {
+        Button { onSelect(device) } label: {
+            HStack(spacing: 12) {
+                brandBadge(for: device.brand)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(device.name)
+                        .font(.headline)
+                        .foregroundStyle(.white)
+                    Text(device.addressLine)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                if !device.brand.supportsControl {
+                    Text("Discovery only")
+                        .font(.caption2)
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(Color.white.opacity(0.08), in: Capsule())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
         }
-        return parts.joined(separator: " • ")
+        .disabled(!device.brand.supportsControl)
+        .buttonStyle(.plain)
     }
 
-    private func brandIcon(for brand: TVDevice.Brand) -> String {
+    /// Circular brand badge (text-based — no trademarked logo files).
+    /// Android TV: light circle, green "androidtv" wordmark. Samsung:
+    /// dark navy circle, white "SAMSUNG". Roku/LG: tinted circle with
+    /// the brand name. AirPlay/Other: neutral circle with a TV glyph.
+    private func brandBadge(for brand: TVDevice.Brand) -> some View {
+        ZStack {
+            Circle().fill(brandBadgeBackground(for: brand))
+            brandBadgeLabel(for: brand)
+        }
+        .frame(width: 48, height: 48)
+    }
+
+    @ViewBuilder
+    private func brandBadgeLabel(for brand: TVDevice.Brand) -> some View {
         switch brand {
-        case .roku: return "play.tv"
-        case .samsung: return "tv"
-        case .lg: return "tv.fill"
-        case .androidTV: return "tv.and.mediabox"
-        case .airPlay: return "airplayvideo"
-        case .other: return "tv"
+        case .androidTV:
+            Text("androidtv")
+                .font(.system(size: 10, weight: .bold))
+                .minimumScaleFactor(0.6)
+                .lineLimit(1)
+                .foregroundStyle(Color(red: 0.24, green: 0.86, blue: 0.52))
+                .padding(.horizontal, 6)
+        case .samsung:
+            Text("SAMSUNG")
+                .font(.system(size: 10, weight: .bold))
+                .minimumScaleFactor(0.6)
+                .lineLimit(1)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 6)
+        case .roku:
+            Text("Roku")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.white)
+        case .lg:
+            Text("LG")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundStyle(.white)
+        case .airPlay:
+            Image(systemName: "airplayvideo")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+        case .other:
+            Image(systemName: "tv")
+                .font(.title3)
+                .foregroundStyle(.secondary)
         }
     }
 
-    private func brandTint(for brand: TVDevice.Brand) -> Color {
+    private func brandBadgeBackground(for brand: TVDevice.Brand) -> Color {
         switch brand {
+        case .androidTV: return Color(white: 0.88)
+        case .samsung: return Color(red: 0.05, green: 0.09, blue: 0.25)
         case .roku: return .purple
-        case .samsung: return .blue
         case .lg: return .red
-        case .androidTV: return .green
-        case .airPlay: return .gray
-        case .other: return .gray
+        case .airPlay: return Color.white.opacity(0.10)
+        case .other: return Color.white.opacity(0.10)
         }
     }
 }
