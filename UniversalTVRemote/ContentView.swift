@@ -3,6 +3,9 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var discovery = DiscoveryManager()
     @State private var session: RemoteSession?
+    /// The launch scan runs once, when the app first opens — not on
+    /// every appearance (returning from a remote keeps the list as is).
+    @State private var didAutoScan = false
 
     var body: some View {
         // NavigationView (not NavigationStack): the deployment target is
@@ -25,6 +28,16 @@ struct ContentView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .task {
+            // Scan automatically on launch. The manual Scan button stays
+            // available for re-scans; discovery itself is unchanged
+            // (subnet sweep, scan-only, no manual IP entry).
+            guard !didAutoScan else { return }
+            didAutoScan = true
+            if !discovery.isScanning {
+                discovery.scan()
+            }
+        }
     }
 }
 
@@ -34,24 +47,41 @@ private struct DiscoveryListView: View {
     @ObservedObject var discovery: DiscoveryManager
     var onSelect: (TVDevice) -> Void
 
+    /// True once a scan has finished at least once — drives the empty
+    /// state (still scanning vs. nothing found). View-side only; the
+    /// discovery code is untouched.
+    @State private var hasCompletedScan = false
+
     var body: some View {
         VStack(spacing: 16) {
-            Image(systemName: "tv.and.mediabox")
-                .font(.system(size: 54))
-                .foregroundStyle(.cyan)
-                .padding(.top, 24)
-            Text("Find TVs on your Wi-Fi")
-                .font(.title2.bold())
-            Text("Connect your iPhone and TV to the same Wi-Fi network, then scan. Only TVs that answer the scan appear here.")
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal)
+            VStack(spacing: 10) {
+                ZStack {
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: [.cyan.opacity(0.35), .blue.opacity(0.25)],
+                                startPoint: .topLeading, endPoint: .bottomTrailing)
+                        )
+                        .frame(width: 84, height: 84)
+                    Image(systemName: "tv.and.mediabox")
+                        .font(.system(size: 36))
+                        .foregroundStyle(.cyan)
+                }
+                Text("Find TVs on your Wi-Fi")
+                    .font(.title2.bold())
+                Text("Connect your iPhone and TV to the same Wi-Fi network, then scan. Only TVs that answer the scan appear here.")
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal)
+            }
+            .padding(.top, 12)
 
             HStack {
                 Button {
                     discovery.scan()
                 } label: {
-                    Label("Scan network", systemImage: "dot.radiowaves.left.and.right")
+                    Label(discovery.isScanning ? "Scanning…" : "Scan network",
+                          systemImage: "dot.radiowaves.left.and.right")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
@@ -70,34 +100,84 @@ private struct DiscoveryListView: View {
             }
             .padding(.horizontal)
 
-            List(discovery.devices) { device in
-                Button { onSelect(device) } label: {
-                    HStack(spacing: 12) {
-                        Image(systemName: device.brand == .airPlay ? "airplayvideo" : "tv")
-                            .font(.title2)
-                            .foregroundStyle(device.brand.supportsControl ? .cyan : .gray)
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(device.name).foregroundStyle(.primary)
-                            Text(subtitle(for: device))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+            if discovery.devices.isEmpty {
+                emptyState
+            } else {
+                List(discovery.devices) { device in
+                    Button { onSelect(device) } label: {
+                        HStack(spacing: 12) {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 12)
+                                    .fill(brandTint(for: device.brand).opacity(0.18))
+                                    .frame(width: 48, height: 48)
+                                Image(systemName: brandIcon(for: device.brand))
+                                    .font(.title3)
+                                    .foregroundStyle(brandTint(for: device.brand))
+                            }
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(device.name)
+                                    .font(.headline)
+                                    .foregroundStyle(.primary)
+                                Text(subtitle(for: device))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if device.brand.supportsControl {
+                                Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+                            } else {
+                                Text("Discovery only")
+                                    .font(.caption2)
+                                    .padding(.horizontal, 8).padding(.vertical, 4)
+                                    .background(Color.white.opacity(0.08), in: Capsule())
+                                    .foregroundStyle(.secondary)
+                            }
                         }
-                        Spacer()
-                        if device.brand.supportsControl {
-                            Image(systemName: "chevron.right").foregroundStyle(.tertiary)
-                        } else {
-                            Text("Discovery only")
-                                .font(.caption2)
-                                .padding(.horizontal, 8).padding(.vertical, 4)
-                                .background(Color.white.opacity(0.08), in: Capsule())
-                                .foregroundStyle(.secondary)
-                        }
+                        .padding(.vertical, 6)
                     }
+                    .disabled(!device.brand.supportsControl)
+                    .listRowBackground(Color.white.opacity(0.05))
                 }
-                .disabled(!device.brand.supportsControl)
+                .listStyle(.insetGrouped)
+                .refreshable { discovery.scan() }
             }
-            .listStyle(.insetGrouped)
         }
+        .onChange(of: discovery.isScanning) { scanning in
+            if !scanning { hasCompletedScan = true }
+        }
+    }
+
+    /// Shown when no devices are listed yet: a scanning state while a
+    /// scan is running (or has never run), and a "nothing found" state
+    /// once a scan has finished empty.
+    private var emptyState: some View {
+        VStack(spacing: 12) {
+            if discovery.isScanning || !hasCompletedScan {
+                ProgressView()
+                    .controlSize(.large)
+                Text("Scanning for TVs…")
+                    .font(.headline)
+                Text("This usually takes a few seconds.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            } else {
+                Image(systemName: "tv.slash")
+                    .font(.system(size: 44))
+                    .foregroundStyle(.secondary)
+                Text("No TVs found")
+                    .font(.headline)
+                Text("Make sure your TV is on and on the same Wi-Fi network, then scan again.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+                Button("Scan again") { discovery.scan() }
+                    .buttonStyle(.borderedProminent)
+                    .padding(.top, 4)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 32)
     }
 
     private func subtitle(for device: TVDevice) -> String {
@@ -108,6 +188,28 @@ private struct DiscoveryListView: View {
             parts.append("— no public remote API")
         }
         return parts.joined(separator: " • ")
+    }
+
+    private func brandIcon(for brand: TVDevice.Brand) -> String {
+        switch brand {
+        case .roku: return "play.tv"
+        case .samsung: return "tv"
+        case .lg: return "tv.fill"
+        case .androidTV: return "tv.and.mediabox"
+        case .airPlay: return "airplayvideo"
+        case .other: return "tv"
+        }
+    }
+
+    private func brandTint(for brand: TVDevice.Brand) -> Color {
+        switch brand {
+        case .roku: return .purple
+        case .samsung: return .blue
+        case .lg: return .red
+        case .androidTV: return .green
+        case .airPlay: return .gray
+        case .other: return .gray
+        }
     }
 }
 
@@ -154,6 +256,7 @@ private struct RemoteView: View {
                     }
                     .padding(14)
                     .background(Color.cyan.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.cyan.opacity(0.25), lineWidth: 1))
                     .padding(.horizontal)
                 }
 
@@ -166,6 +269,7 @@ private struct RemoteView: View {
                             .foregroundStyle(.white)
                             .frame(width: 64, height: 64)
                             .background(Color.red.opacity(0.85), in: Circle())
+                            .shadow(color: .red.opacity(0.4), radius: 14, y: 4)
                     }
                     .buttonStyle(.plain)
                     Spacer()
@@ -244,6 +348,8 @@ private struct RemoteView: View {
                         }
                         .padding(.top, 8)
                     }
+                    .padding(12)
+                    .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16))
                     .padding(.horizontal)
                 }
 
@@ -344,9 +450,10 @@ private struct RemoteView: View {
                 Image(systemName: systemImage).font(.title3.bold())
                 if let title { Text(title).font(.caption2) }
             }
-            .frame(minWidth: 58, minHeight: 52)
+            .frame(minWidth: 58, minHeight: 56)
             .padding(.horizontal, 6)
-            .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
+            .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.08), lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
@@ -355,7 +462,8 @@ private struct RemoteView: View {
         Button("\(n)") { send(.digit(n)) }
             .font(.title3.bold())
             .frame(maxWidth: .infinity, minHeight: 44)
-            .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+            .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.08), lineWidth: 1))
             .buttonStyle(.plain)
     }
 }
@@ -367,7 +475,15 @@ private struct TouchpadView: View {
 
     var body: some View {
         RoundedRectangle(cornerRadius: 20)
-            .fill(Color.white.opacity(0.08))
+            .fill(
+                LinearGradient(
+                    colors: [Color.white.opacity(0.10), Color.white.opacity(0.04)],
+                    startPoint: .top, endPoint: .bottom)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 20)
+                    .stroke(Color.white.opacity(0.10), lineWidth: 1)
+            )
             .overlay {
                 VStack(spacing: 8) {
                     Image(systemName: "hand.draw")
@@ -422,6 +538,7 @@ private struct DPadView: View {
                 .font(.title2.bold())
                 .frame(width: 64, height: 56)
                 .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.08), lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
@@ -448,6 +565,7 @@ private struct RockerView: View {
                 }
                 .frame(width: 76, height: 56)
                 .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.08), lineWidth: 1))
             }
             .buttonStyle(.plain)
             Button(action: onCenter) {
@@ -455,6 +573,7 @@ private struct RockerView: View {
                     .font(.title3)
                     .frame(width: 76, height: 44)
                     .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.08), lineWidth: 1))
             }
             .buttonStyle(.plain)
             Button(action: onBottom) {
@@ -464,6 +583,7 @@ private struct RockerView: View {
                 }
                 .frame(width: 76, height: 56)
                 .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
+                .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.08), lineWidth: 1))
             }
             .buttonStyle(.plain)
         }
