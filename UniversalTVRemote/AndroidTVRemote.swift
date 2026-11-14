@@ -504,7 +504,11 @@ final class TLSConnection {
         // hash it.
         sec_protocol_options_set_verify_block(
             tlsOptions.securityProtocolOptions, { [weak self] _, trust, complete in
-                if let trust, let certificate = SecTrustGetCertificateAtIndex(trust, 0) {
+                // The verify block hands us a `sec_trust_t` (an `any OS_sec_trust`
+                // existential); the Security APIs want a concrete `SecTrust`,
+                // so cast first — it is the same underlying trust object.
+                if let trust, let secTrust = trust as? SecTrust,
+                   let certificate = SecTrustGetCertificateAtIndex(secTrust, 0) {
                     let der = SecCertificateCopyData(certificate) as Data
                     self?.onServerCertificate?(der)
                 }
