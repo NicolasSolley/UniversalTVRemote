@@ -479,12 +479,16 @@ final class TLSConnection {
         let tlsOptions = NWProtocolTLS.Options()
         let secIdentity = sec_identity_create(identity)
         if let secIdentity {
+            // This API takes only the identity — there is no queue parameter
+            // (older examples show a three-argument form that no longer exists).
             sec_protocol_options_set_local_identity(
-                tlsOptions.securityProtocolOptions, secIdentity, queue)
+                tlsOptions.securityProtocolOptions, secIdentity)
         }
         self.tlsOptions = tlsOptions
         let parameters = NWParameters(tls: tlsOptions)
-        parameters.serviceClass = .interactive
+        // No `.interactive` case exists; `.responsiveData` is the service
+        // class for traffic the user is actively waiting on.
+        parameters.serviceClass = .responsiveData
         connection = NWConnection(host: NWEndpoint.Host(host),
                                   port: NWEndpoint.Port(rawValue: port)!,
                                   using: parameters)
@@ -500,7 +504,7 @@ final class TLSConnection {
         // hash it.
         sec_protocol_options_set_verify_block(
             tlsOptions.securityProtocolOptions, { [weak self] _, trust, complete in
-                if let trust, let certificate = SecTrustCopyCertificate(trust, 0) {
+                if let trust, let certificate = SecTrustGetCertificateAtIndex(trust, 0) {
                     let der = SecCertificateCopyData(certificate) as Data
                     self?.onServerCertificate?(der)
                 }

@@ -390,6 +390,32 @@ actor LGRemote {
         guard task.state == .running else { throw LGError.notConnected }
     }
 
+    // MARK: - Continuation bookkeeping
+
+    /// The `withCheckedThrowingContinuation` bodies and the timeout tasks
+    /// are nonisolated, so they cannot touch actor state directly. These
+    /// actor-isolated helpers let them hand continuations to the actor
+    /// with `await` instead. Taking (rather than reading) a continuation
+    /// clears its slot atomically, so exactly one side — the TV's reply
+    /// or the timeout — can resume it.
+    private func storeRegisterContinuation(_ continuation: CheckedContinuation<Void, Error>) {
+        registerContinuation = continuation
+    }
+
+    private func takeRegisterContinuation() -> CheckedContinuation<Void, Error>? {
+        let continuation = registerContinuation
+        registerContinuation = nil
+        return continuation
+    }
+
+    private func storePendingContinuation(id: String, continuation: CheckedContinuation<[String: Any], Error>) {
+        pending[id] = continuation
+    }
+
+    private func takePendingContinuation(id: String) -> CheckedContinuation<[String: Any], Error>? {
+        pending.removeValue(forKey: id)
+    }
+
     /// Sends the register message and waits for the `registered` reply
     /// (up to 60 seconds for the user to accept the TV prompt).
     private func register(signed: Bool) async throws {
@@ -407,21 +433,24 @@ actor LGRemote {
         try await withThrowingTaskGroup(of: Void.self) { group in
             group.addTask {
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                    self.registerContinuation = continuation
                     Task {
+                        // Store before sending: the TV's reply can only
+                        // arrive after the register message goes out, so
+                        // the reply handler always finds the continuation.
+                        await self.storeRegisterContinuation(continuation)
                         do {
                             try await self.sendRaw(message)
                         } catch {
-                            self.registerContinuation?.resume(throwing: error)
-                            self.registerContinuation = nil
+                            if let stored = await self.takeRegisterContinuation() {
+                                stored.resume(throwing: error)
+                            }
                         }
                     }
                 }
             }
             group.addTask {
                 try await Task.sleep(nanoseconds: 60_000_000_000)
-                if let continuation = self.registerContinuation {
-                    self.registerContinuation = nil
+                if let continuation = await self.takeRegisterContinuation() {
                     continuation.resume(throwing: LGError.pairingTimeout)
                 }
                 throw LGError.pairingTimeout
@@ -441,13 +470,17 @@ actor LGRemote {
         return try await withThrowingTaskGroup(of: [String: Any].self) { group in
             group.addTask {
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[String: Any], Error>) in
-                    self.pending[id] = continuation
-                    Task { try? await self.sendJSON(message) }
+                    Task {
+                        // Store before sending, as in register(): the
+                        // response can only arrive after the request does.
+                        await self.storePendingContinuation(id: id, continuation: continuation)
+                        try? await self.sendJSON(message)
+                    }
                 }
             }
             group.addTask {
                 try await Task.sleep(nanoseconds: 5_000_000_000)
-                if let continuation = self.pending.removeValue(forKey: id) {
+                if let continuation = await self.takePendingContinuation(id: id) {
                     continuation.resume(throwing: LGError.timeout)
                 }
                 throw LGError.timeout
@@ -630,7 +663,7 @@ private final class LGTrustDelegate: NSObject, URLSessionDelegate {
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
     ) {
         guard let trust = challenge.protectionSpace.serverTrust,
-              let certificate = SecTrustCopyCertificate(trust, 0) else {
+              let certificate = SecTrustGetCertificateAtIndex(trust, 0) else {
             completionHandler(.performDefaultHandling, nil)
             return
         }

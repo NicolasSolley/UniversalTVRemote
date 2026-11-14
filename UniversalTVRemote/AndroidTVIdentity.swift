@@ -33,11 +33,8 @@ enum AndroidTVIdentity {
     }
 
     private static func load() throws -> Loaded? {
-        guard let privateKey = loadPrivateKey(),
+        guard let identity = loadIdentity(),
               let certificate = loadCertificate() else { return nil }
-        guard let identity = SecIdentityCreateWithCertificate(certificate, privateKey) else {
-            return nil
-        }
         let certDER = SecCertificateCopyData(certificate) as Data
         return Loaded(identity: identity, certificateDER: certDER)
     }
@@ -81,23 +78,27 @@ enum AndroidTVIdentity {
             throw NSError(domain: "AndroidTVIdentity", code: 3,
                           userInfo: [NSLocalizedDescriptionKey: "Could not store certificate"])
         }
-        guard let identity = SecIdentityCreateWithCertificate(certificate, privateKey) else {
+        guard let identity = loadIdentity() else {
             throw NSError(domain: "AndroidTVIdentity", code: 4,
-                          userInfo: [NSLocalizedDescriptionKey: "Could not create identity"])
+                          userInfo: [NSLocalizedDescriptionKey: "Could not load identity"])
         }
         return Loaded(identity: identity, certificateDER: certDER)
     }
 
-    private static func loadPrivateKey() -> SecKey? {
+    /// Fetch the identity from the Keychain. On iOS there is no API to
+    /// build a SecIdentity from a certificate + key directly
+    /// (SecIdentityCreateWithCertificate is macOS-only); instead the
+    /// Keychain vends the identity once the certificate and its private
+    /// key are both stored, matched by the certificate's label.
+    private static func loadIdentity() -> SecIdentity? {
         let query: [String: Any] = [
-            kSecClass as String: kSecClassKey,
-            kSecAttrApplicationTag as String: Data(keyTag.utf8),
-            kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
+            kSecClass as String: kSecClassIdentity,
+            kSecAttrLabel as String: certLabel,
             kSecReturnRef as String: true,
         ]
         var item: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else { return nil }
-        return (item as! SecKey)
+        return (item as! SecIdentity)
     }
 
     private static func loadCertificate() -> SecCertificate? {
