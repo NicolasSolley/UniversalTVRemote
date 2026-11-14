@@ -47,6 +47,14 @@ jobs:
             ARCHS=arm64 \
             ONLY_ACTIVE_ARCH=NO
 
+      - name: Test (iOS Simulator)
+        run: |
+          xcodebuild test \
+            -project UniversalTVRemote.xcodeproj \
+            -scheme UniversalTVRemoteTests \
+            -destination 'platform=iOS Simulator,name=iPhone 16' \
+            -derivedDataPath build/DerivedData
+
       - name: Package unsigned IPA
         run: |
           APP_PATH=$(ls -d build/DerivedData/Build/Products/Release-iphoneos/*.app | head -n 1)
