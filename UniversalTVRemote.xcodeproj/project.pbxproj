@@ -1,0 +1,368 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		51821A8B345B4E199D0A7D7A /* AndroidTVIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D1B0F2782A94A12BB916715 /* AndroidTVIdentity.swift */; };
+		B818F20D994E4613BAF11DDA /* AndroidTVRemote.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA837C023A9640309F31A7C5 /* AndroidTVRemote.swift */; };
+		54C9EBB3A12F4510A0075E77 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85F898AE3B6944ED8139DDFA /* ContentView.swift */; };
+		F08D3CE3D21E437FA0FE4EF2 /* DiscoveryManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80CD84BBFED2406491377B8F /* DiscoveryManager.swift */; };
+		A02A0C51BE114E3F89BF1552 /* LGRemote.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CD2FD67F407485CAB55E035 /* LGRemote.swift */; };
+		A52E001078134AE38526D169 /* Protobuf.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA9B5E5F4CA24427A2F337B8 /* Protobuf.swift */; };
+		D546F55F73E241329EE35BD9 /* RemoteSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38C67934C3434D1F94494DE7 /* RemoteSession.swift */; };
+		1EFF77A258A84BD982F8AC5E /* RokuRemote.swift in Sources */ = {isa = PBXBuildFile; fileRef = D73B4AB6E24F45E3ADA1872A /* RokuRemote.swift */; };
+		D3FC0157A2D34CA1BBD6994E /* SSDPDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D65539DD7E44C289EB6C23A /* SSDPDiscovery.swift */; };
+		44D4062A836C40BABB739745 /* SamsungRemote.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D9FA26B157E48029FE78890 /* SamsungRemote.swift */; };
+		FF07ED2A82D64CC5A3D66B69 /* TVDevice.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7774389067A4C1C9F6ACCF6 /* TVDevice.swift */; };
+		EB2C0BDC8D62439E8D0EA0C5 /* UniversalTVRemoteApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5CBEB188AB8744F7B202E1AD /* UniversalTVRemoteApp.swift */; };
+		B14983B2B4B94BACBCDD8925 /* X509.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8477BEAB10E2447A9FCAB9A8 /* X509.swift */; };
+		EBD11B9EC1324CF79C2D0EE2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9AF4BF83DEBB406CBEFB6EF6 /* Assets.xcassets */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		5D1B0F2782A94A12BB916715 /* AndroidTVIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidTVIdentity.swift; sourceTree = "<group>"; };
+		FA837C023A9640309F31A7C5 /* AndroidTVRemote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidTVRemote.swift; sourceTree = "<group>"; };
+		85F898AE3B6944ED8139DDFA /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		80CD84BBFED2406491377B8F /* DiscoveryManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscoveryManager.swift; sourceTree = "<group>"; };
+		4CD2FD67F407485CAB55E035 /* LGRemote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LGRemote.swift; sourceTree = "<group>"; };
+		CA9B5E5F4CA24427A2F337B8 /* Protobuf.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Protobuf.swift; sourceTree = "<group>"; };
+		38C67934C3434D1F94494DE7 /* RemoteSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSession.swift; sourceTree = "<group>"; };
+		D73B4AB6E24F45E3ADA1872A /* RokuRemote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RokuRemote.swift; sourceTree = "<group>"; };
+		0D65539DD7E44C289EB6C23A /* SSDPDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSDPDiscovery.swift; sourceTree = "<group>"; };
+		3D9FA26B157E48029FE78890 /* SamsungRemote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SamsungRemote.swift; sourceTree = "<group>"; };
+		D7774389067A4C1C9F6ACCF6 /* TVDevice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVDevice.swift; sourceTree = "<group>"; };
+		5CBEB188AB8744F7B202E1AD /* UniversalTVRemoteApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UniversalTVRemoteApp.swift; sourceTree = "<group>"; };
+		8477BEAB10E2447A9FCAB9A8 /* X509.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = X509.swift; sourceTree = "<group>"; };
+		972A40E4CA0C442CA69E7D7B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		9AF4BF83DEBB406CBEFB6EF6 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A369EC5675FA4FD78AF1EFA3 /* UniversalTVRemote.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = UniversalTVRemote.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		1A8D0BCC4D774DACB0D1F6B2 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		C48ED36FEE134B9A967D4AE7 = {
+			isa = PBXGroup;
+			children = (
+				118B269D6EFF470C8C757E36 /* UniversalTVRemote */,
+				9014E3523F7C4F68A07AA65B /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		118B269D6EFF470C8C757E36 = {
+			isa = PBXGroup;
+			children = (
+				5D1B0F2782A94A12BB916715 /* AndroidTVIdentity.swift */,
+				FA837C023A9640309F31A7C5 /* AndroidTVRemote.swift */,
+				85F898AE3B6944ED8139DDFA /* ContentView.swift */,
+				80CD84BBFED2406491377B8F /* DiscoveryManager.swift */,
+				4CD2FD67F407485CAB55E035 /* LGRemote.swift */,
+				CA9B5E5F4CA24427A2F337B8 /* Protobuf.swift */,
+				38C67934C3434D1F94494DE7 /* RemoteSession.swift */,
+				D73B4AB6E24F45E3ADA1872A /* RokuRemote.swift */,
+				0D65539DD7E44C289EB6C23A /* SSDPDiscovery.swift */,
+				3D9FA26B157E48029FE78890 /* SamsungRemote.swift */,
+				D7774389067A4C1C9F6ACCF6 /* TVDevice.swift */,
+				5CBEB188AB8744F7B202E1AD /* UniversalTVRemoteApp.swift */,
+				8477BEAB10E2447A9FCAB9A8 /* X509.swift */,
+				972A40E4CA0C442CA69E7D7B /* Info.plist */,
+				9AF4BF83DEBB406CBEFB6EF6 /* Assets.xcassets */,
+			);
+			path = UniversalTVRemote;
+			sourceTree = "<group>";
+		};
+		9014E3523F7C4F68A07AA65B = {
+			isa = PBXGroup;
+			children = (
+				A369EC5675FA4FD78AF1EFA3 /* UniversalTVRemote.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		144B1851522148CA86D58D5A /* UniversalTVRemote */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BAF79CB8986A47E5A41F8CBB /* Build configuration list for PBXNativeTarget "UniversalTVRemote" */;
+			buildPhases = (
+				23EF7E47A9904219A38C964D /* Sources */,
+				1A8D0BCC4D774DACB0D1F6B2 /* Frameworks */,
+				21BB1970540748D9BB4B334A /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = UniversalTVRemote;
+			productName = UniversalTVRemote;
+			productReference = A369EC5675FA4FD78AF1EFA3 /* UniversalTVRemote.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		9E78762B51C0418A89649FB2 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					144B1851522148CA86D58D5A = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = 9C40C6AC34FC4D319321B940 /* Build configuration list for PBXProject "UniversalTVRemote" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = C48ED36FEE134B9A967D4AE7;
+			productRefGroup = 9014E3523F7C4F68A07AA65B /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				144B1851522148CA86D58D5A /* UniversalTVRemote */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		21BB1970540748D9BB4B334A /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EBD11B9EC1324CF79C2D0EE2 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		23EF7E47A9904219A38C964D /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				51821A8B345B4E199D0A7D7A /* AndroidTVIdentity.swift in Sources */,
+				B818F20D994E4613BAF11DDA /* AndroidTVRemote.swift in Sources */,
+				54C9EBB3A12F4510A0075E77 /* ContentView.swift in Sources */,
+				F08D3CE3D21E437FA0FE4EF2 /* DiscoveryManager.swift in Sources */,
+				A02A0C51BE114E3F89BF1552 /* LGRemote.swift in Sources */,
+				A52E001078134AE38526D169 /* Protobuf.swift in Sources */,
+				D546F55F73E241329EE35BD9 /* RemoteSession.swift in Sources */,
+				1EFF77A258A84BD982F8AC5E /* RokuRemote.swift in Sources */,
+				D3FC0157A2D34CA1BBD6994E /* SSDPDiscovery.swift in Sources */,
+				44D4062A836C40BABB739745 /* SamsungRemote.swift in Sources */,
+				FF07ED2A82D64CC5A3D66B69 /* TVDevice.swift in Sources */,
+				EB2C0BDC8D62439E8D0EA0C5 /* UniversalTVRemoteApp.swift in Sources */,
+				B14983B2B4B94BACBCDD8925 /* X509.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		55230C12A56A441884EE0313 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LOCALIZATION_PREFS = "";
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		CA425C11B7DD4CC886316AA7 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LOCALIZATION_PREFS = "";
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		3E0DD9966D694D2EB2C82AD0 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = UniversalTVRemote/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.nicolassolley.universaltvremote;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMBED_LIBRARIES_WITH_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		DB08D3A0CC5247EDB6F190ED /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = UniversalTVRemote/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.nicolassolley.universaltvremote;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMBED_LIBRARIES_WITH_INSTALL = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		9C40C6AC34FC4D319321B940 /* Build configuration list for PBXProject "UniversalTVRemote" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				55230C12A56A441884EE0313 /* Debug */,
+				CA425C11B7DD4CC886316AA7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		BAF79CB8986A47E5A41F8CBB /* Build configuration list for PBXNativeTarget "UniversalTVRemote" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				3E0DD9966D694D2EB2C82AD0 /* Debug */,
+				DB08D3A0CC5247EDB6F190ED /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 9E78762B51C0418A89649FB2 /* Project object */;
+}
