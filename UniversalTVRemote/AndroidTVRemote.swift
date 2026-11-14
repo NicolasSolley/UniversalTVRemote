@@ -508,12 +508,11 @@ final class TLSConnection {
                 // existential); the Security APIs want a concrete `SecTrust`.
                 // The value is always a real SecTrust, but the compiler only
                 // accepts a forced downcast here (`as!`), not `as` or `as?`.
-                if let trust {
-                    let secTrust = trust as! SecTrust
-                    if let certificate = SecTrustGetCertificateAtIndex(secTrust, 0) {
-                        let der = SecCertificateCopyData(certificate) as Data
-                        self?.onServerCertificate?(der)
-                    }
+                // (And `trust` itself is non-optional, so no `if let` on it.)
+                let secTrust = trust as! SecTrust
+                if let certificate = SecTrustGetCertificateAtIndex(secTrust, 0) {
+                    let der = SecCertificateCopyData(certificate) as Data
+                    self?.onServerCertificate?(der)
                 }
                 complete(true)
             }, queue)
