@@ -1,0 +1,127 @@
+import Foundation
+import Security
+
+/// The Android TV client identity: an RSA keypair + self-signed certificate
+/// kept in the Keychain. The TV binds this certificate during pairing and
+/// trusts it on later connections, so it must survive app restarts.
+enum AndroidTVIdentity {
+    private static let keyTag = "com.nicolassolley.universaltvremote.androidtv.key"
+    private static let certLabel = "UniversalTVRemote AndroidTV"
+
+    /// The certificate's common name, unique per install and persisted.
+    /// The TV dedupes paired certificates by subject, so two phones
+    /// sharing one CN knock each other off pairing.
+    private static func clientCommonName() -> String {
+        let key = "androidtv.clientCN"
+        if let existing = UserDefaults.standard.string(forKey: key) { return existing }
+        let name = "UniversalTVRemote-" + UUID().uuidString
+        UserDefaults.standard.set(name, forKey: key)
+        return name
+    }
+
+    struct Loaded {
+        let identity: SecIdentity
+        /// DER bytes of our certificate (needed for the pairing secret hash).
+        let certificateDER: Data
+    }
+
+    /// Load the stored identity, creating a fresh keypair + certificate on
+    /// first use.
+    static func loadOrCreate() throws -> Loaded {
+        if let loaded = try load() { return loaded }
+        return try create()
+    }
+
+    private static func load() throws -> Loaded? {
+        guard let privateKey = loadPrivateKey(),
+              let certificate = loadCertificate() else { return nil }
+        guard let identity = SecIdentityCreateWithCertificate(certificate, privateKey) else {
+            return nil
+        }
+        let certDER = SecCertificateCopyData(certificate) as Data
+        return Loaded(identity: identity, certificateDER: certDER)
+    }
+
+    private static func create() throws -> Loaded {
+        deleteAll() // clean slate if a half-created identity lingers
+
+        let tagData = Data(keyTag.utf8)
+        let privateAttrs: [String: Any] = [
+            kSecAttrIsPermanent as String: true,
+            kSecAttrApplicationTag as String: tagData,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+        ]
+        let parameters: [String: Any] = [
+            kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
+            kSecAttrKeySizeInBits as String: 2048,
+            kSecPrivateKeyAttrs as String: privateAttrs,
+        ]
+        var publicKey: SecKey?
+        var privateKey: SecKey?
+        let status = SecKeyGeneratePair(parameters as CFDictionary, &publicKey, &privateKey)
+        guard status == errSecSuccess, let publicKey, let privateKey else {
+            throw NSError(domain: "AndroidTVIdentity", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Could not generate keypair"])
+        }
+
+        let certDER = try X509.makeSelfSigned(
+            commonName: clientCommonName(),
+            keyPair: (publicKey: publicKey, privateKey: privateKey))
+        guard let certificate = SecCertificateCreateWithData(nil, certDER as CFData) else {
+            throw NSError(domain: "AndroidTVIdentity", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "Could not create certificate"])
+        }
+        let addQuery: [String: Any] = [
+            kSecClass as String: kSecClassCertificate,
+            kSecValueRef as String: certificate,
+            kSecAttrLabel as String: certLabel,
+        ]
+        let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
+        guard addStatus == errSecSuccess else {
+            throw NSError(domain: "AndroidTVIdentity", code: 3,
+                          userInfo: [NSLocalizedDescriptionKey: "Could not store certificate"])
+        }
+        guard let identity = SecIdentityCreateWithCertificate(certificate, privateKey) else {
+            throw NSError(domain: "AndroidTVIdentity", code: 4,
+                          userInfo: [NSLocalizedDescriptionKey: "Could not create identity"])
+        }
+        return Loaded(identity: identity, certificateDER: certDER)
+    }
+
+    private static func loadPrivateKey() -> SecKey? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassKey,
+            kSecAttrApplicationTag as String: Data(keyTag.utf8),
+            kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
+            kSecReturnRef as String: true,
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else { return nil }
+        return (item as! SecKey)
+    }
+
+    private static func loadCertificate() -> SecCertificate? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassCertificate,
+            kSecAttrLabel as String: certLabel,
+            kSecReturnRef as String: true,
+        ]
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess else { return nil }
+        return (item as! SecCertificate)
+    }
+
+    /// Delete the stored identity (used when pairing is reset).
+    static func deleteAll() {
+        let keyQuery: [String: Any] = [
+            kSecClass as String: kSecClassKey,
+            kSecAttrApplicationTag as String: Data(keyTag.utf8),
+        ]
+        SecItemDelete(keyQuery as CFDictionary)
+        let certQuery: [String: Any] = [
+            kSecClass as String: kSecClassCertificate,
+            kSecAttrLabel as String: certLabel,
+        ]
+        SecItemDelete(certQuery as CFDictionary)
+    }
+}
