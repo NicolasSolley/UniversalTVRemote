@@ -88,31 +88,11 @@ final class X509Tests: XCTestCase {
         XCTAssertEqual(sanNames[0].tag, 0x82) // dNSName [2]
         XCTAssertEqual(String(data: sanNames[0].content, encoding: .utf8), "UniversalTVRemote")
 
-        // Cross-check with the Security framework's own reading of the
-        // certificate: keyUsage bitmask, EKU OIDs, and SAN names.
-        let values = SecCertificateCopyValues(
-            certificate!,
-            [kSecOIDKeyUsage, kSecOIDExtendedKeyUsage, kSecOIDSubjectAltName] as CFArray,
-            nil) as? [String: [String: Any]]
-        let valuesUnwrapped = try XCTUnwrap(values)
-        if let kuEntry = valuesUnwrapped["2.5.29.15"],
-           let mask = kuEntry[kSecPropertyKeyValue as String] as? Int {
-            XCTAssertEqual(mask & 0b101, 0b101) // digitalSignature + keyEncipherment
-        } else {
-            XCTFail("keyUsage value missing from SecCertificateCopyValues")
-        }
-        if let ekuEntry = valuesUnwrapped["2.5.29.37"],
-           let oids = ekuEntry[kSecPropertyKeyValue as String] as? [String] {
-            XCTAssertTrue(oids.contains("1.3.6.1.5.5.7.3.2"))
-        } else {
-            XCTFail("extendedKeyUsage value missing from SecCertificateCopyValues")
-        }
-        if let sanEntry = valuesUnwrapped["2.5.29.17"],
-           let names = sanEntry[kSecPropertyKeyValue as String] as? [String] {
-            XCTAssertTrue(names.contains("UniversalTVRemote"))
-        } else {
-            XCTFail("subjectAltName value missing from SecCertificateCopyValues")
-        }
+        // No SecCertificateCopyValues cross-check: that API (and the
+        // kSecOID*/kSecPropertyKeyValue constants) is macOS-only and does
+        // not exist in the iOS Security framework — it fails CI with
+        // "cannot find in scope". The DER-level assertions above verify
+        // the same keyUsage bits, EKU OIDs, and SAN names.
 
         // Unparseable input is rejected, not misread.
         XCTAssertNil(X509.extensions(certificateDER: Data([0x30, 0x03, 0x02, 0x01, 0x00])))
