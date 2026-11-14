@@ -181,24 +181,31 @@ enum X509 {
         let totalLength: Int
     }
 
-    /// Parse the first TLV at `offset` in `data`.
+    /// Parse the first TLV at `offset` in `data`. `offset` is relative to
+    /// the data's own start: a Data slice may keep its parent's indices
+    /// (startIndex != 0), so every index goes through startIndex.
+    /// (Caught by the offline cert test: plain `data[offset]` traps on a
+    /// slice whose startIndex is not 0. The pairing secret path
+    /// rsaModulusExponent walks the same slices, so this was a latent
+    /// crash after the pairing code was entered, not just a test issue.)
     static func readTLV(_ data: Data, offset: Int) -> TLV? {
+        let base = data.startIndex
         guard offset + 2 <= data.count else { return nil }
-        let tag = data[offset]
+        let tag = data[base + offset]
         var index = offset + 1
-        var length = Int(data[index])
+        var length = Int(data[base + index])
         index += 1
         if length & 0x80 != 0 {
             let count = length & 0x7F
             guard count > 0, count <= 4, index + count <= data.count else { return nil }
             length = 0
             for _ in 0..<count {
-                length = (length << 8) | Int(data[index])
+                length = (length << 8) | Int(data[base + index])
                 index += 1
             }
         }
         guard index + length <= data.count else { return nil }
-        return TLV(tag: tag, content: data[index..<(index + length)],
+        return TLV(tag: tag, content: data[(base + index)..<(base + index + length)],
                    totalLength: (index - offset) + length)
     }
 
@@ -241,6 +248,33 @@ enum X509 {
         let ints = children(of: rsaKey.content)
         guard ints.count == 2, ints[0].tag == 0x02, ints[1].tag == 0x02 else { return nil }
         return (minimalIntegerBytes(ints[0].content), minimalIntegerBytes(ints[1].content))
+    }
+
+    /// Subject common name (OID 2.5.4.3) of a certificate's DER bytes, if
+    /// readable. Parses the TBSCertificate subject with the same minimal
+    /// TLV reader used for the RSA keys — no Security API needed, so there
+    /// is no availability surface to worry about.
+    static func subjectCommonName(certificateDER: Data) -> String? {
+        guard let cert = readTLV(certificateDER, offset: 0), cert.tag == 0x30 else { return nil }
+        let certFields = children(of: cert.content)
+        guard certFields.count == 3 else { return nil }
+        // TBSCertificate: version, serial, signature, issuer, validity,
+        // subject, subjectPublicKeyInfo, [extensions]. Subject is index 5:
+        // a Name (SEQUENCE of SETs of SEQUENCEs { OID, value }).
+        let tbsFields = children(of: certFields[0].content)
+        guard tbsFields.count >= 7 else { return nil }
+        for rdnSet in children(of: tbsFields[5].content) {
+            for attribute in children(of: rdnSet.content) {
+                let parts = children(of: attribute.content)
+                guard parts.count == 2, parts[0].tag == 0x06,
+                      parts[0].content == Data([0x55, 0x04, 0x03]) else { continue } // OID 2.5.4.3
+                let value = parts[1]
+                if [0x0C, 0x13, 0x14, 0x16].contains(value.tag) { // UTF8/Printable/Teletex/IA5
+                    return String(data: value.content, encoding: .utf8)
+                }
+            }
+        }
+        return nil
     }
 
     /// SHA-256 fingerprint of a certificate's DER bytes (for LG cert pinning).

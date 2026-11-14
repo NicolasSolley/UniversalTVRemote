@@ -294,9 +294,10 @@ actor AndroidTVRemote {
         case .dns(let code):
             return "DNS error \(code)"
         case .tls(let status):
-            if let message = SecCopyErrorMessageString(status, nil) as String? {
-                return "TLS \(status) (\(message))"
-            }
+            // The OSStatus number identifies the failure (e.g. -9806 is
+            // a handshake aborted by the peer); kept as a number on
+            // purpose — SecCopyErrorMessageString is not used, to keep
+            // the API surface minimal.
             return "TLS error \(status)"
         @unknown default:
             return String(describing: nw)

@@ -32,27 +32,17 @@ enum AndroidTVIdentity {
     private static func load() throws -> Loaded? {
         guard let identity = loadIdentity(),
               let certificate = loadCertificate() else { return nil }
+        let certDER = SecCertificateCopyData(certificate) as Data
         // Drop identities minted under the old scheme (per-install UUID
         // CN, critical CA:TRUE cert) — they can never pair. A nil CN
         // lookup is treated as "unknown, keep it", so a lookup quirk can
         // never force a fresh identity on every launch (which would break
         // re-pairing with an already-paired TV).
-        if let cn = certificateCommonName(certificate),
+        if let cn = X509.subjectCommonName(certificateDER: certDER),
            cn != AndroidTVRemote.clientName {
             return nil
         }
-        let certDER = SecCertificateCopyData(certificate) as Data
         return Loaded(identity: identity, certificateDER: certDER)
-    }
-
-    /// The certificate's subject common name, if readable.
-    private static func certificateCommonName(_ certificate: SecCertificate) -> String? {
-        guard let values = SecCertificateCopyValues(certificate, [kSecOIDCommonName] as CFArray, nil) as? [String: Any],
-              let entry = values[kSecOIDCommonName as String] as? [String: Any],
-              let value = entry[kSecPropertyKeyValue as String] as? String else {
-            return nil
-        }
-        return value
     }
 
     private static func create() throws -> Loaded {
