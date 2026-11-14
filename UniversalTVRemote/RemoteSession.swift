@@ -186,6 +186,12 @@ final class RemoteSession: ObservableObject {
                 if let check = await androidTV.lastTCPCheck {
                     text += " \(check)"
                 }
+                // And the no-identity TLS probe: it says whether the TV
+                // presents its certificate when we offer no client
+                // identity at all — the discriminator for errSSLBadCert.
+                if let probe = await androidTV.lastNoIdentityProbe {
+                    text += " \(probe)"
+                }
                 status = text
             } catch {
                 isConnected = false

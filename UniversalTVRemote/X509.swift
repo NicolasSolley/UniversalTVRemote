@@ -112,6 +112,9 @@ enum X509 {
     private static let sha256WithRSAOID = [1, 2, 840, 113549, 1, 1, 11]
     private static let commonNameOID = [2, 5, 4, 3]
     private static let basicConstraintsOID = [2, 5, 29, 19]
+    private static let keyUsageOID = [2, 5, 29, 15]
+    private static let extendedKeyUsageOID = [2, 5, 29, 37]
+    private static let clientAuthOID = [1, 3, 6, 1, 5, 5, 7, 3, 2]
     private static let subjectAltNameOID = [2, 5, 29, 17]
 
     // MARK: - Self-signed certificate
@@ -130,6 +133,13 @@ enum X509 {
     /// path_length 0, NON-critical, plus a subjectAltName, serial 1000.
     /// v1.0.3 minted a critical CA:TRUE cert with no path length, and
     /// some TLS stacks reject a client certificate shaped that way.
+    /// v1.0.6 adds, on top of that shape, a NON-critical keyUsage
+    /// (digitalSignature + keyEncipherment) and a NON-critical
+    /// extendedKeyUsage (clientAuth): SecureTransport rejected the bare
+    /// CA:TRUE cert with no usage flags as a client identity
+    /// (errSSLBadCert, -9808) before the TV's certificate ever arrived.
+    /// The TV hashes only the RSA modulus/exponent for the pairing
+    /// secret, so these extensions cannot change the TV side.
     static func makeSelfSigned(commonName: String, keyPair: (publicKey: SecKey, privateKey: SecKey)) throws -> Data {
         guard let publicKeyDER = SecKeyCopyExternalRepresentation(keyPair.publicKey, nil) as Data? else {
             throw NSError(domain: "X509", code: 1,
@@ -142,11 +152,19 @@ enum X509 {
         let validity = sequence(utcTime(now) + utcTime(now.addingTimeInterval(10 * 365 * 24 * 3600)))
         let spki = sequence(sequence(oid(rsaEncryptionOID) + null()) + bitString(publicKeyDER))
         // Extensions [3]: basicConstraints CA:TRUE, path_length 0,
-        // NON-critical, + SAN dNSName. The dNSName GeneralName is
-        // context-specific primitive tag [2] (0x82).
+        // NON-critical, + keyUsage (digitalSignature + keyEncipherment) +
+        // extendedKeyUsage (clientAuth), both NON-critical, + SAN dNSName.
+        // The dNSName GeneralName is context-specific primitive tag [2] (0x82).
+        // keyUsage BIT STRING: 5 unused bits, bits digitalSignature (0x80)
+        // + keyEncipherment (0x20) = 0xA0. Built with a raw TLV (not the
+        // bitString helper, which prepends a 0-unused-bits byte).
         let extensions = explicit(3, sequence(
             extensionItem(oidComponents: basicConstraintsOID, critical: false,
                           value: sequence(boolean(true) + integer(0)))
+            + extensionItem(oidComponents: keyUsageOID, critical: false,
+                            value: tlv(tag: 0x03, content: Data([0x05, 0xA0])))
+            + extensionItem(oidComponents: extendedKeyUsageOID, critical: false,
+                            value: sequence(oid(clientAuthOID)))
             + extensionItem(oidComponents: subjectAltNameOID, critical: false,
                             value: sequence(tlv(tag: 0x82, content: Data(commonName.utf8))))
         ))
@@ -275,6 +293,31 @@ enum X509 {
             }
         }
         return nil
+    }
+
+    /// Whether the certificate's extensions contain a keyUsage extension
+    /// (OID 2.5.29.15). Used to detect pre-v1.0.6 identities, which were
+    /// minted without one and must be regenerated. Returns true (keep)
+    /// when the extensions cannot be parsed at all — only a
+    /// positively-parsed extensions list missing keyUsage triggers
+    /// regeneration, so a parser quirk can never force a fresh identity
+    /// on every launch (which would break re-pairing with an
+    /// already-paired TV).
+    static func hasKeyUsageExtension(certificateDER: Data) -> Bool {
+        guard let cert = readTLV(certificateDER, offset: 0), cert.tag == 0x30 else { return true }
+        let certFields = children(of: cert.content)
+        guard certFields.count == 3 else { return true }
+        let tbsFields = children(of: certFields[0].content)
+        guard tbsFields.count >= 8, tbsFields[7].tag == 0xA3 else { return true }
+        // [3] wraps one SEQUENCE of extension SEQUENCEs.
+        let outer = children(of: tbsFields[7].content)
+        guard let extensionsSeq = outer.first, extensionsSeq.tag == 0x30 else { return true }
+        for ext in children(of: extensionsSeq.content) {
+            let parts = children(of: ext.content)
+            guard parts.count >= 1, parts[0].tag == 0x06 else { continue }
+            if parts[0].content == Data([0x55, 0x1D, 0x0F]) { return true } // 2.5.29.15
+        }
+        return false
     }
 
     /// SHA-256 fingerprint of a certificate's DER bytes (for LG cert pinning).

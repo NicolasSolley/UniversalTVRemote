@@ -42,6 +42,15 @@ enum AndroidTVIdentity {
            cn != AndroidTVRemote.clientName {
             return nil
         }
+        // v1.0.6: drop identities minted without a keyUsage extension —
+        // SecureTransport rejected that bare CA:TRUE cert as a client
+        // identity (errSSLBadCert, -9808) before the TV's certificate
+        // ever arrived. The TV never paired with us, so no binding
+        // breaks by minting fresh. (loadOrCreate → create() deletes the
+        // old keypair + certificate first.)
+        if !X509.hasKeyUsageExtension(certificateDER: certDER) {
+            return nil
+        }
         return Loaded(identity: identity, certificateDER: certDER)
     }
 

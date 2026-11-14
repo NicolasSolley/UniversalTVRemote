@@ -130,6 +130,12 @@ actor AndroidTVRemote {
     /// status if pairing then fails too. Separates "Network.framework
     /// can't reach the TV from this guest" from "the TLS handshake fails".
     private(set) var lastTCPCheck: String?
+    /// What the no-identity TLS probe saw — appended to the status if
+    /// pairing then fails too. A TLS handshake with no client
+    /// certificate: if the TV presents its certificate here while the
+    /// mutual-TLS handshake dies with errSSLBadCert (-9808), our own
+    /// client identity is what SecureTransport rejects.
+    private(set) var lastNoIdentityProbe: String?
 
     // MARK: - Public API
 
@@ -142,6 +148,7 @@ actor AndroidTVRemote {
         disconnect()
         lastProbeNote = nil
         lastTCPCheck = nil
+        lastNoIdentityProbe = nil
         // Diagnostic only, run first: the sweep proved BSD sockets +
         // URLSession reach the TV from the guest, but the control path
         // uses NWConnection. If plain NW TCP also fails, the guest's
@@ -149,6 +156,13 @@ actor AndroidTVRemote {
         // Cheap when healthy (ready arrives in milliseconds); 3s worst
         // case. Never thrown; the note is only surfaced if pairing fails.
         lastTCPCheck = await Self.plainTCPCheck(host: host, port: 6467)
+        // Diagnostic only, same pattern: a TLS handshake to the pairing
+        // port with NO client identity. If the TV presents its
+        // certificate here while the mutual-TLS handshake dies with
+        // errSSLBadCert (-9808), SecureTransport is rejecting OUR client
+        // identity — not the TV. Never thrown; note only, never changes
+        // the control path. 5s worst case, milliseconds when healthy.
+        lastNoIdentityProbe = await Self.noIdentityTLSProbe(host: host, port: 6467)
 
         let paired = UserDefaults.standard.bool(forKey: "androidtv.paired.\(host)")
         if !paired {
@@ -357,6 +371,47 @@ actor AndroidTVRemote {
             connection.start(queue: queue)
             queue.asyncAfter(deadline: .now() + timeout) {
                 finish("NW TCP to \(port): no answer in \(Int(timeout))s")
+            }
+        }
+    }
+
+    /// TLS handshake to the pairing port WITHOUT a client identity,
+    /// diagnostic only. Same TLS 1.2 pin and verify block as the real
+    /// path, but no local identity is set, so SecureTransport has
+    /// nothing of ours to reject. Reports whether the TV presents its
+    /// certificate when we offer no identity at all — the decisive
+    /// discriminator for errSSLBadCert (-9808): cert arrives here while
+    /// mutual TLS dies => our client identity is the problem; identical
+    /// failure here => the TV's certificate or the ClientHello itself.
+    /// No pairing bytes are sent and the connection is torn down after
+    /// the handshake outcome (or a timeout). Runs on its own serial
+    /// queue; the continuation is resumed exactly once.
+    private static func noIdentityTLSProbe(host: String, port: UInt16,
+                                           timeout: TimeInterval = 5) async -> String {
+        await withCheckedContinuation { (continuation: CheckedContinuation<String, Never>) in
+            let connection = TLSConnection(host: host, port: port)
+            let queue = DispatchQueue(label: "com.nicolassolley.universaltvremote.noidprobe")
+            var finished = false
+            let finish: (String) -> Void = { note in
+                guard !finished else { return }
+                finished = true
+                connection.stop()
+                continuation.resume(returning: note)
+            }
+            // The verify block fires during the handshake, before .ready:
+            // if it fires, the TV presented its certificate.
+            connection.onServerCertificate = { _ in
+                finish("TLS without client cert: TV presented its certificate")
+            }
+            connection.onReady = {
+                finish("TLS without client cert: handshake completed, no certificate seen")
+            }
+            connection.onFailure = { error in
+                finish("TLS without client cert: still failed before certificate (\(describeError(error)))")
+            }
+            connection.start()
+            queue.asyncAfter(deadline: .now() + timeout) {
+                finish("TLS without client cert: no answer in \(Int(timeout))s")
             }
         }
     }
@@ -695,31 +750,51 @@ final class TLSConnection {
     /// The error the connection failed with, if any.
     var lastFailure: Error?
 
+    /// TLS options shared by both paths: pinned to TLS 1.2 only. On at
+    /// least one TV (TCL QM7, v1.0.4) the handshake died before the TV
+    /// presented its certificate, which is consistent with the TV's TLS
+    /// stack choking on a TLS 1.3 ClientHello (extensions/groups it
+    /// doesn't understand). The reference implementation negotiates
+    /// TLS 1.2 with these TVs.
+    private static func baseTLSOptions() -> NWProtocolTLS.Options {
+        let tlsOptions = NWProtocolTLS.Options()
+        sec_protocol_options_set_min_tls_protocol_version(
+            tlsOptions.securityProtocolOptions, .TLSv12)
+        sec_protocol_options_set_max_tls_protocol_version(
+            tlsOptions.securityProtocolOptions, .TLSv12)
+        return tlsOptions
+    }
+
     /// Failable: if `sec_identity_create` returns nil there is no client
     /// identity to present, and mutual TLS cannot succeed — the caller
     /// must surface identityUnavailable instead of connecting without
     /// one (the TV would kill the handshake and the failure would look
     /// like a generic connection error).
     init?(host: String, port: UInt16, identity: SecIdentity) {
-        let tlsOptions = NWProtocolTLS.Options()
+        let tlsOptions = Self.baseTLSOptions()
         guard let secIdentity = sec_identity_create(identity) else { return nil }
         // This API takes only the identity — there is no queue parameter
         // (older examples show a three-argument form that no longer exists).
         sec_protocol_options_set_local_identity(
             tlsOptions.securityProtocolOptions, secIdentity)
-        // Pin to TLS 1.2 only: on at least one TV (TCL QM7, v1.0.4) the
-        // handshake died before the TV presented its certificate, which
-        // is consistent with the TV's TLS stack choking on a TLS 1.3
-        // ClientHello (extensions/groups it doesn't understand). The
-        // reference implementation negotiates TLS 1.2 with these TVs.
-        sec_protocol_options_set_min_tls_protocol_version(
-            tlsOptions.securityProtocolOptions, .TLSv12)
-        sec_protocol_options_set_max_tls_protocol_version(
-            tlsOptions.securityProtocolOptions, .TLSv12)
         self.tlsOptions = tlsOptions
         let parameters = NWParameters(tls: tlsOptions)
         // No `.interactive` case exists; `.responsiveData` is the service
         // class for traffic the user is actively waiting on.
+        parameters.serviceClass = .responsiveData
+        connection = NWConnection(host: NWEndpoint.Host(host),
+                                  port: NWEndpoint.Port(rawValue: port)!,
+                                  using: parameters)
+    }
+
+    /// No-identity TLS connection (diagnostic probe only): same TLS 1.2
+    /// pin and verify block as the mutual-TLS path, but no client
+    /// certificate is presented, so SecureTransport has nothing of ours
+    /// to reject. Never used for pairing or control.
+    init(host: String, port: UInt16) {
+        let tlsOptions = Self.baseTLSOptions()
+        self.tlsOptions = tlsOptions
+        let parameters = NWParameters(tls: tlsOptions)
         parameters.serviceClass = .responsiveData
         connection = NWConnection(host: NWEndpoint.Host(host),
                                   port: NWEndpoint.Port(rawValue: port)!,
