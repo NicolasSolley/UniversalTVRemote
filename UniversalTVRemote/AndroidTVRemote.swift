@@ -33,6 +33,7 @@ actor AndroidTVRemote {
         case remoteSessionFailed(detail: String)
         case remoteSessionTimeout
         case secretRejected
+        case certificateChanged
 
         var errorDescription: String? {
             switch self {
@@ -56,6 +57,8 @@ actor AndroidTVRemote {
                 return "The TV didn't start the remote session in time."
             case .secretRejected:
                 return "The TV didn't accept that code. Check the code on the TV and try again."
+            case .certificateChanged:
+                return "This TV's certificate changed since you paired it. Forget the TV and pair again."
             }
         }
     }
@@ -123,6 +126,9 @@ actor AndroidTVRemote {
     private var pairingCodeContinuation: CheckedContinuation<Void, Error>?
     private var secretContinuation: CheckedContinuation<Void, Error>?
     private var pairingServerCertificateDER: Data?
+    /// The server certificate the remote session presented (port 6466),
+    /// for pinning after a first connection succeeds.
+    private var remoteServerCertificateDER: Data?
     /// What the (non-fatal) 6466 probe saw, when it failed — appended to
     /// the status if pairing then fails too, so the probe step is visible.
     private(set) var lastProbeNote: String?
@@ -164,21 +170,31 @@ actor AndroidTVRemote {
         // the control path. 5s worst case, milliseconds when healthy.
         lastNoIdentityProbe = await Self.noIdentityTLSProbe(host: host, port: 6467)
 
-        let paired = UserDefaults.standard.bool(forKey: "androidtv.paired.\(host)")
-        if !paired {
-            // Cheap probe: the TV may already trust our certificate even
-            // if the local flag was lost. 10s so a just-woken remote
-            // service has time for its first TLS handshake. Any failure
-            // just falls through to pairing — the probe outcome is
-            // recorded so a later failure can say what the probe saw.
-            do {
-                try await openRemoteSession(host: host, timeout: 10)
-                UserDefaults.standard.set(true, forKey: "androidtv.paired.\(host)")
-                return
-            } catch {
-                lastProbeNote = "Probe: \(error.localizedDescription)"
+        // Try the remote session first: if the TV already trusts our
+        // certificate (paired before, or the local flag was lost), this
+        // just works — no code prompt. The session enforces the pinned
+        // server certificate when one is stored for this host, and pins
+        // the certificate on a first successful connection. (Previously
+        // a paired TV went straight to pairing, which would demand a
+        // code on every reconnect and silently re-pin over a changed
+        // certificate — both wrong now that pinning exists.)
+        do {
+            try await openRemoteSession(host: host, timeout: 10)
+            UserDefaults.standard.set(true, forKey: "androidtv.paired.\(host)")
+            return
+        } catch let error as AndroidTVError {
+            // A pin mismatch is not a pairing problem: re-pairing here
+            // would silently overwrite the pin, so surface it instead
+            // and let the user forget the TV and pair again.
+            if case .certificateChanged = error {
                 disconnect()
+                throw error
             }
+            lastProbeNote = "Probe: \(error.localizedDescription)"
+            disconnect()
+        } catch {
+            lastProbeNote = "Probe: \(error.localizedDescription)"
+            disconnect()
         }
         do {
             try await pair(host: host, codeProvider: codeProvider)
@@ -188,6 +204,22 @@ actor AndroidTVRemote {
         }
         try await openRemoteSession(host: host, timeout: 10)
         UserDefaults.standard.set(true, forKey: "androidtv.paired.\(host)")
+    }
+
+    /// Forget a TV: clears its pinned server certificate and the paired
+    /// flag. The shared client identity is NOT deleted — it is bound to
+    /// every TV this app has paired with, and deleting it would break
+    /// the others. The next connect pairs from scratch and pins the
+    /// TV's (new) certificate.
+    func forget(host: String) {
+        if remoteHost == host { disconnect() }
+        Self.forgetTV(host: host)
+    }
+
+    /// Static forget: pin + paired flag only, no session needed.
+    static func forgetTV(host: String) {
+        AndroidTVPinStore.clear(for: host)
+        UserDefaults.standard.removeObject(forKey: "androidtv.paired.\(host)")
     }
 
     func disconnect() {
@@ -228,11 +260,16 @@ actor AndroidTVRemote {
         } catch {
             throw AndroidTVError.identityUnavailable(detail: error.localizedDescription)
         }
-        guard let connection = TLSConnection(host: host, port: 6466, identity: identity.identity) else {
+        guard let connection = TLSConnection(host: host, port: 6466, identity: identity.identity,
+                                             expectedServerCertificateDER: AndroidTVPinStore.pinnedCertificateDER(for: host)) else {
             throw AndroidTVError.identityUnavailable(detail: "sec_identity_create returned nil")
         }
         remoteConnection = connection
         remoteHost = host
+        remoteServerCertificateDER = nil
+        connection.onServerCertificate = { [weak self] der in
+            Task { await self?.setRemoteServerCertificate(der) }
+        }
         connection.onMessage = { [weak self] data in
             Task { await self?.handleRemoteMessage(data) }
         }
@@ -249,6 +286,16 @@ actor AndroidTVRemote {
                 }
                 try await group.next()
                 group.cancelAll()
+            }
+            // Trust on first use: if no pin is stored for this TV yet,
+            // pin the certificate this session just verified. This
+            // covers the probe first-connection and TVs paired before
+            // pinning existed. A stored pin is never overwritten here —
+            // the session only succeeded because the presented
+            // certificate matched it.
+            if AndroidTVPinStore.pinnedCertificateDER(for: host) == nil,
+               let der = remoteServerCertificateDER {
+                AndroidTVPinStore.set(der, for: host)
             }
             // The TV silently drops keys sent immediately after
             // remote_start; give it a beat before reporting ready.
@@ -289,11 +336,26 @@ actor AndroidTVRemote {
     /// killed the connection, and re-reading `lastFailure` loses it when
     /// the receive error beats the state update (the v1.0.4 race).
     private func remoteFailed(_ error: Error) {
+        // A pin mismatch is a distinct, user-actionable failure: the
+        // TV's certificate changed since pairing (e.g. the TV was
+        // reset). Surface it as such — never silently fall back to
+        // re-pairing.
+        if remoteConnection?.pinMismatch == true {
+            readyContinuation?.resume(throwing: AndroidTVError.certificateChanged)
+            readyContinuation = nil
+            remoteConnection = nil
+            remoteHost = nil
+            return
+        }
         let detail = failureDetail(from: remoteConnection, error: error)
         readyContinuation?.resume(throwing: AndroidTVError.remoteSessionFailed(detail: detail))
         readyContinuation = nil
         remoteConnection = nil
         remoteHost = nil
+    }
+
+    private func setRemoteServerCertificate(_ der: Data) {
+        remoteServerCertificateDER = der
     }
 
     /// One-line diagnosis for a dead TLS connection: the underlying
@@ -585,6 +647,14 @@ actor AndroidTVRemote {
             throw error
         }
 
+        // Pairing succeeded: trust on first use — persist the TV's
+        // certificate as the pin for this host, so later connections
+        // enforce it. A re-pair (e.g. after the TV was reset) replaces
+        // a stale pin with the TV's new certificate.
+        if let der = pairingServerCertificateDER {
+            AndroidTVPinStore.set(der, for: host)
+        }
+
         pairingConnection?.stop()
         pairingConnection = nil
     }
@@ -709,10 +779,12 @@ actor AndroidTVRemote {
     /// client modulus, client exponent, server modulus, server exponent,
     /// then the last 4 hex chars of the code as bytes. The first byte of
     /// the hash must equal the code's first byte (checked by the TV too).
-    private func computeSecret(code: String, clientCertificateDER: Data) -> Data? {
-        guard let serverDER = pairingServerCertificateDER,
-              let clientKeys = X509.rsaModulusExponent(certificateDER: clientCertificateDER),
-              let serverKeys = X509.rsaModulusExponent(certificateDER: serverDER),
+    /// Static (and nonisolated) so unit tests can verify it against a
+    /// known vector without a TV.
+    static func pairingSecret(code: String, clientCertificateDER: Data,
+                              serverCertificateDER: Data) -> Data? {
+        guard let clientKeys = X509.rsaModulusExponent(certificateDER: clientCertificateDER),
+              let serverKeys = X509.rsaModulusExponent(certificateDER: serverCertificateDER),
               let codeSuffix = Data(hexString: String(code.dropFirst(2))) else {
             return nil
         }
@@ -726,14 +798,24 @@ actor AndroidTVRemote {
         guard digest.first == UInt8(code.prefix(2), radix: 16) else { return nil }
         return digest
     }
+
+    private func computeSecret(code: String, clientCertificateDER: Data) -> Data? {
+        guard let serverDER = pairingServerCertificateDER else { return nil }
+        return Self.pairingSecret(code: code, clientCertificateDER: clientCertificateDER,
+                                  serverCertificateDER: serverDER)
+    }
 }
 
 // MARK: - TLS connection helper
 
 /// A mutual-TLS connection that delivers complete varint-framed protobuf
-/// messages via `onMessage`. Accepts any server certificate (TVs use
-/// self-signed ones) and reports the presented certificate DER so pairing
-/// can hash it.
+/// messages via `onMessage`. Accepts any server certificate on first
+/// trust (TVs use self-signed ones) and reports the presented
+/// certificate DER so pairing can hash it — but once a pin is set for
+/// the host (`expectedServerCertificateDER`), only that exact
+/// certificate is accepted. A mismatch fails the handshake and is
+/// flagged via `pinMismatch` so the caller can surface it distinctly
+/// instead of as a generic TLS failure.
 final class TLSConnection {
     var onMessage: ((Data) -> Void)?
     var onReady: (() -> Void)?
@@ -749,6 +831,21 @@ final class TLSConnection {
     var serverCertificateSeen = false
     /// The error the connection failed with, if any.
     var lastFailure: Error?
+    /// The pinned server-certificate DER for this host, if one is
+    /// stored. Nil means trust on first use (pairing / first connect).
+    let expectedServerCertificateDER: Data?
+    /// True when the handshake failed because the TV presented a
+    /// certificate different from the pin (or none at all while a pin
+    /// is set). Read by the actor to surface a distinct error.
+    var pinMismatch = false
+
+    /// Whether the presented server certificate satisfies the pin: any
+    /// certificate is accepted when no pin is set (trust on first use);
+    /// with a pin set, only the exact pinned DER is accepted.
+    static func certificateMatchesPin(presentedDER: Data, expectedDER: Data?) -> Bool {
+        guard let expectedDER else { return true }
+        return presentedDER == expectedDER
+    }
 
     /// TLS options shared by both paths: pinned to TLS 1.2 only. On at
     /// least one TV (TCL QM7, v1.0.4) the handshake died before the TV
@@ -770,7 +867,8 @@ final class TLSConnection {
     /// must surface identityUnavailable instead of connecting without
     /// one (the TV would kill the handshake and the failure would look
     /// like a generic connection error).
-    init?(host: String, port: UInt16, identity: SecIdentity) {
+    init?(host: String, port: UInt16, identity: SecIdentity,
+          expectedServerCertificateDER: Data? = nil) {
         let tlsOptions = Self.baseTLSOptions()
         guard let secIdentity = sec_identity_create(identity) else { return nil }
         // This API takes only the identity — there is no queue parameter
@@ -778,6 +876,7 @@ final class TLSConnection {
         sec_protocol_options_set_local_identity(
             tlsOptions.securityProtocolOptions, secIdentity)
         self.tlsOptions = tlsOptions
+        self.expectedServerCertificateDER = expectedServerCertificateDER
         let parameters = NWParameters(tls: tlsOptions)
         // No `.interactive` case exists; `.responsiveData` is the service
         // class for traffic the user is actively waiting on.
@@ -794,6 +893,7 @@ final class TLSConnection {
     init(host: String, port: UInt16) {
         let tlsOptions = Self.baseTLSOptions()
         self.tlsOptions = tlsOptions
+        self.expectedServerCertificateDER = nil
         let parameters = NWParameters(tls: tlsOptions)
         parameters.serviceClass = .responsiveData
         connection = NWConnection(host: NWEndpoint.Host(host),
@@ -806,9 +906,12 @@ final class TLSConnection {
         // cannot be created in init: it captures self, and self is not
         // fully initialized until `connection` is assigned. Setting it
         // here (still before connection.start) takes effect for the
-        // handshake. It accepts any server certificate (TVs use self-signed
-        // ones) and reports the presented certificate DER so pairing can
-        // hash it.
+        // handshake. It reports the presented certificate DER so pairing
+        // can hash it, and enforces the pin when one is set: with no pin
+        // (trust on first use) any certificate is accepted; with a pin,
+        // only the exact pinned DER is accepted, and a mismatch fails
+        // the handshake and is flagged via `pinMismatch` — never
+        // silently accepted.
         sec_protocol_options_set_verify_block(
             tlsOptions.securityProtocolOptions, { [weak self] _, trust, complete in
                 // The verify block hands us a `sec_trust_t` (an `any OS_sec_trust`
@@ -821,6 +924,19 @@ final class TLSConnection {
                     let der = SecCertificateCopyData(certificate) as Data
                     self?.serverCertificateSeen = true
                     self?.onServerCertificate?(der)
+                    if !Self.certificateMatchesPin(presentedDER: der,
+                                                   expectedDER: self?.expectedServerCertificateDER) {
+                        self?.pinMismatch = true
+                        complete(false)
+                        return
+                    }
+                } else if self?.expectedServerCertificateDER != nil {
+                    // A pin is set but the TV presented no certificate at
+                    // all: fail closed rather than accepting a
+                    // certificate-less handshake.
+                    self?.pinMismatch = true
+                    complete(false)
+                    return
                 }
                 complete(true)
             }, queue)

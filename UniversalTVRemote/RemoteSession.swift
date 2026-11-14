@@ -233,6 +233,17 @@ final class RemoteSession: ObservableObject {
         codeContinuation = nil
     }
 
+    /// Forget the Android TV pairing: clears the pinned server
+    /// certificate and the paired flag so the next connect pairs from
+    /// scratch (e.g. after the TV's certificate changed). No-op for
+    /// other brands.
+    func forgetPairedTV() {
+        guard device.brand == .androidTV, let host = device.host else { return }
+        Task { await androidTV.forget(host: host) }
+        isConnected = false
+        status = "Forgot \(device.name). Pair again to connect."
+    }
+
     // MARK: - Commands
 
     func send(_ command: RemoteCommand) async {

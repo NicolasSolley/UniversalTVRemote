@@ -295,6 +295,86 @@ enum X509 {
         return nil
     }
 
+    /// One X.509 extension: OID, whether it is critical, and the
+    /// OCTET STRING content (the extension's inner DER value).
+    struct CertificateExtension {
+        let oid: [Int]
+        let critical: Bool
+        let value: Data
+    }
+
+    /// Decode OID content bytes (the value of an OID TLV, without
+    /// tag/length) into components. The first sub-identifier packs the
+    /// first two components (40 * a + b); the rest are base-128.
+    static func oidComponents(_ content: Data) -> [Int]? {
+        guard content.count >= 1 else { return nil }
+        var result: [Int] = []
+        let first = Int(content[content.startIndex])
+        result.append(first / 40)
+        result.append(first % 40)
+        var value = 0
+        var index = content.index(after: content.startIndex)
+        while index < content.endIndex {
+            let byte = content[index]
+            value = (value << 7) | Int(byte & 0x7F)
+            if byte & 0x80 == 0 {
+                result.append(value)
+                value = 0
+            }
+            index = content.index(after: index)
+        }
+        // A trailing continuation bit means a truncated OID.
+        guard value == 0 else { return nil }
+        return result
+    }
+
+    /// The certificate's serial number, if readable. (The serial is the
+    /// second TBSCertificate field; its INTEGER content is read as a
+    /// plain big-endian value — a leading 0x00 sign byte contributes 0.)
+    static func serialNumber(certificateDER: Data) -> Int? {
+        guard let cert = readTLV(certificateDER, offset: 0), cert.tag == 0x30 else { return nil }
+        let certFields = children(of: cert.content)
+        guard certFields.count == 3 else { return nil }
+        let tbsFields = children(of: certFields[0].content)
+        guard tbsFields.count >= 2, tbsFields[1].tag == 0x02 else { return nil }
+        var value = 0
+        for byte in tbsFields[1].content { value = (value << 8) | Int(byte) }
+        return value
+    }
+
+    /// The certificate's extensions ([3] of the TBSCertificate), in
+    /// order. Nil when the certificate cannot be parsed that far — the
+    /// callers that use this to decide "keep or regenerate" treat nil
+    /// as "unknown, keep", so a parser quirk can never force a fresh
+    /// identity on every launch.
+    static func extensions(certificateDER: Data) -> [CertificateExtension]? {
+        guard let cert = readTLV(certificateDER, offset: 0), cert.tag == 0x30 else { return nil }
+        let certFields = children(of: cert.content)
+        guard certFields.count == 3 else { return nil }
+        let tbsFields = children(of: certFields[0].content)
+        guard tbsFields.count >= 8, tbsFields[7].tag == 0xA3 else { return nil }
+        // [3] wraps one SEQUENCE of extension SEQUENCEs.
+        let outer = children(of: tbsFields[7].content)
+        guard let extensionsSeq = outer.first, extensionsSeq.tag == 0x30 else { return nil }
+        var result: [CertificateExtension] = []
+        for ext in children(of: extensionsSeq.content) {
+            // Extension ::= SEQUENCE { OID, [BOOLEAN critical], OCTET STRING value }
+            let parts = children(of: ext.content)
+            guard parts.count >= 2, parts[0].tag == 0x06 else { return nil }
+            guard let oid = oidComponents(parts[0].content) else { return nil }
+            var critical = false
+            var valueIndex = 1
+            if parts.count >= 3, parts[1].tag == 0x01 {
+                critical = parts[1].content.first == 0xFF
+                valueIndex = 2
+            }
+            guard parts.count > valueIndex, parts[valueIndex].tag == 0x04 else { return nil }
+            result.append(CertificateExtension(oid: oid, critical: critical,
+                                               value: parts[valueIndex].content))
+        }
+        return result
+    }
+
     /// Whether the certificate's extensions contain a keyUsage extension
     /// (OID 2.5.29.15). Used to detect pre-v1.0.6 identities, which were
     /// minted without one and must be regenerated. Returns true (keep)
@@ -304,20 +384,8 @@ enum X509 {
     /// on every launch (which would break re-pairing with an
     /// already-paired TV).
     static func hasKeyUsageExtension(certificateDER: Data) -> Bool {
-        guard let cert = readTLV(certificateDER, offset: 0), cert.tag == 0x30 else { return true }
-        let certFields = children(of: cert.content)
-        guard certFields.count == 3 else { return true }
-        let tbsFields = children(of: certFields[0].content)
-        guard tbsFields.count >= 8, tbsFields[7].tag == 0xA3 else { return true }
-        // [3] wraps one SEQUENCE of extension SEQUENCEs.
-        let outer = children(of: tbsFields[7].content)
-        guard let extensionsSeq = outer.first, extensionsSeq.tag == 0x30 else { return true }
-        for ext in children(of: extensionsSeq.content) {
-            let parts = children(of: ext.content)
-            guard parts.count >= 1, parts[0].tag == 0x06 else { continue }
-            if parts[0].content == Data([0x55, 0x1D, 0x0F]) { return true } // 2.5.29.15
-        }
-        return false
+        guard let extensions = extensions(certificateDER: certificateDER) else { return true }
+        return extensions.contains { $0.oid == [2, 5, 29, 15] }
     }
 
     /// SHA-256 fingerprint of a certificate's DER bytes (for LG cert pinning).
