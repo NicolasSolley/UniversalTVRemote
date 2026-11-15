@@ -294,7 +294,8 @@ final class TLSHandshakeRecorderTests: XCTestCase {
         XCTAssertEqual(hello[hello.startIndex + 9], 0x03)
         XCTAssertEqual(hello[hello.startIndex + 10], 0x03)
         // Offers supported_versions (extension 0x002B: TLS 1.3 + 1.2).
-        XCTAssertTrue(hello.contains(Data([0x00, 0x2B])))
+        // Data has no contains(Data) — subdata search is range(of:).
+        XCTAssertNotNil(hello.range(of: Data([0x00, 0x2B])))
     }
 
     func testSummarizeServerHelloAndCertificate() throws {
