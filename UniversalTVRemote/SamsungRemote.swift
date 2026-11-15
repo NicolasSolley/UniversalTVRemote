@@ -356,7 +356,6 @@ actor SamsungRemote {
             connectionLost = true
             throw error
         }
-        lastSend = Date()
     }
 
     /// Power: normal key while the TV is reachable. When it is not,
@@ -493,7 +492,6 @@ actor SamsungRemote {
         ]
         let inputData = try JSONSerialization.data(withJSONObject: input)
         try await task.send(.string(String(decoding: inputData, as: UTF8.self)))
-        lastSend = Date()
         try await throttle()
         let end: [String: Any] = [
             "method": "ms.remote.control",
@@ -501,14 +499,23 @@ actor SamsungRemote {
         ]
         let endData = try JSONSerialization.data(withJSONObject: end)
         try await task.send(.string(String(decoding: endData, as: UTF8.self)))
-        lastSend = Date()
     }
 
     /// Keys must be ≥200 ms apart or the TV may coalesce them.
+    /// Each call reserves a 200 ms slot before awaiting, so rapid
+    /// repeats stay spaced even when their send tasks overlap: the
+    /// old read-then-sleep let concurrent sends read the same
+    /// `lastSend`, sleep the same interval, and fire together —
+    /// exactly the coalescing this guard exists to prevent. The
+    /// reservation is synchronous, so actor isolation makes it
+    /// atomic; `lastSend` now holds the last *reserved* slot,
+    /// never the last actual send, so nothing else writes it.
     private func throttle() async throws {
-        let gap = Date().timeIntervalSince(lastSend)
-        if gap < 0.2 {
-            try await Task.sleep(nanoseconds: UInt64((0.2 - gap) * 1_000_000_000))
+        let slot = max(Date(), lastSend.addingTimeInterval(0.2))
+        lastSend = slot
+        let delay = max(0, slot.timeIntervalSinceNow)
+        if delay > 0 {
+            try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
         }
     }
 

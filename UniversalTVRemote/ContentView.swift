@@ -315,8 +315,8 @@ private struct RemoteLayout {
         if keyboardShown { fixed += extraCompact ? 36 : (compact ? 40 : 44) }
         fixed += 38 // connection pill
         if showLGNote { fixed += 16 }
-        fixed += pillsButtonHeight + 6 + 16 // pills row + label
-        fixed += bottomCell + 6 + 16 // bottom row + labels
+        fixed += pillsButtonHeight // pills row — icons only, no labels
+        fixed += bottomCell // bottom row — icons only, no labels
         if showDiagnostic { fixed += CGFloat(diagnosticLines) * 17 }
         // Gaps between sections.
         var sections = 6 // topBar, pill, pad, pills, bottom, diagnostic
@@ -349,6 +349,7 @@ private struct RemoteView: View {
 
     @State private var keyboardText = ""
     @State private var showKeyboard = false
+    @FocusState private var keyboardFocused = false
 
     var body: some View {
         // No ScrollView on the remote (v1.0.15): everything fits on one
@@ -397,6 +398,7 @@ private struct RemoteView: View {
                     HStack {
                         TextField("Type on the TV…", text: $keyboardText)
                             .textFieldStyle(.roundedBorder)
+                            .focused($keyboardFocused)
                             .autocorrectionDisabled(true)
                             .textInputAutocapitalization(.never)
                         Button("Send") {
@@ -409,6 +411,9 @@ private struct RemoteView: View {
                         .disabled(keyboardText.isEmpty)
                     }
                     .padding(.horizontal)
+                    // Focus on appear so the iOS keyboard pops up at
+                    // once — no second tap on the text field.
+                    .onAppear { keyboardFocused = true }
                 }
 
                 connectionPill
@@ -430,7 +435,7 @@ private struct RemoteView: View {
                 SwipePadView(height: layout.padSize) { send($0) }
                     .padding(.horizontal)
 
-                // Back / Home / Exit pill row with labels underneath.
+                // Back / Home / Exit pill row — icons only, no labels.
                 HStack(spacing: 16) {
                     pillButton(systemImage: "arrow.left", label: "Back", height: layout.pillsButtonHeight) { send(.back) }
                     pillButton(systemImage: "house", label: "Home", height: layout.pillsButtonHeight) { send(.home) }
@@ -444,60 +449,46 @@ private struct RemoteView: View {
                 // voice code stays dormant behind it. The apps row is
                 // gone in v1.0.18 — its space went to this row instead.)
                 // Every control sits in a layout-sized cell so they
-                // share top and bottom edges, and the labels sit on one
-                // shared baseline below. Nothing here is ever a dead button.
+                // share top and bottom edges. Icons only — the words
+                // underneath were removed in v1.0.19. Nothing here is
+                // ever a dead button.
                 HStack(alignment: .top, spacing: 16) {
-                    VStack(spacing: 6) {
-                        VolRockerView(buttonHeight: layout.rockerButtonHeight, width: layout.rockerWidth, onUp: { send(.volumeUp) }, onDown: { send(.volumeDown) })
-                            .frame(height: layout.bottomCell)
-                        Text("Volume")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity)
-                    if session.capabilities.supportsTextInput {
-                        VStack(spacing: 6) {
-                            Button { showKeyboard.toggle() } label: {
-                                ZStack {
-                                    Circle()
-                                        .fill(Color.white.opacity(0.10))
-                                    Circle()
-                                        .stroke(showKeyboard ? remoteAccent : Color.white.opacity(0.08), lineWidth: 2.5)
-                                    Image(systemName: "keyboard")
-                                        .font(.title)
-                                        .foregroundStyle(.white)
-                                }
-                                .frame(width: layout.circleSize, height: layout.circleSize)
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Keyboard")
-                            .frame(height: layout.bottomCell)
-                            Text("Keyboard")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+                    VolRockerView(buttonHeight: layout.rockerButtonHeight, width: layout.rockerWidth, onUp: { send(.volumeUp) }, onDown: { send(.volumeDown) })
+                        .frame(height: layout.bottomCell)
                         .frame(maxWidth: .infinity)
-                    }
-                    VStack(spacing: 6) {
-                        Button { send(.mute) } label: {
+                    if session.capabilities.supportsTextInput {
+                        Button { showKeyboard.toggle() } label: {
                             ZStack {
-                                RoundedRectangle(cornerRadius: 24)
+                                Circle()
                                     .fill(Color.white.opacity(0.10))
-                                RoundedRectangle(cornerRadius: 24)
-                                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                                Image(systemName: "speaker.slash.fill")
+                                Circle()
+                                    .stroke(showKeyboard ? remoteAccent : Color.white.opacity(0.08), lineWidth: 2.5)
+                                Image(systemName: "keyboard")
                                     .font(.title)
                                     .foregroundStyle(.white)
                             }
                             .frame(width: layout.circleSize, height: layout.circleSize)
                         }
                         .buttonStyle(.plain)
-                        .accessibilityLabel("Mute")
+                        .accessibilityLabel("Keyboard")
                         .frame(height: layout.bottomCell)
-                        Text("Mute")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity)
                     }
+                    Button { send(.mute) } label: {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 24)
+                                .fill(Color.white.opacity(0.10))
+                            RoundedRectangle(cornerRadius: 24)
+                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                            Image(systemName: "speaker.slash.fill")
+                                .font(.title)
+                                .foregroundStyle(.white)
+                        }
+                        .frame(width: layout.circleSize, height: layout.circleSize)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Mute")
+                    .frame(height: layout.bottomCell)
                     .frame(maxWidth: .infinity)
                 }
 
@@ -530,19 +521,16 @@ private struct RemoteView: View {
                 session.disconnect()
                 onBack()
             } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "tv")
-                        .font(.subheadline.bold())
-                    Text("Devices")
-                        .font(.subheadline.bold())
-                }
-                .foregroundStyle(remoteAccent)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(Color.white.opacity(0.08), in: Capsule())
-                .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                Image(systemName: "tv")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(remoteAccent)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.white.opacity(0.08), in: Capsule())
+                    .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Devices")
             Spacer()
             Text(session.device.name)
                 .font(.headline.bold())
@@ -602,24 +590,22 @@ private struct RemoteView: View {
         Task { await session.send(command) }
     }
 
-    /// Wide pill button with an icon and a label underneath
-    /// (Back / Home / Exit row). The button height comes from the
-    /// layout so the row shrinks on short screens.
+    /// Wide pill button with an icon only (Back / Home / Exit row).
+    /// The `label` is VoiceOver-only now — the visible words
+    /// underneath were removed in v1.0.19; the icons are
+    /// self-explanatory. The button height comes from the layout
+    /// so the row shrinks on short screens.
     private func pillButton(systemImage: String, label: String, height: CGFloat, action: @escaping () -> Void) -> some View {
-        VStack(spacing: 6) {
-            Button(action: action) {
-                Image(systemName: systemImage)
-                    .font(.title2.bold())
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity, minHeight: height)
-                    .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 28))
-                    .overlay(RoundedRectangle(cornerRadius: 28).stroke(Color.white.opacity(0.08), lineWidth: 1))
-            }
-            .buttonStyle(.plain)
-            Text(label)
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.title2.bold())
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, minHeight: height)
+                .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 28))
+                .overlay(RoundedRectangle(cornerRadius: 28).stroke(Color.white.opacity(0.08), lineWidth: 1))
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 
 }
@@ -668,8 +654,9 @@ private struct SwipePadView: View {
 
 // MARK: - Volume rocker
 
-/// Tall volume rocker: + on top, a VOL label in the middle, − at the
-/// bottom. It stretches to the height of the button grid beside it.
+/// Tall volume rocker: + on top, − at the bottom. (The VOL label
+/// in the middle was removed in v1.0.19 — the +/− icons say it
+/// all.) It stretches to the height of the button grid beside it.
 /// (The old volume/channel rocker pair is gone with the channel rocker;
 /// mute is a grid button now.) The +/− buttons are big targets with
 /// an explicit full-frame hit area, and they repeat while held — like
@@ -691,10 +678,6 @@ private struct VolRockerView: View {
                     .frame(width: width, height: buttonHeight)
             }
             Spacer()
-            Text("VOL")
-                .font(.caption2.bold())
-                .foregroundStyle(.secondary)
-            Spacer()
             RepeatButton(action: onDown) {
                 Image(systemName: "minus")
                     .font(.title.bold())
@@ -710,31 +693,48 @@ private struct VolRockerView: View {
 }
 
 /// A button that fires once on tap and repeats while held (the fork's
-/// KeyCap with repeats: true). A quick tap sends one command; holding
-/// past ~0.45 s repeats it every ~0.18 s until release.
+/// KeyCap with repeats: true). Tap and hold are both driven by the
+/// long-press gesture itself — there is no Button underneath. That
+/// matters: with Button + onLongPressGesture the two gestures
+/// arbitrate the touch, so a hold could be taken as a tap and never
+/// repeat, and a hold always fired one extra command from the Button
+/// on release. Here a quick tap sends exactly one command, and a
+/// hold past the onset repeats until release — nothing extra.
+/// Onset ~0.3 s, then ~0.12 s between repeats (~8 steps/s), so
+/// sweeping the volume a long way is fast.
 private struct RepeatButton<Label: View>: View {
     var action: () -> Void
     @ViewBuilder var label: () -> Label
-    @State private var repeatTask: Task<Void, Never>?
+    @State private var holdTask: Task<Void, Never>?
+    @State private var repeated = false
+
+    private static let onset: UInt64 = 300_000_000
+    private static let interval: UInt64 = 120_000_000
 
     var body: some View {
-        Button(action: action) { label() }
-            .buttonStyle(.plain)
+        label()
             .contentShape(Rectangle())
-            .onLongPressGesture(minimumDuration: 0.45, pressing: { pressing in
-                if !pressing {
-                    repeatTask?.cancel()
-                    repeatTask = nil
-                }
-            }, perform: {
-                repeatTask = Task {
-                    while !Task.isCancelled {
-                        try? await Task.sleep(nanoseconds: 180_000_000)
-                        guard !Task.isCancelled else { break }
-                        action()
+            .onLongPressGesture(minimumDuration: 0.3, pressing: { pressing in
+                if pressing {
+                    repeated = false
+                    holdTask = Task {
+                        try? await Task.sleep(nanoseconds: Self.onset)
+                        guard !Task.isCancelled else { return }
+                        while !Task.isCancelled {
+                            await MainActor.run {
+                                guard !Task.isCancelled else { return }
+                                repeated = true
+                                action()
+                            }
+                            try? await Task.sleep(nanoseconds: Self.interval)
+                        }
                     }
+                } else {
+                    holdTask?.cancel()
+                    holdTask = nil
+                    if !repeated { action() }
                 }
-            })
+            }, perform: {})
     }
 }
 
