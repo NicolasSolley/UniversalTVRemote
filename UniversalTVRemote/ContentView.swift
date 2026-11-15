@@ -781,18 +781,16 @@ private struct RemoteView: View {
 // MARK: - Swipe pad
 
 /// Big swipe pad (the Swipe half of the toggle): near full-width,
-/// with directional chevrons around a hand and "Swipe to navigate".
+/// a bare pad — no chevrons, no hand icon, no label.
 /// One drag is one command on release (tap = select) — the same
 /// gesture as the old touchpad, only the size and the look changed.
-/// The height comes from the layout; the inner content scales down
-/// with it (and the label drops off when short) so the pad fits the
+/// The height comes from the layout so the pad fits the
 /// non-scrollable page on small phones.
 private struct SwipePadView: View {
     var height: CGFloat
     var onCommand: (RemoteCommand) -> Void
 
     var body: some View {
-        let scale = max(0.4, min(1, height / 300))
         RoundedRectangle(cornerRadius: 24)
             .fill(
                 LinearGradient(
@@ -804,32 +802,6 @@ private struct SwipePadView: View {
                 RoundedRectangle(cornerRadius: 24)
                     .stroke(remoteAccent.opacity(0.55), lineWidth: 1.5)
             )
-            .overlay {
-                VStack(spacing: 22 * scale) {
-                    Image(systemName: "chevron.up")
-                        .font(.title2.bold())
-                        .foregroundStyle(.secondary)
-                    HStack(spacing: 56 * scale) {
-                        Image(systemName: "chevron.left")
-                            .font(.title2.bold())
-                            .foregroundStyle(.secondary)
-                        Image(systemName: "hand.tap")
-                            .font(.system(size: 44 * scale))
-                            .foregroundStyle(.white.opacity(0.85))
-                        Image(systemName: "chevron.right")
-                            .font(.title2.bold())
-                            .foregroundStyle(.secondary)
-                    }
-                    Image(systemName: "chevron.down")
-                        .font(.title2.bold())
-                        .foregroundStyle(.secondary)
-                    if height >= 140 {
-                        Text("Swipe to navigate")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
             .frame(maxWidth: .infinity)
             .frame(height: height)
             .gesture(
