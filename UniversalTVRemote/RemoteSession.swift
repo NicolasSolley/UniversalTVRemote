@@ -69,12 +69,16 @@ struct RemoteCapabilities {
                 supportsSeparatePause: true, supportsPlayback: true,
                 supportsVoice: false, needsTVPrompt: true, needsPairingCode: false)
         case .androidTV:
-            // Text input is not implemented (IME batch edits need live
-            // counters that cannot be verified without a real TV), so the
-            // keyboard is hidden for Android TV. Voice IS implemented:
-            // the remote session carries 8 kHz PCM (see AndroidTVDriver).
+            // Text input IS implemented: AndroidTVDriver.sendText builds
+            // the field-21 IME batch edit and the incoming-message
+            // handler live-tracks imeCounter/imeFieldCounter from the
+            // TV's field-21 messages — the same path as the fork, and
+            // requestedFeatures (623) already includes the IME bit.
+            // Awaiting field test on a real TV, which is the only part
+            // that cannot be verified here. Voice IS implemented: the
+            // remote session carries 8 kHz PCM (see AndroidTVDriver).
             return RemoteCapabilities(
-                supportsDigits: true, supportsTextInput: false, supportsApps: false,
+                supportsDigits: true, supportsTextInput: true, supportsApps: false,
                 supportsSeparatePause: true, supportsPlayback: true,
                 supportsVoice: true, needsTVPrompt: false, needsPairingCode: true)
         case .airPlay, .other:
