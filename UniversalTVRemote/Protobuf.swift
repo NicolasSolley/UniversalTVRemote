@@ -82,6 +82,10 @@ struct ProtoMessage {
                 let v = bytes[i..<i + 8].reversed().reduce(UInt64(0)) { $0 << 8 | UInt64($1) }
                 i += 8
                 fields[field, default: []].append(.fixed(v))
+            case 2:
+                guard let len = Self.readVarint(bytes, &i), i + Int(len) <= bytes.count else { return nil }
+                fields[field, default: []].append(.bytes(Array(bytes[i..<i + Int(len)])))
+                i += Int(len)
             case 5:
                 guard i + 4 <= bytes.count else { return nil }
                 let v = bytes[i..<i + 4].reversed().reduce(UInt64(0)) { $0 << 8 | UInt64($1) }
