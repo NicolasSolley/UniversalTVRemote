@@ -13,13 +13,21 @@ final class DERAndIdentityTests: XCTestCase {
 
     /// Mint a self-signed certificate with the DER helpers, as
     /// ClientIdentity does — but with a non-permanent key, so nothing
-    /// touches the Keychain.
-    private func makeTestCertDER(commonName: String) throws -> Data {
-        let attributes: [String: Any] = [
-            kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
-            kSecAttrKeySizeInBits as String: 2048,
-        ]
-        let privateKey = try XCTUnwrap(SecKeyCreateRandomKey(attributes as CFDictionary, nil))
+    /// touches the Keychain. When a signing key is supplied, the cert is
+    /// minted with that key (so a test can compare the certificate's
+    /// components against the key it already holds); otherwise a fresh
+    /// throwaway key is generated.
+    private func makeTestCertDER(commonName: String, signingKey: SecKey? = nil) throws -> Data {
+        let privateKey: SecKey
+        if let signingKey {
+            privateKey = signingKey
+        } else {
+            let attributes: [String: Any] = [
+                kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
+                kSecAttrKeySizeInBits as String: 2048,
+            ]
+            privateKey = try XCTUnwrap(SecKeyCreateRandomKey(attributes as CFDictionary, nil))
+        }
         let publicKey = try XCTUnwrap(SecKeyCopyPublicKey(privateKey))
         let publicDER = try XCTUnwrap(SecKeyCopyExternalRepresentation(publicKey, nil) as Data?)
 
@@ -111,7 +119,12 @@ final class DERAndIdentityTests: XCTestCase {
         let privateKey = try XCTUnwrap(SecKeyCreateRandomKey(attributes as CFDictionary, nil))
         let publicKey = try XCTUnwrap(SecKeyCopyPublicKey(privateKey))
         let publicKeyDER = try XCTUnwrap(SecKeyCopyExternalRepresentation(publicKey, nil) as Data?)
-        let der = try makeTestCertDER(commonName: "UniversalTVRemote")
+        // Mint the certificate with this same key — the pre-rebuild
+        // test compared the certificate against the key it was minted
+        // with, and the rebuild accidentally compared two different
+        // random keys (the helper generated its own), so the moduli
+        // could never match.
+        let der = try makeTestCertDER(commonName: "UniversalTVRemote", signingKey: privateKey)
         let certificate = try XCTUnwrap(SecCertificateCreateWithData(nil, der as CFData))
         let keys = try XCTUnwrap(ClientIdentity.rsaComponents(of: certificate))
 
@@ -147,12 +160,14 @@ final class DERAndIdentityTests: XCTestCase {
         let der = SecCertificateCopyData(first.certificate) as Data
         XCTAssertNotNil(SecCertificateCreateWithData(nil, der as CFData))
 
-        // CN is the slot plus 4 random hex chars.
+        // CN is the slot plus 4 random bytes rendered as 8 hex chars
+        // (ClientIdentity mints 4 bytes, as the fork does — the old
+        // expectation of 4 chars was wrong).
         let subject = SecCertificateCopySubjectSummary(first.certificate) as String?
         XCTAssertNotNil(subject)
         XCTAssertTrue(subject!.hasPrefix(slot + " "))
         let suffix = subject!.dropFirst(slot.count + 1)
-        XCTAssertEqual(suffix.count, 4)
+        XCTAssertEqual(suffix.count, 8)
         XCTAssertTrue(suffix.allSatisfy(\.isHexDigit))
 
         // shortID is 4 hex chars.
