@@ -39,7 +39,8 @@ struct SweptDevice {
 ///   Cast-capable display)
 /// - Android TV Remote service: TCP connect to 6466 (control) / 6467
 ///   (pairing) — the discriminator for real Android/Google TV
-/// - LG webOS: TCP connect to 3001 (wss) as a fallback signal
+/// - LG webOS: TCP connect to 3000 (ws) AND 3001 (wss) as a fallback
+///   signal — both must be open; a lone :3000 is often a dev server
 ///
 /// Classification is conservative: a plain Chromecast dongle also serves
 /// the DIAL description, but it does NOT listen on 6466/6467, so it is
@@ -256,11 +257,13 @@ final class SubnetSweep {
         return controlOpen || pairingOpen
     }
 
-    /// LG webOS wss port, as a fallback when the TV's DIAL server does
-    /// not answer. Port 3001 is webOS-specific; the pairing handshake
-    /// confirms it when the user taps the TV.
+    /// LG webOS: BOTH the wss (3001) and ws (3000) ports must be open.
+    /// A lone :3000 is often a dev server, not a TV. Port 3001 alone
+    /// is not enough either — the pair is the webOS signal.
     private static func probeLGPort(host: String) async -> Bool {
-        await tcpPortOpen(host: host, port: 3001)
+        async let plain = tcpPortOpen(host: host, port: 3000)
+        async let secure = tcpPortOpen(host: host, port: 3001)
+        return await plain && secure
     }
 
     /// TCP connect with a hard timeout, via a non-blocking connect +

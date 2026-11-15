@@ -388,19 +388,20 @@ private struct RemoteView: View {
                 }
                 .padding(.horizontal)
 
-                // Roku apps: only the apps actually installed on the TV
-                // (Netflix, YouTube, Apple TV first when present). An
-                // empty list hides the row entirely — no dead buttons.
-                if session.capabilities.supportsApps, !session.rokuApps.isEmpty {
+                // Installed apps: only the apps actually installed on
+                // the TV (Netflix, YouTube, Apple TV first when
+                // present). An empty list hides the row entirely — no
+                // dead buttons.
+                if session.capabilities.supportsApps, !sortedApps.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Apps")
                             .font(.headline)
                             .padding(.horizontal)
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 10) {
-                                ForEach(sortedRokuApps) { app in
+                                ForEach(sortedApps, id: \.id) { app in
                                     Button(app.name) {
-                                        Task { await session.launchRokuApp(app) }
+                                        Task { await session.launchApp(id: app.id) }
                                     }
                                     .font(.subheadline.bold())
                                     .lineLimit(1)
@@ -551,13 +552,20 @@ private struct RemoteView: View {
         .buttonStyle(.plain)
     }
 
-    /// Installed Roku apps with the three big ones first (Netflix,
-    /// YouTube, Apple TV) when the TV has them, then the rest in the
-    /// TV's own order. Only installed apps are ever shown — no dead
-    /// shortcut buttons.
-    private var sortedRokuApps: [RokuRemote.RokuApp] {
+    /// Installed apps for the current brand, with the three big ones
+    /// first (Netflix, YouTube, Apple TV) when the TV has them, then
+    /// the rest in the TV's own order. Only installed apps are ever
+    /// shown — no dead shortcut buttons.
+    private var sortedApps: [(id: String, name: String)] {
+        let apps: [(id: String, name: String)]
+        switch session.device.brand {
+        case .roku: apps = session.rokuApps.map { ($0.id, $0.name) }
+        case .samsung: apps = session.samsungApps.map { ($0.id, $0.name) }
+        case .lg: apps = session.lgApps.map { ($0.id, $0.name) }
+        case .androidTV, .airPlay, .other: apps = []
+        }
         let priority = ["netflix", "youtube", "apple tv"]
-        return session.rokuApps.sorted { a, b in
+        return apps.sorted { a, b in
             let aRank = priority.firstIndex(of: a.name.lowercased()) ?? Int.max
             let bRank = priority.firstIndex(of: b.name.lowercased()) ?? Int.max
             return aRank < bRank

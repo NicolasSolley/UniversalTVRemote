@@ -6,10 +6,24 @@ import Combine
 /// perform are hidden from the UI via `RemoteCapabilities`.
 enum RemoteCommand {
     case power
+    /// Hold-power / full power-off where the brand supports it
+    /// (Samsung hold, LG turnOff). Roku has no separate power-off key.
+    case powerOff
     case volumeUp, volumeDown, mute
     case channelUp, channelDown
     case up, down, left, right, enter
     case back, home, info, menu
+    /// Exit the current app / back out to the previous screen (fork's
+    /// Exit button; v1.0.12's Back/Home/Exit pill row needs this).
+    case exit
+    /// Switch the TV's input/source (Roku InputTuner, Samsung
+    /// KEY_SOURCE). LG has no input key.
+    case input
+    /// Open the TV's search UI (Roku Search). Samsung/LG have none.
+    case search
+    /// Delete one character in a text field (Roku Backspace, LG
+    /// deleteCharacters, Samsung KEY_RETURN).
+    case backspace
     case play, pause, stop, rewind, fastForward
     case digit(Int)
     case text(String)
@@ -46,12 +60,12 @@ struct RemoteCapabilities {
                 supportsVoice: false, needsTVPrompt: false, needsPairingCode: false)
         case .samsung:
             return RemoteCapabilities(
-                supportsDigits: true, supportsTextInput: true, supportsApps: false,
+                supportsDigits: true, supportsTextInput: true, supportsApps: true,
                 supportsSeparatePause: true, supportsPlayback: true,
                 supportsVoice: false, needsTVPrompt: true, needsPairingCode: false)
         case .lg:
             return RemoteCapabilities(
-                supportsDigits: true, supportsTextInput: true, supportsApps: false,
+                supportsDigits: true, supportsTextInput: true, supportsApps: true,
                 supportsSeparatePause: true, supportsPlayback: true,
                 supportsVoice: false, needsTVPrompt: true, needsPairingCode: false)
         case .androidTV:
@@ -77,7 +91,9 @@ struct RemoteCapabilities {
 /// plain-language status text; nothing is faked.
 @MainActor
 final class RemoteSession: ObservableObject {
-    let device: TVDevice
+    /// `var`, not `let`: the Roku connect updates the stored device
+    /// name from /query/device-info (user-renamed Rokus).
+    var device: TVDevice
     let capabilities: RemoteCapabilities
 
     @Published var status: String = ""
@@ -90,6 +106,8 @@ final class RemoteSession: ObservableObject {
     /// The pairing code the user typed (6 hex characters for Android TV).
     @Published var pairingCode = ""
     @Published var rokuApps: [RokuRemote.RokuApp] = []
+    @Published var samsungApps: [SamsungRemote.SamsungApp] = []
+    @Published var lgApps: [LGApp] = []
     /// True while the mic is capturing for a voice utterance.
     @Published var isRecordingVoice = false
 
@@ -132,9 +150,15 @@ final class RemoteSession: ObservableObject {
         switch device.brand {
         case .roku:
             status = "Checking the TV…"
-            if let model = await RokuRemote.modelName(on: host) {
+            RokuRemote.resetQueue()
+            if let info = await RokuRemote.deviceInfo(on: host) {
+                // Update the stored device name: a user-renamed Roku
+                // reports its own name in device-info (fork's connect()).
+                if let name = info.name, !name.isEmpty, name != device.name {
+                    device.name = name
+                }
                 isConnected = true
-                status = "Connected to \(model)."
+                status = "Connected to \(info.model ?? device.name)."
                 await loadRokuApps()
             } else {
                 isConnected = false
@@ -148,6 +172,7 @@ final class RemoteSession: ObservableObject {
                 try await samsung.connect(to: host)
                 isConnected = true
                 status = "Connected to \(device.name)."
+                await loadSamsungApps()
             } catch let error as SamsungRemote.SamsungError {
                 isConnected = false
                 status = error.localizedDescription
@@ -163,6 +188,7 @@ final class RemoteSession: ObservableObject {
                 try await lg.connect()
                 isConnected = true
                 status = "Connected to \(device.name)."
+                await loadLGApps()
             } catch let error as LGError {
                 isConnected = false
                 status = error.localizedDescription
@@ -232,6 +258,7 @@ final class RemoteSession: ObservableObject {
         codeContinuation?.resume(throwing: CancellationError())
         codeContinuation = nil
         awaitingPairingCode = false
+        RokuRemote.resetQueue()
         Task { await samsung.disconnect() }
         Task { await lg.disconnect() }
         Task { await androidTV.disconnect() }
@@ -358,9 +385,10 @@ final class RemoteSession: ObservableObject {
                 status = "Sent."
             }
         } catch let error as SamsungRemote.SamsungError {
-            // A wake signal is a success of a different kind.
             status = error.localizedDescription
-            if case .wakeSignalSent = error { isConnected = false }
+        } catch let error as RokuRemote.RokuError {
+            isConnected = false
+            status = error.localizedDescription
         } catch let error as LGError {
             isConnected = false
             status = error.localizedDescription
@@ -376,6 +404,7 @@ final class RemoteSession: ObservableObject {
     private func sendRoku(_ command: RemoteCommand, to host: String) async throws {
         switch command {
         case .power: try await RokuRemote.send(key: "Power", to: host)
+        case .powerOff: break // Roku has no separate power-off key.
         case .volumeUp: try await RokuRemote.send(key: "VolumeUp", to: host)
         case .volumeDown: try await RokuRemote.send(key: "VolumeDown", to: host)
         case .mute: try await RokuRemote.send(key: "VolumeMute", to: host)
@@ -388,13 +417,19 @@ final class RemoteSession: ObservableObject {
         case .enter: try await RokuRemote.send(key: "Select", to: host)
         case .back: try await RokuRemote.send(key: "Back", to: host)
         case .home: try await RokuRemote.send(key: "Home", to: host)
+        case .exit: try await RokuRemote.send(key: "Home", to: host)
         case .info: try await RokuRemote.send(key: "Info", to: host)
-        case .menu: try await RokuRemote.send(key: "Search", to: host)
+        // Menu is the options/info menu — NOT Search (the old mapping
+        // opened Roku search instead of the menu; fork's keyName).
+        case .menu: try await RokuRemote.send(key: "Info", to: host)
+        case .input: try await RokuRemote.send(key: "InputTuner", to: host)
+        case .search: try await RokuRemote.send(key: "Search", to: host)
+        case .backspace: try await RokuRemote.send(key: "Backspace", to: host)
         case .play, .pause: try await RokuRemote.send(key: "Play", to: host)
         case .stop: try await RokuRemote.send(key: "Play", to: host)
         case .rewind: try await RokuRemote.send(key: "Rev", to: host)
         case .fastForward: try await RokuRemote.send(key: "Fwd", to: host)
-        case .digit: break // Roku has no digit keys; the UI hides them.
+        case .digit(let n): try await RokuRemote.send(key: "Lit_\(n)", to: host)
         case .text(let text): try await RokuRemote.sendText(text, to: host)
         }
     }
@@ -402,6 +437,7 @@ final class RemoteSession: ObservableObject {
     private func sendSamsung(_ command: RemoteCommand, to host: String) async throws {
         switch command {
         case .power: try await samsung.sendPower(to: host)
+        case .powerOff: try await samsung.sendPowerOff(to: host)
         case .volumeUp: try await samsung.sendKey(.volumeUp, to: host)
         case .volumeDown: try await samsung.sendKey(.volumeDown, to: host)
         case .mute: try await samsung.sendKey(.mute, to: host)
@@ -414,8 +450,12 @@ final class RemoteSession: ObservableObject {
         case .enter: try await samsung.sendKey(.enter, to: host)
         case .back: try await samsung.sendKey(.back, to: host)
         case .home: try await samsung.sendKey(.home, to: host)
+        case .exit: try await samsung.sendKey(.exit, to: host)
         case .info: try await samsung.sendKey(.info, to: host)
         case .menu: try await samsung.sendKey(.menu, to: host)
+        case .input: try await samsung.sendKey(.source, to: host)
+        case .search: break // Samsung has no search key.
+        case .backspace: try await samsung.sendKey(.back, to: host) // KEY_RETURN
         case .play: try await samsung.sendKey(.play, to: host)
         case .pause: try await samsung.sendKey(.pause, to: host)
         case .stop: try await samsung.sendKey(.stop, to: host)
@@ -434,6 +474,7 @@ final class RemoteSession: ObservableObject {
         // Power on LG is power-off only (no verified Wake-on-LAN source);
         // the UI says so next to the power button.
         case .power: try await lg.powerOff()
+        case .powerOff: try await lg.powerOff()
         case .volumeUp: try await lg.volumeUp()
         case .volumeDown: try await lg.volumeDown()
         case .mute: try await lg.toggleMute()
@@ -446,8 +487,11 @@ final class RemoteSession: ObservableObject {
         case .enter: try await lg.enter()
         case .back: try await lg.back()
         case .home: try await lg.home()
+        case .exit: try await lg.exit()
         case .info: try await lg.info()
         case .menu: try await lg.menu()
+        case .input, .search: break // LG has no input/search keys.
+        case .backspace: try await lg.deleteCharacters()
         case .play: try await lg.play()
         case .pause: try await lg.pause()
         case .stop: try await lg.stop()
@@ -461,6 +505,7 @@ final class RemoteSession: ObservableObject {
     private func sendAndroidTV(_ command: RemoteCommand, to host: String) async throws {
         switch command {
         case .power: try await androidTV.sendKey(.power, to: host)
+        case .powerOff: break // No distinct power-off key; .power toggles.
         case .volumeUp: try await androidTV.sendKey(.volumeUp, to: host)
         case .volumeDown: try await androidTV.sendKey(.volumeDown, to: host)
         case .mute: try await androidTV.sendKey(.volumeMute, to: host)
@@ -473,8 +518,12 @@ final class RemoteSession: ObservableObject {
         case .enter: try await androidTV.sendKey(.dpadCenter, to: host)
         case .back: try await androidTV.sendKey(.back, to: host)
         case .home: try await androidTV.sendKey(.home, to: host)
+        case .exit: try await androidTV.sendKey(.back, to: host) // fork: exit == back (code 4)
         case .info: try await androidTV.sendKey(.info, to: host)
         case .menu: try await androidTV.sendKey(.menu, to: host)
+        case .input: try await androidTV.sendKey(.input, to: host)
+        case .search: try await androidTV.sendKey(.search, to: host)
+        case .backspace: try await androidTV.sendKey(.backspace, to: host)
         case .play: try await androidTV.sendKey(.mediaPlay, to: host)
         case .pause: try await androidTV.sendKey(.mediaPause, to: host)
         case .stop: try await androidTV.sendKey(.mediaStop, to: host)
@@ -488,7 +537,7 @@ final class RemoteSession: ObservableObject {
         }
     }
 
-    // MARK: - Roku apps
+    // MARK: - Apps
 
     func loadRokuApps() async {
         guard device.brand == .roku, let host = device.host else { return }
@@ -502,6 +551,50 @@ final class RemoteSession: ObservableObject {
             status = "Opening \(app.name)."
         } catch {
             status = "Couldn't open \(app.name)."
+        }
+    }
+
+    func loadSamsungApps() async {
+        guard device.brand == .samsung, let host = device.host else { return }
+        samsungApps = await samsung.installedApps(on: host) ?? []
+    }
+
+    func launchSamsungApp(_ app: SamsungRemote.SamsungApp) async {
+        guard let host = device.host else { return }
+        do {
+            try await samsung.launch(app, to: host)
+            status = "Opening \(app.name)."
+        } catch {
+            status = "Couldn't open \(app.name)."
+        }
+    }
+
+    func loadLGApps() async {
+        guard device.brand == .lg else { return }
+        lgApps = await lg.installedApps() ?? []
+    }
+
+    func launchLGApp(_ app: LGApp) async {
+        do {
+            try await lg.launch(app)
+            status = "Opening \(app.name)."
+        } catch {
+            status = "Couldn't open \(app.name)."
+        }
+    }
+
+    /// Launches an installed app by id, dispatching to the brand's
+    /// launcher (used by the app shortcut cards).
+    func launchApp(id: String) async {
+        switch device.brand {
+        case .roku:
+            if let app = rokuApps.first(where: { $0.id == id }) { await launchRokuApp(app) }
+        case .samsung:
+            if let app = samsungApps.first(where: { $0.id == id }) { await launchSamsungApp(app) }
+        case .lg:
+            if let app = lgApps.first(where: { $0.id == id }) { await launchLGApp(app) }
+        case .androidTV, .airPlay, .other:
+            return
         }
     }
 }

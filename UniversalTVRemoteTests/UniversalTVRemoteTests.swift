@@ -279,6 +279,10 @@ final class TLSHandshakeRecorderTests: XCTestCase {
         // Offers supported_versions (extension 0x002B: TLS 1.3 + 1.2).
         // Data has no contains(Data) — subdata search is range(of:).
         XCTAssertNotNil(hello.range(of: Data([0x00, 0x2B])))
+        // Offers key_share (extension 0x0033) with an x25519 share
+        // (group 0x001D) — without it, BoringSSL answers alert 109.
+        XCTAssertNotNil(hello.range(of: Data([0x00, 0x33])))
+        XCTAssertNotNil(hello.range(of: Data([0x00, 0x1D])))
     }
 
     func testSummarizeServerHelloAndCertificate() throws {

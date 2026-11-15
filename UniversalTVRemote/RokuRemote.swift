@@ -9,24 +9,90 @@ import Foundation
 /// - POST /launch/<appId> — launch an app
 /// - GET  /query/device-info — model / firmware (XML)
 enum RokuRemote {
+    /// A Roku-side error with a user-facing message. A 403 means the
+    /// Roku is blocking remote apps (fork's RokuDriver.enqueue) — the
+    /// user can fix it in the Roku's settings.
+    enum RokuError: Error, LocalizedError {
+        case blocked
+        case badResponse
+
+        var errorDescription: String? {
+            switch self {
+            case .blocked:
+                return "Your Roku is blocking remote apps. On the Roku, go to Settings → System → Advanced system settings → Control by mobile apps and set Network access to Default or Permissive."
+            case .badResponse:
+                return "The Roku sent an unexpected response."
+            }
+        }
+    }
+
     struct RokuApp: Identifiable, Hashable {
         let id: String
         let name: String
         let version: String?
+        /// `query/icon/<id>` — the app's icon, for the shortcut cards.
+        let iconURL: URL?
     }
 
     static let defaultPort = 8060
 
-    static func send(key: String, to host: String, port: Int = defaultPort) async throws {
-        guard let url = URL(string: "http://\(host):\(port)/keypress/\(key)") else {
+    /// Serial keypress chain (fork's `enqueue`): each press awaits the
+    /// previous one so the Roku receives keys in order. Main-actor
+    /// state — every caller goes through RemoteSession (main actor).
+    @MainActor private static var queue: Task<Void, Error>?
+    /// Generation guard: presses queued before a reset (disconnect /
+    /// reconnect) are dropped instead of firing late.
+    @MainActor private static var generation = 0
+
+    /// Drops queued presses and invalidates the chain — call on
+    /// connect and disconnect (fork bumps generation in both).
+    @MainActor static func resetQueue() {
+        generation += 1
+        queue?.cancel()
+        queue = nil
+    }
+
+    @MainActor static func send(key: String, to host: String, port: Int = defaultPort) async throws {
+        try await enqueue(path: "keypress/\(key)", to: host, port: port).value
+    }
+
+    /// Enqueues one POST behind the previous press. A failed press does
+    /// not block the chain (`try?` on the predecessor); the current
+    /// press's own error propagates to its awaiter.
+    @MainActor @discardableResult
+    private static func enqueue(path: String, to host: String, port: Int) -> Task<Void, Error> {
+        let previous = queue
+        let token = generation
+        let operation = Task<Void, Error> { @MainActor in
+            _ = try? await previous?.value
+            guard !Task.isCancelled, token == generation else { return }
+            try await post(path: path, to: host, port: port)
+        }
+        queue = operation
+        return operation
+    }
+
+    /// POST with the fork's status handling: 200/202/204 are success,
+    /// 403 is the Roku blocking remote apps, anything else is a bad
+    /// response.
+    private static func post(path: String, to host: String, port: Int) async throws {
+        guard let url = URL(string: "http://\(host):\(port)/\(path)") else {
             throw URLError(.badURL)
         }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = 4
         let (_, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            throw URLError(.badServerResponse)
+        guard let http = response as? HTTPURLResponse else {
+            throw RokuError.badResponse
+        }
+        switch http.statusCode {
+        case 200, 202, 204:
+            return
+        case 403:
+            throw RokuError.blocked
+        default:
+            throw RokuError.badResponse
         }
     }
 
@@ -44,6 +110,8 @@ enum RokuRemote {
     }
 
     /// Installed apps, best effort — returns [] if the query fails.
+    /// Only `<app type="appl">` entries (fork's RokuAppsParser): the
+    /// TV tuner and HDMI inputs are not launchable apps.
     static func apps(on host: String, port: Int = defaultPort) async -> [RokuApp] {
         guard let url = URL(string: "http://\(host):\(port)/query/apps") else { return [] }
         do {
@@ -53,27 +121,25 @@ enum RokuRemote {
             guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
                 return []
             }
-            return RokuAppsParser.parse(data)
+            return RokuAppsParser.parse(data, host: host, port: port)
         } catch {
             return []
         }
     }
 
     static func launch(appId: String, on host: String, port: Int = defaultPort) async throws {
-        guard let url = URL(string: "http://\(host):\(port)/launch/\(appId)") else {
-            throw URLError(.badURL)
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 4
-        let (_, response) = try await URLSession.shared.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-            throw URLError(.badServerResponse)
-        }
+        try await enqueue(path: "launch/\(appId)", to: host, port: port).value
     }
 
-    /// Friendly model name from /query/device-info, e.g. "TCL Model 55S405".
-    static func modelName(on host: String, port: Int = defaultPort) async -> String? {
+    /// Device name + model from /query/device-info. The name is
+    /// `user-device-name` when the user renamed the Roku, else
+    /// `friendly-device-name` (fork's connect()).
+    struct RokuDeviceInfo {
+        let name: String?
+        let model: String?
+    }
+
+    static func deviceInfo(on host: String, port: Int = defaultPort) async -> RokuDeviceInfo? {
         guard let url = URL(string: "http://\(host):\(port)/query/device-info") else { return nil }
         do {
             var request = URLRequest(url: url)
@@ -82,16 +148,23 @@ enum RokuRemote {
             guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
                 return nil
             }
-            return RokuDeviceInfoParser.modelName(from: data)
+            let fields = RokuDeviceInfoParser.fields(from: data)
+            return RokuDeviceInfo(name: fields["user-device-name"] ?? fields["friendly-device-name"],
+                                  model: fields["model-name"])
         } catch {
             return nil
         }
     }
+
+    /// Friendly model name from /query/device-info, e.g. "TCL Model 55S405".
+    static func modelName(on host: String, port: Int = defaultPort) async -> String? {
+        await deviceInfo(on: host, port: port)?.model
+    }
 }
 
 private enum RokuAppsParser {
-    static func parse(_ data: Data) -> [RokuRemote.RokuApp] {
-        let delegate = ParserDelegate()
+    static func parse(_ data: Data, host: String, port: Int) -> [RokuRemote.RokuApp] {
+        let delegate = ParserDelegate(host: host, port: port)
         let parser = XMLParser(data: data)
         parser.delegate = delegate
         _ = parser.parse()
@@ -100,16 +173,24 @@ private enum RokuAppsParser {
 
     private final class ParserDelegate: NSObject, XMLParserDelegate {
         var apps: [RokuRemote.RokuApp] = []
+        private let host: String
+        private let port: Int
         private var currentId: String?
         private var currentVersion: String?
         private var currentText = ""
+
+        init(host: String, port: Int) {
+            self.host = host
+            self.port = port
+        }
 
         func parser(_ parser: XMLParser, didStartElement elementName: String,
                     namespaceURI: String?, qualifiedName qName: String?,
                     attributes attributeDict: [String: String] = [:]) {
             currentText = ""
             if elementName == "app" {
-                currentId = attributeDict["id"]
+                // Skip system entries like the TV tuner and HDMI inputs.
+                currentId = attributeDict["type"] == "appl" ? attributeDict["id"] : nil
                 currentVersion = attributeDict["version"]
             }
         }
@@ -122,7 +203,8 @@ private enum RokuAppsParser {
                     namespaceURI: String?, qualifiedName qName: String?) {
             if elementName == "app", let id = currentId {
                 let name = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
-                apps.append(RokuRemote.RokuApp(id: id, name: name, version: currentVersion))
+                let iconURL = URL(string: "http://\(host):\(port)/query/icon/\(id)")
+                apps.append(RokuRemote.RokuApp(id: id, name: name, version: currentVersion, iconURL: iconURL))
                 currentId = nil
                 currentVersion = nil
             }
@@ -132,37 +214,41 @@ private enum RokuAppsParser {
 }
 
 private enum RokuDeviceInfoParser {
-    static func modelName(from data: Data) -> String? {
+    static func fields(from data: Data) -> [String: String] {
         let delegate = ParserDelegate()
         let parser = XMLParser(data: data)
         parser.delegate = delegate
         _ = parser.parse()
-        return delegate.modelName
+        return delegate.fields
     }
 
     private final class ParserDelegate: NSObject, XMLParserDelegate {
-        var modelName: String?
-        private var currentElement = ""
+        var fields: [String: String] = [:]
+        private var currentElement: String?
         private var currentText = ""
 
         func parser(_ parser: XMLParser, didStartElement elementName: String,
                     namespaceURI: String?, qualifiedName qName: String?,
                     attributes attributeDict: [String: String] = [:]) {
-            currentElement = elementName
+            currentElement = ["user-device-name", "friendly-device-name", "model-name"].contains(elementName)
+                ? elementName : nil
             currentText = ""
         }
 
         func parser(_ parser: XMLParser, foundCharacters string: String) {
+            guard currentElement != nil else { return }
             currentText += string
         }
 
         func parser(_ parser: XMLParser, didEndElement elementName: String,
                     namespaceURI: String?, qualifiedName qName: String?) {
-            if elementName == "model-name" {
+            if let element = currentElement, element == elementName {
                 let value = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !value.isEmpty { modelName = value }
+                if !value.isEmpty, fields[element] == nil {
+                    fields[element] = value
+                }
             }
-            currentElement = ""
+            currentElement = nil
             currentText = ""
         }
     }

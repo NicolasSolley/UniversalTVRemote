@@ -7,8 +7,8 @@
     <key>CFBundleIdentifier</key><string>com.nicolassolley.universaltvremote</string>
     <key>CFBundleName</key><string>UniversalTVRemote</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>1.0.10</string>
-    <key>CFBundleVersion</key><string>10</string>
+    <key>CFBundleShortVersionString</key><string>1.0.11</string>
+    <key>CFBundleVersion</key><string>11</string>
     <key>LSRequiresIPhoneOS</key><true/>
     <key>NSMicrophoneUsageDescription</key><string>Hold the mic button and speak — your voice is sent to the TV so it can act on it.</string>
     <key>NSLocalNetworkUsageDescription</key><string>Find and control TVs on your local Wi-Fi network.</string>

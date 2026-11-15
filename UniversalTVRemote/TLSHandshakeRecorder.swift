@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import Network
 
 /// Raw-TLS handshake recorder (diagnostic only).
@@ -277,6 +278,7 @@ enum TLSHandshakeRecorder {
         case 80: return "internal_error"
         case 90: return "user_canceled"
         case 100: return "no_renegotiation"
+        case 109: return "missing_extension"
         case 112: return "unrecognized_name"
         default: return "unknown"
         }
@@ -320,6 +322,18 @@ enum TLSHandshakeRecorder {
         var extensions = Data()
         // supported_versions: TLS 1.3, TLS 1.2
         extensions.append(extensionBlock(0x002B, body: Data([0x04, 0x03, 0x04, 0x03, 0x03])))
+        // key_share (x25519, group 0x001D): without it, BoringSSL /
+        // Conscrypt stacks reject a TLS 1.3 hello with fatal alert 109
+        // (missing_extension) — exactly what the QM7 sent back.
+        // Ephemeral key pair, generated fresh per hello.
+        let x25519 = Curve25519.KeyAgreement.PrivateKey()
+        let publicKey = x25519.publicKey.rawRepresentation // 32 bytes
+        var keyShare = Data()
+        keyShare.append(u16(36)) // client_shares length: 2 (group) + 2 (len) + 32 (key)
+        keyShare.append(u16(0x001D)) // x25519
+        keyShare.append(u16(UInt16(publicKey.count)))
+        keyShare.append(publicKey)
+        extensions.append(extensionBlock(0x0033, body: keyShare))
         var groups = Data()
         groups.append(u16(6))
         for group in [UInt16(0x001D), 0x0017, 0x0018] { groups.append(u16(group)) }

@@ -5,11 +5,14 @@ import Security
 //
 // Protocol: WebSocket to wss://<host>:3001 (newer firmware) with a
 // self-signed certificate, falling back to ws://<host>:3000 (pre-2018).
-// First message is a `register` with LG's signed sample manifest verbatim;
-// the TV shows a pairing prompt and replies `registered` with a client-key,
-// which is stored and reused on later connects. Control requests are
-// ssap:// URIs; D-pad/buttons go over a second WebSocket (the pointer
-// input socket) as plain text `type:button\nname:UP\n\n`.
+// First message is a `register` with the simple manifest (fork's
+// LGDriver); the signed sample manifest is kept as a fallback for old
+// firmware. The TV shows a pairing prompt and replies `registered`
+// with a client-key, which is stored and reused on later connects —
+// on BOTH transports, so pre-2018 TVs (plain ws only) do not
+// re-prompt on every connect. Control requests are ssap:// URIs;
+// D-pad/buttons go over a second WebSocket (the pointer input socket)
+// as plain text `type:button\nname:UP\n\n`.
 //
 // Sources: hobbyquaker/lgtv2 pairing.json via mazen-salah
 // `lib/services/lg/lg_pairing.dart` (manifest below, verbatim), and the
@@ -45,6 +48,13 @@ enum LGError: Error, LocalizedError {
         case .blacklistOrSignature: return "The TV rejected the pairing manifest."
         }
     }
+}
+
+/// An installed LG app, as returned by listLaunchPoints.
+struct LGApp: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let iconURL: URL?
 }
 
 /// LG webOS remote control over a WebSocket connection.
@@ -151,81 +161,53 @@ actor LGRemote {
   }
 """#
 
-    /// Same manifest with the `signed` block and `signatures` removed and
-    /// all permissions merged into the outer array. Sent once, only if the
-    /// TV rejects the signed manifest with a blacklist/signature error
-    /// (webOS 26 / firmware 43.x blacklists the long-standing signed
-    /// manifest, so the signed block itself must go, not just the
-    /// signature).
-    private static let unsignedManifestJSON = #"""
+    /// Simple manifest (fork's LGDriver.register): appVersion 1.1,
+    /// manifestVersion 1, 37 permissions, no `signed` block, no
+    /// signatures. This is the PRIMARY manifest — it is what current
+    /// firmware expects. The signed manifest below is kept as the
+    /// fallback for old firmware.
+    private static let simpleManifestJSON = #"""
 {
-  "manifestVersion": 1,
   "appVersion": "1.1",
+  "manifestVersion": 1,
   "permissions": [
-    "LAUNCH",
-    "LAUNCH_WEBAPP",
     "APP_TO_APP",
     "CLOSE",
-    "TEST_OPEN",
-    "TEST_PROTECTED",
     "CONTROL_AUDIO",
     "CONTROL_DISPLAY",
     "CONTROL_INPUT_JOYSTICK",
-    "CONTROL_INPUT_MEDIA_RECORDING",
     "CONTROL_INPUT_MEDIA_PLAYBACK",
+    "CONTROL_INPUT_MEDIA_RECORDING",
+    "CONTROL_INPUT_TEXT",
     "CONTROL_INPUT_TV",
+    "CONTROL_MOUSE_AND_KEYBOARD",
     "CONTROL_POWER",
+    "CONTROL_TV_SCREEN",
+    "LAUNCH",
+    "LAUNCH_WEBAPP",
     "READ_APP_STATUS",
+    "READ_COUNTRY_INFO",
     "READ_CURRENT_CHANNEL",
     "READ_INPUT_DEVICE_LIST",
-    "READ_NETWORK_STATE",
-    "READ_RUNNING_APPS",
-    "READ_TV_CHANNEL_LIST",
-    "WRITE_NOTIFICATION_TOAST",
-    "READ_POWER_STATE",
-    "READ_COUNTRY_INFO",
-    "READ_SETTINGS",
-    "CONTROL_TV_SCREEN",
-    "CONTROL_TV_STANBY",
-    "CONTROL_FAVORITE_GROUP",
-    "CONTROL_USER_INFO",
-    "CHECK_BLUETOOTH_DEVICE",
-    "CONTROL_BLUETOOTH",
-    "CONTROL_TIMER_INFO",
-    "STB_INTERNAL_CONNECTION",
-    "CONTROL_RECORDING",
-    "READ_RECORDING_STATE",
-    "WRITE_RECORDING_LIST",
-    "READ_RECORDING_LIST",
-    "READ_RECORDING_SCHEDULE",
-    "WRITE_RECORDING_SCHEDULE",
-    "READ_STORAGE_DEVICE_LIST",
-    "READ_TV_PROGRAM_INFO",
-    "CONTROL_BOX_CHANNEL",
-    "READ_TV_ACR_AUTH_TOKEN",
-    "READ_TV_CONTENT_STATE",
-    "READ_TV_CURRENT_TIME",
-    "ADD_LAUNCHER_CHANNEL",
-    "SET_CHANNEL_SKIP",
-    "RELEASE_CHANNEL_SKIP",
-    "CONTROL_CHANNEL_BLOCK",
-    "DELETE_SELECT_CHANNEL",
-    "CONTROL_CHANNEL_GROUP",
-    "SCAN_TV_CHANNELS",
-    "CONTROL_TV_POWER",
-    "CONTROL_WOL",
-    "TEST_SECURE",
-    "CONTROL_INPUT_TEXT",
-    "CONTROL_MOUSE_AND_KEYBOARD",
     "READ_INSTALLED_APPS",
     "READ_LGE_SDX",
+    "READ_LGE_TV_INPUT_EVENTS",
+    "READ_NETWORK_STATE",
     "READ_NOTIFICATIONS",
-    "SEARCH",
-    "WRITE_SETTINGS",
-    "WRITE_NOTIFICATION_ALERT",
+    "READ_POWER_STATE",
+    "READ_RUNNING_APPS",
+    "READ_SETTINGS",
+    "READ_TV_CHANNEL_LIST",
+    "READ_TV_CURRENT_TIME",
     "READ_UPDATE_INFO",
+    "SEARCH",
+    "TEST_OPEN",
+    "TEST_PROTECTED",
+    "TEST_SECURE",
     "UPDATE_FROM_REMOTE_APP",
-    "READ_LGE_TV_INPUT_EVENTS"
+    "WRITE_NOTIFICATION_ALERT",
+    "WRITE_NOTIFICATION_TOAST",
+    "WRITE_SETTINGS"
   ]
 }
 """#
@@ -278,11 +260,10 @@ actor LGRemote {
         }
 
         do {
-            try await register(signed: true)
+            try await register(simple: true)
         } catch LGError.blacklistOrSignature {
-            // One retry with the unsigned manifest, per the reference
-            // implementations.
-            try await register(signed: false)
+            // One retry with the signed manifest, for old firmware.
+            try await register(simple: false)
         }
         isRegistered = true
         startPing()
@@ -330,18 +311,33 @@ actor LGRemote {
         try await sendButton("\(digit)")
     }
 
-    // MARK: Volume / channel / media (via ssap)
+    // MARK: Volume / channel / media
 
-    func volumeUp() async throws { try await sendCommand(uri: "ssap://audio/volumeUp") }
-    func volumeDown() async throws { try await sendCommand(uri: "ssap://audio/volumeDown") }
-    func channelUp() async throws { try await sendCommand(uri: "ssap://tv/channelUp") }
-    func channelDown() async throws { try await sendCommand(uri: "ssap://tv/channelDown") }
+    /// Volume/channel/mute go over the pointer socket's buttons
+    /// (fork's buttonName), with the ssap URI as fallback when the
+    /// pointer path fails.
+    func volumeUp() async throws {
+        do { try await sendButton("VOLUMEUP") } catch { try await sendCommand(uri: "ssap://audio/volumeUp") }
+    }
+    func volumeDown() async throws {
+        do { try await sendButton("VOLUMEDOWN") } catch { try await sendCommand(uri: "ssap://audio/volumeDown") }
+    }
+    func channelUp() async throws {
+        do { try await sendButton("CHANNELUP") } catch { try await sendCommand(uri: "ssap://tv/channelUp") }
+    }
+    func channelDown() async throws {
+        do { try await sendButton("CHANNELDOWN") } catch { try await sendCommand(uri: "ssap://tv/channelDown") }
+    }
 
-    /// Toggles mute: reads the current mute state first, then sets the opposite.
+    /// Toggles mute: pointer MUTE button first, ssap read-then-set as fallback.
     func toggleMute() async throws {
-        let state = try await request(uri: "ssap://audio/getVolume")
-        let muted = state["muted"] as? Bool ?? false
-        try await sendCommand(uri: "ssap://audio/setMute", payload: ["mute": !muted])
+        do {
+            try await sendButton("MUTE")
+        } catch {
+            let state = try await request(uri: "ssap://audio/getVolume")
+            let muted = state["muted"] as? Bool ?? false
+            try await sendCommand(uri: "ssap://audio/setMute", payload: ["mute": !muted])
+        }
     }
 
     func play() async throws { try await sendCommand(uri: "ssap://media.controls/play") }
@@ -353,9 +349,45 @@ actor LGRemote {
     /// Power off. Power-on is not available (Wake-on-LAN only, no verified MAC source).
     func powerOff() async throws { try await sendCommand(uri: "ssap://system/turnOff") }
 
-    /// Text input (native Tizen/webOS text fields).
+    /// Text input (native webOS text fields): insert, then submit with
+    /// Enter (fork's sendText + sendEnterKey).
     func sendText(_ text: String) async throws {
-        try await sendCommand(uri: "ssap://com.webos.service.ime/insertText", payload: ["text": text])
+        try await sendCommand(uri: "ssap://com.webos.service.ime/insertText",
+                              payload: ["text": text, "replace": 0])
+        try await sendCommand(uri: "ssap://com.webos.service.ime/sendEnterKey")
+    }
+
+    /// Backspace: delete one character (fork's send(.backspace)).
+    func deleteCharacters() async throws {
+        try await sendCommand(uri: "ssap://com.webos.service.ime/deleteCharacters",
+                              payload: ["count": 1])
+    }
+
+    // MARK: - Apps
+
+    /// Installed apps via listLaunchPoints (4 s timeout, fork).
+    /// Returns nil when not connected or on timeout.
+    func installedApps() async -> [LGApp]? {
+        guard socketTask != nil else { return nil }
+        do {
+            let payload = try await request(uri: "ssap://com.webos.applicationManager/listLaunchPoints",
+                                            timeout: 4)
+            let points = payload["launchPoints"] as? [[String: Any]] ?? []
+            return points.compactMap { point -> LGApp? in
+                guard let id = point["id"] as? String,
+                      let title = point["title"] as? String else { return nil }
+                let icon = (point["largeIcon"] as? String ?? point["icon"] as? String)
+                    .flatMap(URL.init(string:))
+                return LGApp(id: id, name: title, iconURL: icon)
+            }
+        } catch {
+            return nil
+        }
+    }
+
+    /// Launches an app by id (fork's launch()).
+    func launch(_ app: LGApp) async throws {
+        try await sendCommand(uri: "ssap://system.launcher/launch", payload: ["id": app.id])
     }
 
     // MARK: - Socket plumbing
@@ -380,10 +412,21 @@ actor LGRemote {
         receiveTask = Task { [weak self] in
             await self?.receiveLoop()
         }
-        // Give the handshake a few seconds. A failed handshake (connection
-        // refused, TLS failure) completes the task quickly; a still-running
-        // task means the handshake is in flight or done.
-        try await Task.sleep(nanoseconds: 3_000_000_000)
+        // Wait for the handshake to settle — but fail fast when the
+        // socket closes before opening (fork's onClose-driven
+        // fallback): a refused wss connection fails in milliseconds,
+        // so the caller can retry plaintext immediately instead of
+        // waiting out a blind 3 s sleep. The 3 s bound stays: a
+        // handshake still in flight at the deadline proceeds to
+        // register, as before.
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            if UserDefaults.standard.bool(forKey: mismatchKey) {
+                throw LGError.certificateChanged
+            }
+            guard task.state != .completed else { throw LGError.notConnected }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
         if UserDefaults.standard.bool(forKey: mismatchKey) {
             throw LGError.certificateChanged
         }
@@ -418,15 +461,18 @@ actor LGRemote {
 
     /// Sends the register message and waits for the `registered` reply
     /// (up to 60 seconds for the user to accept the TV prompt).
-    private func register(signed: Bool) async throws {
+    private func register(simple: Bool) async throws {
         var payloadParts: [String] = [
             "\"forcePairing\":false",
             "\"pairingType\":\"PROMPT\"",
         ]
-        if isSecureConnection, let key = UserDefaults.standard.string(forKey: clientKeyKey) {
+        // Send the stored client-key on BOTH transports: on pre-2018
+        // TVs (plain ws://:3000 only) omitting it re-triggers the
+        // pairing prompt on every connect (fork's register()).
+        if let key = UserDefaults.standard.string(forKey: clientKeyKey) {
             payloadParts.append("\"client-key\":\(jsonString(key))")
         }
-        let manifest = signed ? Self.signedManifestJSON : Self.unsignedManifestJSON
+        let manifest = simple ? Self.simpleManifestJSON : Self.signedManifestJSON
         payloadParts.append("\"manifest\":\(manifest)")
         let message = "{\"type\":\"register\",\"id\":\"reg\",\"payload\":{\(payloadParts.joined(separator: ","))}}"
 
@@ -460,8 +506,10 @@ actor LGRemote {
         }
     }
 
-    /// Sends an ssap request and waits for its response (up to 5 seconds).
-    private func request(uri: String, payload: [String: Any]? = nil) async throws -> [String: Any] {
+    /// Sends an ssap request and waits for its response (up to
+    /// `timeout` seconds, default 5).
+    private func request(uri: String, payload: [String: Any]? = nil,
+                         timeout: TimeInterval = 5) async throws -> [String: Any] {
         requestId += 1
         let id = "\(requestId)"
         var message: [String: Any] = ["id": id, "type": "request", "uri": uri]
@@ -479,7 +527,7 @@ actor LGRemote {
                 }
             }
             group.addTask {
-                try await Task.sleep(nanoseconds: 5_000_000_000)
+                try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
                 if let continuation = await self.takePendingContinuation(id: id) {
                     continuation.resume(throwing: LGError.timeout)
                 }
@@ -501,10 +549,26 @@ actor LGRemote {
     }
 
     /// Sends a button press over the pointer input socket, opening it first
-    /// if needed.
+    /// if needed. Waits up to 4 s for the pointer socket to be ready
+    /// (fork's sendInteractive deadline) before sending.
     private func sendButton(_ name: String) async throws {
         let pointer = try await pointerSocket()
+        try await waitForPointerReady(pointer)
         try await pointer.send(.string("type:button\nname:\(name)\n\n"))
+    }
+
+    /// Bounded readiness wait for the pointer socket. URLSession
+    /// WebSocketTask has no open callback — sends queue until the
+    /// handshake completes — so this is a liveness check, not a
+    /// handshake wait: fail fast if the socket died, return at once
+    /// once it is running.
+    private func waitForPointerReady(_ pointer: URLSessionWebSocketTask) async throws {
+        let deadline = Date().addingTimeInterval(4)
+        while Date() < deadline {
+            if pointer.state == .completed { throw LGError.notConnected }
+            if pointer.state == .running { return }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
     }
 
     /// Returns the open pointer input socket, opening it first if needed.

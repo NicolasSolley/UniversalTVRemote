@@ -100,6 +100,9 @@ actor AndroidTVRemote {
         case info = 165
         case channelUp = 166
         case channelDown = 167
+        case backspace = 67
+        case search = 84
+        case input = 178
 
         static func digit(_ n: Int) -> Key? {
             Key(rawValue: 7 + n)
