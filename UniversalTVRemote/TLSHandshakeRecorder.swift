@@ -115,7 +115,11 @@ enum TLSHandshakeRecorder {
                 }
                 return "unexpected application-data record before ServerHello"
             case 20:
-                return "unexpected change_cipher_spec record before ServerHello"
+                // change_cipher_spec: legal anywhere after ClientHello
+                // (RFC 8446 §5) — the QM7 sends one before ServerHello.
+                // Drop it and keep parsing the rest of the flight
+                // instead of stopping here.
+                break
             default:
                 return "unexpected first record type \(type)"
             }

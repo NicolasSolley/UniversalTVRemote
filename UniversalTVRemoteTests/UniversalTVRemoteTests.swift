@@ -314,6 +314,23 @@ final class TLSHandshakeRecorderTests: XCTestCase {
         XCTAssertEqual(summary, "alert fatal 70 (protocol_version)")
     }
 
+    func testSummarizeSkipsChangeCipherSpecBeforeServerHello() throws {
+        // A change_cipher_spec before ServerHello is legal (RFC 8446
+        // §5) — the QM7 sends one. It is dropped and parsing continues
+        // to the ServerHello + Certificate that follow.
+        let der = try mintedCert()
+        let ccs = tlsRecord(type: 0x14, payload: Data([0x01]))
+        let bytes = ccs
+            + tlsRecord(type: 0x16, payload: serverHello(version: 0x0303, cipher: 0xC02F))
+            + tlsRecord(type: 0x16, payload: certificateMessage(certDER: der))
+        let summary = try XCTUnwrap(TLSHandshakeRecorder.summarize(bytes))
+        XCTAssertTrue(summary.contains("TLS 1.2"), summary)
+        XCTAssertTrue(summary.contains("1 cert"), summary)
+        XCTAssertTrue(summary.contains("CN=UniversalTVRemote"), summary)
+        // A lone CCS settles nothing — more bytes are needed.
+        XCTAssertNil(TLSHandshakeRecorder.summarize(ccs))
+    }
+
     func testSummarizeNeedsMoreData() {
         XCTAssertNil(TLSHandshakeRecorder.summarize(Data()))
         XCTAssertNil(TLSHandshakeRecorder.summarize(Data([0x16, 0x03])))

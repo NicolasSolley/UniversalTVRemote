@@ -960,6 +960,26 @@ actor AndroidTVRemote {
 
 // MARK: - TLS connection helper
 
+/// Mutable state shared with the TLS verify block. The block must be
+/// installed on the TLS options in `init`, before the NWConnection is
+/// created: Network.framework snapshots the options at connection
+/// creation, so a block set later (in `start()`, as v1.0.7–v1.0.12
+/// did) silently never fires and default trust evaluation rejects the
+/// TV's self-signed certificate with -9808 before the certificate
+/// ever reaches us. The block cannot capture `self` in `init` (the
+/// connection is not assigned yet), so it captures this box instead —
+/// the reference app's CertificateBox pattern.
+private final class TLSVerifyState: @unchecked Sendable {
+    let expectedServerCertificateDER: Data?
+    var serverCertificateSeen = false
+    var pinMismatch = false
+    var onServerCertificate: ((Data) -> Void)?
+
+    init(expectedServerCertificateDER: Data?) {
+        self.expectedServerCertificateDER = expectedServerCertificateDER
+    }
+}
+
 /// A mutual-TLS connection that delivers complete varint-framed protobuf
 /// messages via `onMessage`. Accepts any server certificate on first
 /// trust (TVs use self-signed ones) and reports the presented
@@ -972,23 +992,30 @@ final class TLSConnection {
     var onMessage: ((Data) -> Void)?
     var onReady: (() -> Void)?
     var onFailure: ((Error) -> Void)?
-    var onServerCertificate: ((Data) -> Void)?
+    /// Backed by the verify state (set by the actor after init; read
+    /// by the verify block during the handshake).
+    var onServerCertificate: ((Data) -> Void)? {
+        get { verifyState.onServerCertificate }
+        set { verifyState.onServerCertificate = newValue }
+    }
 
     private let connection: NWConnection
-    private let tlsOptions: NWProtocolTLS.Options
+    /// State shared with the verify block; the block writes the
+    /// presented certificate, the pin verdict, and the seen flag here.
+    private let verifyState: TLSVerifyState
     private var buffer = Data()
     private var stopped = false
     /// True once the TV presented its certificate during the handshake.
-    var serverCertificateSeen = false
+    var serverCertificateSeen: Bool { verifyState.serverCertificateSeen }
     /// The error the connection failed with, if any.
     var lastFailure: Error?
     /// The pinned server-certificate DER for this host, if one is
     /// stored. Nil means trust on first use (pairing / first connect).
-    let expectedServerCertificateDER: Data?
+    var expectedServerCertificateDER: Data? { verifyState.expectedServerCertificateDER }
     /// True when the handshake failed because the TV presented a
     /// certificate different from the pin (or none at all while a pin
     /// is set). Read by the actor to surface a distinct error.
-    var pinMismatch = false
+    var pinMismatch: Bool { verifyState.pinMismatch }
 
     /// Whether the presented server certificate satisfies the pin: any
     /// certificate is accepted when no pin is set (trust on first use);
@@ -1024,8 +1051,47 @@ final class TLSConnection {
         // (older examples show a three-argument form that no longer exists).
         sec_protocol_options_set_local_identity(
             tlsOptions.securityProtocolOptions, secIdentity)
-        self.tlsOptions = tlsOptions
-        self.expectedServerCertificateDER = expectedServerCertificateDER
+        // The verify block is installed HERE, before the NWConnection
+        // is created: Network.framework snapshots the TLS options at
+        // connection creation, so a block set later in start() silently
+        // never fires and default trust evaluation rejects the TV's
+        // self-signed certificate with -9808. The block writes into
+        // the shared verify state (it cannot capture self — the
+        // connection is not assigned yet). The trust is read the
+        // reference app's way (sec_trust_copy_ref +
+        // SecTrustCopyCertificateChain, leaf first), on the main queue,
+        // like the reference app. It reports the presented certificate
+        // DER so pairing can hash it, and enforces the pin when one is
+        // set: with no pin (trust on first use) any certificate is
+        // accepted; with a pin, only the exact pinned DER is accepted,
+        // and a mismatch fails the handshake and is flagged via
+        // `pinMismatch` — never silently accepted.
+        let verifyState = TLSVerifyState(expectedServerCertificateDER: expectedServerCertificateDER)
+        sec_protocol_options_set_verify_block(
+            tlsOptions.securityProtocolOptions, { _, trust, complete in
+                let secTrust = sec_trust_copy_ref(trust).takeRetainedValue()
+                if let chain = SecTrustCopyCertificateChain(secTrust) as? [SecCertificate],
+                   let certificate = chain.first {
+                    let der = SecCertificateCopyData(certificate) as Data
+                    verifyState.serverCertificateSeen = true
+                    verifyState.onServerCertificate?(der)
+                    if !TLSConnection.certificateMatchesPin(presentedDER: der,
+                                                            expectedDER: verifyState.expectedServerCertificateDER) {
+                        verifyState.pinMismatch = true
+                        complete(false)
+                        return
+                    }
+                } else if verifyState.expectedServerCertificateDER != nil {
+                    // A pin is set but the TV presented no certificate at
+                    // all: fail closed rather than accepting a
+                    // certificate-less handshake.
+                    verifyState.pinMismatch = true
+                    complete(false)
+                    return
+                }
+                complete(true)
+            }, .main)
+        self.verifyState = verifyState
         // TCP options mirror the reference app: a 6s connect timeout and
         // noDelay. No service class is set (the reference sets none).
         let tcpOptions = NWProtocolTCP.Options()
@@ -1038,13 +1104,17 @@ final class TLSConnection {
     }
 
     /// No-identity TLS connection (diagnostic probe only): same TLS
-    /// options and verify block as the mutual-TLS path, but no client
-    /// certificate is presented, so SecureTransport has nothing of ours
-    /// to reject. Never used for pairing or control.
+    /// options as the mutual-TLS path, but no client certificate is
+    /// presented and no verify block is installed, so SecureTransport
+    /// has nothing of ours to reject and default trust applies. Never
+    /// used for pairing or control.
     init(host: String, port: UInt16) {
         let tlsOptions = Self.baseTLSOptions()
-        self.tlsOptions = tlsOptions
-        self.expectedServerCertificateDER = nil
+        // No verify block here (unchanged): this probe intentionally
+        // presents no client certificate and uses default trust, so a
+        // failure identical to the mutual-TLS path shows the failure
+        // is not about our client identity.
+        self.verifyState = TLSVerifyState(expectedServerCertificateDER: nil)
         let tcpOptions = NWProtocolTCP.Options()
         tcpOptions.connectionTimeout = 6
         tcpOptions.noDelay = true
@@ -1055,46 +1125,16 @@ final class TLSConnection {
     }
 
     func start() {
-        // The verify block must be set before the handshake starts, but it
-        // cannot be created in init: it captures self, and self is not
-        // fully initialized until `connection` is assigned. Setting it
-        // here (still before connection.start) takes effect for the
-        // handshake. It reports the presented certificate DER so pairing
-        // can hash it, and enforces the pin when one is set: with no pin
-        // (trust on first use) any certificate is accepted; with a pin,
-        // only the exact pinned DER is accepted, and a mismatch fails
-        // the handshake and is flagged via `pinMismatch` — never
-        // silently accepted. The trust is read the reference app's way
-        // (sec_trust_copy_ref + SecTrustCopyCertificateChain, leaf
-        // first), on the main queue, like the reference app.
-        sec_protocol_options_set_verify_block(
-            tlsOptions.securityProtocolOptions, { [weak self] _, trust, complete in
-                let secTrust = sec_trust_copy_ref(trust).takeRetainedValue()
-                if let chain = SecTrustCopyCertificateChain(secTrust) as? [SecCertificate],
-                   let certificate = chain.first {
-                    let der = SecCertificateCopyData(certificate) as Data
-                    self?.serverCertificateSeen = true
-                    self?.onServerCertificate?(der)
-                    if !Self.certificateMatchesPin(presentedDER: der,
-                                                   expectedDER: self?.expectedServerCertificateDER) {
-                        self?.pinMismatch = true
-                        complete(false)
-                        return
-                    }
-                } else if self?.expectedServerCertificateDER != nil {
-                    // A pin is set but the TV presented no certificate at
-                    // all: fail closed rather than accepting a
-                    // certificate-less handshake.
-                    self?.pinMismatch = true
-                    complete(false)
-                    return
-                }
-                complete(true)
-            }, .main)
+        // The verify block is installed in init, before the NWConnection
+        // is created — setting it here would silently never fire.
         connection.stateUpdateHandler = { [weak self] state in
             guard let self, !self.stopped else { return }
             switch state {
             case .ready:
+                // Start receiving only once the handshake has completed,
+                // like the reference app — receiving before .ready races
+                // the handshake.
+                self.receiveLoop()
                 self.onReady?()
             case .failed(let error):
                 self.lastFailure = error
@@ -1114,7 +1154,6 @@ final class TLSConnection {
             }
         }
         connection.start(queue: .main)
-        receiveLoop()
     }
 
     func send(_ data: Data) {
