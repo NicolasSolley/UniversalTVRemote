@@ -259,11 +259,16 @@ final class SubnetSweep {
 
     /// LG webOS: BOTH the wss (3001) and ws (3000) ports must be open.
     /// A lone :3000 is often a dev server, not a TV. Port 3001 alone
-    /// is not enough either — the pair is the webOS signal.
+    /// is not enough either — the pair is the webOS signal. (The two
+    /// results are awaited into locals first: `&&` takes its operands
+    /// as autoclosures, and an `async let` variable cannot be captured
+    /// in an autoclosure.)
     private static func probeLGPort(host: String) async -> Bool {
         async let plain = tcpPortOpen(host: host, port: 3000)
         async let secure = tcpPortOpen(host: host, port: 3001)
-        return await plain && secure
+        let plainOpen = await plain
+        let secureOpen = await secure
+        return plainOpen && secureOpen
     }
 
     /// TCP connect with a hard timeout, via a non-blocking connect +

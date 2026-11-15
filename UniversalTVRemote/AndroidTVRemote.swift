@@ -181,64 +181,101 @@ actor AndroidTVRemote {
         lastTCPCheck = nil
         lastNoIdentityProbe = nil
         lastHandshakeRecord = nil
-        // Diagnostic only, run first: the sweep proved BSD sockets +
-        // URLSession reach the TV from the guest, but the control path
-        // uses NWConnection. If plain NW TCP also fails, the guest's
-        // Network.framework path is broken — not the TLS handshake.
-        // Cheap when healthy (ready arrives in milliseconds); 3s worst
-        // case. Never thrown; the note is only surfaced if pairing fails.
+        // Paired before if the flag survived, or if a pin is stored:
+        // the pin is set when pairing succeeds, so it covers a lost
+        // flag too. The real connection is attempted FIRST — no probes
+        // run before it. The fork goes straight to the connection and
+        // never probes; ours used to run three failed handshakes
+        // (plain-TCP check, no-identity probe, recorder) before the
+        // real attempt, and the TV may treat those as the connection.
+        let paired = UserDefaults.standard.bool(forKey: "androidtv.paired.\(host)")
+            || AndroidTVPinStore.pinnedCertificateDER(for: host) != nil
+
+        if paired {
+            // Try the remote session first: if the TV already trusts our
+            // certificate, this just works — no code prompt. The session enforces the pinned
+            // server certificate when one is stored for this host, and pins
+            // the certificate on a first successful connection. (Previously
+            // a paired TV went straight to pairing, which would demand a
+            // code on every reconnect and silently re-pin over a changed
+            // certificate — both wrong now that pinning exists.)
+            do {
+                try await openRemoteSession(host: host, timeout: 10)
+                UserDefaults.standard.set(true, forKey: "androidtv.paired.\(host)")
+                return
+            } catch let error as AndroidTVError {
+                // A pin mismatch is not a pairing problem: re-pairing here
+                // would silently overwrite the pin, so surface it instead
+                // and let the user forget the TV and pair again.
+                if case .certificateChanged = error {
+                    disconnect()
+                    throw error
+                }
+                lastProbeNote = "Probe: \(error.localizedDescription)"
+                disconnect()
+            } catch {
+                lastProbeNote = "Probe: \(error.localizedDescription)"
+                disconnect()
+            }
+            // The real attempt failed: run the diagnostics now, before
+            // re-pairing. Their notes are appended to the status if
+            // pairing then fails too.
+            await runDiagnostics(host: host)
+        }
+        // Unpaired, or the paired session failed: pair on 6467 first.
+        // The fork never touches 6466 before pairing, and neither do
+        // we now — the old session-first attempt was an extra failed
+        // handshake on a TV that has never seen our certificate.
+        do {
+            try await pair(host: host, codeProvider: codeProvider)
+        } catch {
+            // Pairing failed: run the diagnostics so the failure
+            // readout is complete.
+            await runDiagnostics(host: host)
+            disconnect()
+            throw error
+        }
+        do {
+            try await openRemoteSession(host: host, timeout: 10)
+        } catch {
+            // The session failed after pairing: run the diagnostics so
+            // the failure readout is complete.
+            await runDiagnostics(host: host)
+            disconnect()
+            throw error
+        }
+        UserDefaults.standard.set(true, forKey: "androidtv.paired.\(host)")
+    }
+
+    /// Diagnostic probes, run ONLY on the failure path: a plain-TCP
+    /// reachability check, a TLS handshake with no client identity,
+    /// and the raw-TLS handshake recorder on both ports. Their notes
+    /// are appended to the status if the connection then fails, exactly
+    /// as when they ran first. Never thrown; notes only, never changes
+    /// the control path. Runs once per connect — a second failure in
+    /// the same attempt reuses the first readout.
+    private func runDiagnostics(host: String) async {
+        guard lastTCPCheck == nil else { return }
+        // The sweep proved BSD sockets + URLSession reach the TV from
+        // the guest, but the control path uses NWConnection. If plain
+        // NW TCP also fails, the guest's Network.framework path is
+        // broken — not the TLS handshake. Cheap when healthy (ready
+        // arrives in milliseconds); 3s worst case. Never thrown.
         lastTCPCheck = await Self.plainTCPCheck(host: host, port: 6467)
-        // Diagnostic only, same pattern: a TLS handshake to the pairing
-        // port with NO client identity. If the TV presents its
-        // certificate here while the mutual-TLS handshake dies with
-        // errSSLBadCert (-9808), SecureTransport is rejecting OUR client
-        // identity — not the TV. Never thrown; note only, never changes
-        // the control path. 5s worst case, milliseconds when healthy.
+        // A TLS handshake to the pairing port with NO client identity.
+        // If the TV presents its certificate here while the mutual-TLS
+        // handshake dies with errSSLBadCert (-9808), SecureTransport
+        // is rejecting OUR client identity — not the TV. Never thrown.
+        // 5s worst case, milliseconds when healthy.
         lastNoIdentityProbe = await Self.noIdentityTLSProbe(host: host, port: 6467)
-        // Diagnostic only, same pattern: a raw-TLS handshake recorder
-        // that sends its own ClientHello over plain TCP and reports
-        // what the TV sends back. Both ports run at once (async let)
-        // so the worst case is one 5s timeout, not two. Never thrown;
-        // notes only, never changes the control path.
+        // A raw-TLS handshake recorder that sends its own ClientHello
+        // over plain TCP and reports what the TV sends back. Both ports
+        // run at once (async let) so the worst case is one 5s timeout,
+        // not two. Never thrown; notes only.
         async let record6467 = TLSHandshakeRecorder.record(host: host, port: 6467)
         async let record6466 = TLSHandshakeRecorder.record(host: host, port: 6466)
         let (rec6467, rec6466) = await (record6467, record6466)
         lastHandshakeRecord = "\(rec6467) \(rec6466)"
-
-        // Try the remote session first: if the TV already trusts our
-        // certificate (paired before, or the local flag was lost), this
-        // just works — no code prompt. The session enforces the pinned
-        // server certificate when one is stored for this host, and pins
-        // the certificate on a first successful connection. (Previously
-        // a paired TV went straight to pairing, which would demand a
-        // code on every reconnect and silently re-pin over a changed
-        // certificate — both wrong now that pinning exists.)
-        do {
-            try await openRemoteSession(host: host, timeout: 10)
-            UserDefaults.standard.set(true, forKey: "androidtv.paired.\(host)")
-            return
-        } catch let error as AndroidTVError {
-            // A pin mismatch is not a pairing problem: re-pairing here
-            // would silently overwrite the pin, so surface it instead
-            // and let the user forget the TV and pair again.
-            if case .certificateChanged = error {
-                disconnect()
-                throw error
-            }
-            lastProbeNote = "Probe: \(error.localizedDescription)"
-            disconnect()
-        } catch {
-            lastProbeNote = "Probe: \(error.localizedDescription)"
-            disconnect()
-        }
-        do {
-            try await pair(host: host, codeProvider: codeProvider)
-        } catch {
-            disconnect()
-            throw error
-        }
-        try await openRemoteSession(host: host, timeout: 10)
-        UserDefaults.standard.set(true, forKey: "androidtv.paired.\(host)")
     }
 
     /// Forget a TV: clears its pinned server certificate and the paired
