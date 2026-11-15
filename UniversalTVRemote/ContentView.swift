@@ -358,6 +358,7 @@ private struct RemoteView: View {
     @State private var keyboardText = ""
     @State private var showKeyboard = false
     @FocusState private var keyboardFocused: Bool
+    @FocusState private var pairingCodeFocused: Bool
 
     var body: some View {
         // No ScrollView on the remote (v1.0.15): everything fits on one
@@ -373,31 +374,35 @@ private struct RemoteView: View {
             VStack(spacing: layout.gap) {
                 topBar(layout)
 
-                // Pairing code (Android TV): the TV shows a 6-character code.
+                // Pairing code (Android TV): the TV shows a code.
+                // Restyled in v1.0.21 to match the remote's dark UI —
+                // the old teal card clashed with everything else.
                 if session.awaitingPairingCode {
                     VStack(spacing: layout.pairingCardSpacing) {
                         Text("Enter the code shown on your TV")
                             .font(.headline)
-                        Text("It has 6 characters (letters and numbers).")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.white)
                         HStack {
                             TextField("Code", text: $session.pairingCode)
-                                .textFieldStyle(.roundedBorder)
+                                .font(.system(.title3, design: .monospaced))
+                                .multilineTextAlignment(.center)
                                 .autocorrectionDisabled(true)
                                 .textInputAutocapitalization(.characters)
                                 .keyboardType(.asciiCapable)
-                                .multilineTextAlignment(.center)
+                                .focused($pairingCodeFocused)
+                                .padding(.vertical, 10)
+                                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.08), lineWidth: 1))
                             Button("Pair") { session.submitPairingCode() }
                                 .buttonStyle(.borderedProminent)
+                                .tint(remoteAccent)
                         }
-                        Button("Cancel", role: .cancel) { session.cancelPairing() }
-                            .buttonStyle(.bordered)
                     }
                     .padding(layout.pairingCardPadding)
-                    .background(Color.cyan.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.cyan.opacity(0.25), lineWidth: 1))
+                    .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
+                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.08), lineWidth: 1))
                     .padding(.horizontal)
+                    .onAppear { pairingCodeFocused = true }
                 }
 
                 // Keyboard / text input, revealed by the keyboard

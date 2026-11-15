@@ -359,7 +359,6 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
         isRecordingVoice = false
         androidTVDriver?.flushVoiceBuffer(sessionId: id)
         androidTVDriver?.sendVoiceEnd(sessionId: id)
-        status = "Sent."
     }
 
     /// Stop capture and drop all voice state without sending
@@ -430,11 +429,9 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
             case .airPlay, .other:
                 return
             }
-            if case .text = command {
-                status = "Text sent."
-            } else {
-                status = "Sent."
-            }
+            // A successful send leaves `status` untouched — the TV
+            // reflecting the change is the confirmation, so nothing
+            // flashes "Sent." at the bottom after every press.
         } catch let error as SamsungRemote.SamsungError {
             status = error.localizedDescription
         } catch let error as RokuRemote.RokuError {
