@@ -48,24 +48,26 @@ Only real responses are shown. Nothing is invented or guessed.
 | Roku (TVs and sticks) | Yes | Power, volume, mute, channels, D-pad, home, back, info, search, playback, text input, app launching |
 | Samsung Smart TV (Tizen, 2016+) | Yes | Power (Wake-on-LAN fallback if the MAC is known), volume, mute, channels, D-pad, digits, home, back, info, menu, playback, text input in native Tizen fields. First connect shows an Allow prompt on the TV; the token is stored and reused |
 | LG webOS | Yes | Power off only, volume, mute, channels, D-pad, digits, home, back, info, menu, playback, text input. First connect shows a pairing prompt on the TV; the client-key is stored and reused. The TV's certificate is pinned after first pairing — if it changes, forget the TV and pair again |
-| Android TV / Google TV | Yes | Power, volume, mute, channels, D-pad, digits, home, back, info, menu, playback. First connect shows a 6-character code on the TV that you type into the app (Android TV Remote protocol v2, mutual TLS). Connection, pairing and control are the fork's code verbatim — [open-tv-remote](https://github.com/iamnbutler/open-tv-remote) (MIT License, Copyright (c) 2026 Nathan Butler) driver, protocol and delegate, with only this app's UI on top (v1.0.16; v1.0.15 had ported the same code but wrapped it in an adapter with its own timeout and certificate pinning, and pairing still failed). Text input is implemented in the driver but the keyboard stays hidden until it is verified on a real TV |
+| Android TV / Google TV | Yes | Power, volume, mute, channels, D-pad, digits, home, back, info, menu, playback. First connect shows a 6-character code on the TV that you type into the app (Android TV Remote protocol v2, mutual TLS). Connection, pairing and control are the fork's code verbatim — [open-tv-remote](https://github.com/iamnbutler/open-tv-remote) (MIT License, Copyright (c) 2026 Nathan Butler) driver, protocol and delegate, with only this app's UI on top (v1.0.16; v1.0.15 had ported the same code but wrapped it in an adapter with its own timeout and certificate pinning, and pairing still failed). The pairing is remembered across relaunches: the client identity is backed up to the app container and the paired flag is mirrored there too, because LiveContainer's guest Keychain/UserDefaults do not reliably persist (v1.0.18). Text input is implemented in the driver but the keyboard stays hidden until it is verified on a real TV |
 | AirPlay-compatible devices | Discovery only | There is no public remote-control API for arbitrary AirPlay devices, so these are listed but cannot be controlled |
 
 A button that cannot work on a platform is absent, never shown dead.
 Pairing credentials (Samsung token, LG client-key and certificate pin,
 Android TV identity) stay on the device — Samsung/LG in UserDefaults,
-the Android TV keypair in the Keychain.
+the Android TV keypair in the Keychain, backed up to the app container
+along with the paired flag so the pairing survives a relaunch
+(LiveContainer's guest Keychain/UserDefaults do not reliably persist).
 
 ## The remote
 
-- **Touchpad** (drag to move, tap to select) or **D-pad** — switch with
-  the segmented control, like the EVOLLY app.
-- Volume and channel rockers, mute, back, home, menu, playback controls.
+- **Swipe pad** (drag to move, tap to select) — the one navigation
+  control. No D-pad, no toggle.
+- Big volume rocker (hold to repeat) and mute, back, home, menu.
+  No playback row — left/right swipes already seek.
 - Number pad (Samsung, LG, Android TV).
 - Keyboard for text input where the platform supports it (Roku, Samsung,
   LG). Samsung text works only in native Tizen fields, not inside
   streaming apps' own search screens.
-- Roku: installed apps are listed and can be launched directly.
 - Every failure is plain language: unreachable TV, pairing rejected,
   pairing timed out, certificate changed.
 

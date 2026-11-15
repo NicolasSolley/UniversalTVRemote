@@ -227,31 +227,30 @@ private let remoteAccent = Color(red: 0.15, green: 0.45, blue: 1.0)
 
 /// Remote, redesigned in v1.0.12. The fork's remote screen is the
 /// design inspiration, not a template: a top bar (Devices pill, TV
-/// name, power, gear), a Connected pill, a wide D-Pad | Swipe toggle,
-/// then the navigation area, a playback row, a Back/Home/Exit pill
-/// row, and a bottom row (Volume rocker, mic or keyboard, Mute), with
-/// app shortcuts and the diagnostic status text below. Dark with a
-/// blue accent. No ads,
+/// name, power, gear), a Connected pill, then the navigation area, a
+/// Back/Home/Exit pill row, and a bottom row (Volume rocker, keyboard,
+/// Mute), with the diagnostic status text below. Dark with a blue
+/// accent. No ads,
 /// no promos, no cast button, no tab bar.
-/// What stays ours: the D-pad is the default navigation (big circular
-/// pad, 230×230, annular sectors + 84pt OK); the playback row stays
-/// even though the reference has none; the mic is hold-to-talk and
-/// Android TV only; app shortcut cards stay where launching works.
+/// What stays ours: the mic is hold-to-talk and Android TV only.
 /// Dropped to keep the layout clean: the number pad and the channel
 /// rocker (use the TV's own remote or the on-screen guide for
-/// channels). Play/Pause is one button with a local toggle: it assumes
-/// the TV is playing, so the first tap sends Pause, then it alternates
-/// — the TV's real play state is not tracked.
+/// channels), the app shortcut cards (v1.0.18 — the space went to the
+/// volume and mute buttons instead; launching still works in code, the
+/// row is just gone), and the playback row (v1.0.18 — left/right swipes
+/// already seek, so it was redundant with the swipe pad as master
+/// control; the play/pause/seek commands stay in code and the row can
+/// come back if missed).
 /// Sizing for the non-scrollable remote screen (v1.0.15: the remote page
-/// never scrolls). Every section has a budgeted height, the D-pad / swipe
-/// pad absorbs whatever height is left (down to a floor), and on short
+/// never scrolls). Every section has a budgeted height, the swipe pad
+/// absorbs whatever height is left (down to a floor), and on short
 /// screens the bottom row, buttons and spacing shrink too. Nothing is
 /// dropped — the only things that hide are the diagnostic line (while the
 /// pairing card or keyboard is up, since they show the status themselves)
 /// and the LG power note on the shortest screens (it also lives in
 /// Settings). Validated against iPhone 15 Plus (845pt), iPhone 13 mini
-/// (731pt) and iPhone SE (647pt) usable heights, with and without apps,
-/// pairing card and keyboard — every combination fits.
+/// (731pt) and iPhone SE (647pt) usable heights, with pairing card and
+/// keyboard — every combination fits.
 private struct RemoteLayout {
     var gap: CGFloat
     var topPadding: CGFloat
@@ -259,19 +258,17 @@ private struct RemoteLayout {
     var pairingCardPadding: CGFloat
     var pairingCardSpacing: CGFloat
     var padSize: CGFloat
-    var transportSize: CGFloat
-    var playSize: CGFloat
     var pillsButtonHeight: CGFloat
-    var appsButtonHeight: CGFloat
     var bottomCell: CGFloat
     var circleSize: CGFloat
+    var rockerWidth: CGFloat
     var rockerButtonHeight: CGFloat
     var diagnosticLines: Int
     var showDiagnostic: Bool
     var showLGNote: Bool
 
-    static func make(height h: CGFloat, hasApps: Bool, pairingShown: Bool,
-                     keyboardShown: Bool, isLG: Bool, hasPlayback: Bool) -> RemoteLayout {
+    static func make(height h: CGFloat, pairingShown: Bool,
+                     keyboardShown: Bool, isLG: Bool) -> RemoteLayout {
         let compact = h < 760
         let extraCompact = h < 680
         let gap: CGFloat = extraCompact ? 6 : (compact ? 8 : 10)
@@ -279,14 +276,17 @@ private struct RemoteLayout {
         let topBarButton: CGFloat = extraCompact ? 40 : 44
         let pairingCardPadding: CGFloat = extraCompact ? 10 : (compact ? 12 : 14)
         let pairingCardSpacing: CGFloat = extraCompact ? 8 : (compact ? 9 : 10)
-        let transportSize: CGFloat = extraCompact ? 48 : (compact ? 52 : 56)
-        let playSize: CGFloat = extraCompact ? 56 : (compact ? 60 : 64)
         let pillsButtonHeight: CGFloat = extraCompact ? 44 : (compact ? 48 : 56)
-        let appsButtonHeight: CGFloat = extraCompact ? 44 : (compact ? 48 : 56)
+        // The apps row is gone (v1.0.18), so its height goes to the
+        // bottom row instead: volume and mute get much bigger. While
+        // the pairing card is up the bottom row stays compact — the
+        // card is the focus then, and the tall row would overflow
+        // short screens.
         let bottomCell: CGFloat = pairingShown ? (extraCompact ? 90 : 110)
-            : (extraCompact ? 110 : (compact ? 130 : 140))
-        let circleSize = min(88, bottomCell * 0.55)
-        let rockerButtonHeight = max(36, min(60, bottomCell * 0.40))
+            : (extraCompact ? 184 : (compact ? 208 : 226))
+        let circleSize = min(112, bottomCell * 0.55)
+        let rockerWidth: CGFloat = extraCompact ? 88 : (compact ? 96 : 104)
+        let rockerButtonHeight = max(36, min(80, bottomCell * 0.40))
         let showDiagnostic = !pairingShown && !keyboardShown
         let diagnosticLines = compact ? 2 : 3
         let showLGNote = isLG && !extraCompact
@@ -297,18 +297,14 @@ private struct RemoteLayout {
         if keyboardShown { fixed += extraCompact ? 36 : (compact ? 40 : 44) }
         fixed += 38 // connection pill
         if showLGNote { fixed += 16 }
-        if hasPlayback { fixed += playSize }
         fixed += pillsButtonHeight + 6 + 16 // pills row + label
-        if hasApps { fixed += 22 + 8 + appsButtonHeight } // "Apps" + buttons
         fixed += bottomCell + 6 + 16 // bottom row + labels
         if showDiagnostic { fixed += CGFloat(diagnosticLines) * 17 }
         // Gaps between sections.
-        var sections = 7 // topBar, pill, pad, playback, pills, bottom, diagnostic
+        var sections = 6 // topBar, pill, pad, pills, bottom, diagnostic
         if pairingShown { sections += 1 }
         if keyboardShown { sections += 1 }
         if showLGNote { sections += 1 }
-        if hasApps { sections += 1 }
-        if !hasPlayback { sections -= 1 }
         if !showDiagnostic { sections -= 1 }
         let gaps = CGFloat(sections - 1) * gap
         // The pad absorbs the rest, down to a floor (lower while the
@@ -320,10 +316,10 @@ private struct RemoteLayout {
 
         return RemoteLayout(gap: gap, topPadding: topPadding, topBarButton: topBarButton,
                             pairingCardPadding: pairingCardPadding, pairingCardSpacing: pairingCardSpacing,
-                            padSize: padSize, transportSize: transportSize, playSize: playSize,
-                            pillsButtonHeight: pillsButtonHeight, appsButtonHeight: appsButtonHeight,
+                            padSize: padSize,
+                            pillsButtonHeight: pillsButtonHeight,
                             bottomCell: bottomCell, circleSize: circleSize,
-                            rockerButtonHeight: rockerButtonHeight,
+                            rockerWidth: rockerWidth, rockerButtonHeight: rockerButtonHeight,
                             diagnosticLines: diagnosticLines, showDiagnostic: showDiagnostic,
                             showLGNote: showLGNote)
     }
@@ -336,8 +332,6 @@ private struct RemoteView: View {
     @State private var keyboardText = ""
     @State private var showKeyboard = false
     @State private var showSettings = false
-    /// Assume the TV is playing until the user taps Play/Pause.
-    @State private var isPlaying = true
 
     var body: some View {
         // No ScrollView on the remote (v1.0.15): everything fits on one
@@ -347,11 +341,9 @@ private struct RemoteView: View {
         GeometryReader { geo in
             let layout = RemoteLayout.make(
                 height: geo.size.height,
-                hasApps: session.capabilities.supportsApps && !sortedApps.isEmpty,
                 pairingShown: session.awaitingPairingCode,
                 keyboardShown: showKeyboard && session.capabilities.supportsTextInput,
-                isLG: session.device.brand == .lg,
-                hasPlayback: session.capabilities.supportsPlayback)
+                isLG: session.device.brand == .lg)
             VStack(spacing: layout.gap) {
                 topBar(layout)
 
@@ -421,28 +413,6 @@ private struct RemoteView: View {
                 SwipePadView(height: layout.padSize) { send($0) }
                     .padding(.horizontal)
 
-                // Playback row (ours — the reference has none, but
-                // transport is core): just Rewind / Play-Pause /
-                // Fast-forward, centered as a trio. Play/Pause is the
-                // blue-filled primary control.
-                if session.capabilities.supportsPlayback {
-                    HStack(spacing: 20) {
-                        transportButton(systemImage: "backward.fill", size: layout.transportSize) { send(.rewind) }
-                        Button {
-                            send(isPlaying ? .pause : .play)
-                            isPlaying.toggle()
-                        } label: {
-                            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
-                                .font(.title2.bold())
-                                .foregroundStyle(.white)
-                                .frame(width: layout.playSize, height: layout.playSize)
-                                .background(remoteAccent, in: Circle())
-                        }
-                        .buttonStyle(.plain)
-                        transportButton(systemImage: "forward.fill", size: layout.transportSize) { send(.fastForward) }
-                    }
-                }
-
                 // Back / Home / Exit pill row with labels underneath.
                 HStack(spacing: 16) {
                     pillButton(systemImage: "arrow.left", label: "Back", height: layout.pillsButtonHeight) { send(.back) }
@@ -451,45 +421,17 @@ private struct RemoteView: View {
                 }
                 .padding(.horizontal)
 
-                // Installed apps: only the apps actually installed on
-                // the TV (Netflix, YouTube, Apple TV first when
-                // present). An empty list hides the row entirely — no
-                // dead buttons.
-                if session.capabilities.supportsApps, !sortedApps.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Apps")
-                            .font(.headline)
-                            .padding(.horizontal)
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 10) {
-                                ForEach(sortedApps, id: \.id) { app in
-                                    Button(app.name) {
-                                        Task { await session.launchApp(id: app.id) }
-                                    }
-                                    .font(.subheadline.bold())
-                                    .lineLimit(1)
-                                    .padding(.horizontal, 16)
-                                    .frame(height: layout.appsButtonHeight)
-                                    .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
-                                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.08), lineWidth: 1))
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                            .padding(.horizontal)
-                        }
-                    }
-                }
-
                 // Bottom row: equal columns on one axis — the Volume
                 // rocker, the keyboard button (Roku/Samsung/LG), and
                 // the Mute square. (The mic button is out for now; the
-                // voice code stays dormant behind it.) Every control
-                // sits in a layout-sized cell so they share top and
-                // bottom edges, and the labels sit on one shared
-                // baseline below. Nothing here is ever a dead button.
+                // voice code stays dormant behind it. The apps row is
+                // gone in v1.0.18 — its space went to this row instead.)
+                // Every control sits in a layout-sized cell so they
+                // share top and bottom edges, and the labels sit on one
+                // shared baseline below. Nothing here is ever a dead button.
                 HStack(alignment: .top, spacing: 16) {
                     VStack(spacing: 6) {
-                        VolRockerView(buttonHeight: layout.rockerButtonHeight, onUp: { send(.volumeUp) }, onDown: { send(.volumeDown) })
+                        VolRockerView(buttonHeight: layout.rockerButtonHeight, width: layout.rockerWidth, onUp: { send(.volumeUp) }, onDown: { send(.volumeDown) })
                             .frame(height: layout.bottomCell)
                         Text("Volume")
                             .font(.caption)
@@ -653,20 +595,6 @@ private struct RemoteView: View {
         Task { await session.send(command) }
     }
 
-    /// Circular transport button (Rewind, Fast-forward):
-    /// dark circle, white icon.
-    private func transportButton(systemImage: String, size: CGFloat, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.title3.bold())
-                .foregroundStyle(.white)
-                .frame(width: size, height: size)
-                .background(Color.white.opacity(0.10), in: Circle())
-                .overlay(Circle().stroke(Color.white.opacity(0.08), lineWidth: 1))
-        }
-        .buttonStyle(.plain)
-    }
-
     /// Wide pill button with an icon and a label underneath
     /// (Back / Home / Exit row). The button height comes from the
     /// layout so the row shrinks on short screens.
@@ -687,26 +615,8 @@ private struct RemoteView: View {
         }
     }
 
-    /// Installed apps for the current brand, with the three big ones
-    /// first (Netflix, YouTube, Apple TV) when the TV has them, then
-    /// the rest in the TV's own order. Only installed apps are ever
-    /// shown — no dead shortcut buttons.
-    private var sortedApps: [(id: String, name: String)] {
-        let apps: [(id: String, name: String)]
-        switch session.device.brand {
-        case .roku: apps = session.rokuApps.map { ($0.id, $0.name) }
-        case .samsung: apps = session.samsungApps.map { ($0.id, $0.name) }
-        case .lg: apps = session.lgApps.map { ($0.id, $0.name) }
-        case .androidTV, .airPlay, .other: apps = []
-        }
-        let priority = ["netflix", "youtube", "apple tv"]
-        return apps.sorted { a, b in
-            let aRank = priority.firstIndex(of: a.name.lowercased()) ?? Int.max
-            let bRank = priority.firstIndex(of: b.name.lowercased()) ?? Int.max
-            return aRank < bRank
-        }
-    }
 }
+
 // MARK: - Swipe pad
 
 /// Big swipe pad (the Swipe half of the toggle): near full-width,
@@ -761,6 +671,7 @@ private struct SwipePadView: View {
 /// shrunken bottom cell on short screens.
 private struct VolRockerView: View {
     var buttonHeight: CGFloat
+    var width: CGFloat
     var onUp: () -> Void
     var onDown: () -> Void
 
@@ -770,7 +681,7 @@ private struct VolRockerView: View {
                 Image(systemName: "plus")
                     .font(.title.bold())
                     .foregroundStyle(.white)
-                    .frame(width: 84, height: buttonHeight)
+                    .frame(width: width, height: buttonHeight)
             }
             Spacer()
             Text("VOL")
@@ -781,10 +692,10 @@ private struct VolRockerView: View {
                 Image(systemName: "minus")
                     .font(.title.bold())
                     .foregroundStyle(.white)
-                    .frame(width: 84, height: buttonHeight)
+                    .frame(width: width, height: buttonHeight)
             }
         }
-        .frame(width: 84)
+        .frame(width: width)
         .frame(maxHeight: .infinity)
         .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.08), lineWidth: 1))

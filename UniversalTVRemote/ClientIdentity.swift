@@ -50,10 +50,44 @@ enum ClientIdentity {
             cached = found
             return found
         }
+        // The Keychain lost the identity (LiveContainer's guest Keychain
+        // does not reliably persist across relaunches) — restore the
+        // exact same certificate from the container backup, so the TV
+        // still recognizes us and no re-pairing is needed.
+        if restoreFromBackup(), let found = find() {
+            cached = found
+            return found
+        }
         try create()
         guard let found = find() else { throw IdentityError.keychain("identity not found after creation") }
         cached = found
         return found
+    }
+
+    /// Re-imports the backed-up identity (certificate + private key)
+    /// into the Keychain. Returns true when both items are in place.
+    private static func restoreFromBackup() -> Bool {
+        guard let backup = AndroidTVPersistence.loadIdentityBackup() else { return false }
+        guard let privateKey = SecKeyCreateWithData(backup.privateKeyDER as CFData, [
+            kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
+            kSecAttrKeyClass as String: kSecAttrKeyClassPrivate,
+            kSecAttrKeySizeInBits as String: 2048,
+        ] as CFDictionary, nil) else { return false }
+        let keyStatus = SecItemAdd(scoped([
+            kSecClass as String: kSecClassKey,
+            kSecValueRef as String: privateKey,
+            kSecAttrApplicationTag as String: keyTag,
+            kSecAttrLabel as String: label,
+            kSecAttrIsPermanent as String: true,
+        ]) as CFDictionary, nil)
+        guard keyStatus == errSecSuccess || keyStatus == errSecDuplicateItem else { return false }
+        guard let certificate = SecCertificateCreateWithData(nil, backup.certificateDER as CFData) else { return false }
+        let certStatus = SecItemAdd(scoped([
+            kSecClass as String: kSecClassCertificate,
+            kSecValueRef as String: certificate,
+            kSecAttrLabel as String: label,
+        ]) as CFDictionary, nil)
+        return certStatus == errSecSuccess || certStatus == errSecDuplicateItem
     }
 
     /// One-time migration (v1.0.16): discard any client identity minted by
@@ -61,16 +95,30 @@ enum ClientIdentity {
     /// next loadOrCreate, so the TV sees the same certificate shape the
     /// working reference app presents. The old identity never paired with
     /// any TV (the QM7 never paired; Samsung uses its own pairing), so
-    /// nothing is lost. Runs once, guarded by a UserDefaults flag.
+    /// nothing is lost. Runs once, guarded by a marker in both stores.
+    ///
+    /// Guard: never discard an identity that has a paired TV. The marker
+    /// can be lost when the stores don't persist, and re-running the
+    /// migration then would throw away the very certificate the TV knows
+    /// — the exact re-pairing bug this version fixes. A paired host is
+    /// proof the current identity is good, so the migration is skipped
+    /// (and marked done) instead.
     static func migrateToFreshIdentityIfNeeded() {
-        guard !UserDefaults.standard.bool(forKey: "androidtv.identity.forkFresh") else { return }
+        guard !AndroidTVPersistence.isForkFreshMigrated else { return }
+        if AndroidTVPersistence.hasAnyPairedHost {
+            AndroidTVPersistence.setForkFreshMigrated()
+            return
+        }
         reset()
-        UserDefaults.standard.set(true, forKey: "androidtv.identity.forkFresh")
+        AndroidTVPersistence.setForkFreshMigrated()
     }
 
-    /// Throws away the key so the next pairing starts fresh.
+    /// Throws away the key so the next pairing starts fresh — from the
+    /// Keychain and from the container backup, so a stale backup can
+    /// never resurrect a discarded key.
     static func reset() {
         cached = nil
+        AndroidTVPersistence.deleteIdentityBackup()
         SecItemDelete(scoped([kSecClass as String: kSecClassCertificate, kSecAttrLabel as String: label]) as CFDictionary)
         SecItemDelete(scoped([kSecClass as String: kSecClassKey, kSecAttrApplicationTag as String: keyTag]) as CFDictionary)
     }
@@ -192,6 +240,11 @@ enum ClientIdentity {
         guard status == errSecSuccess || status == errSecDuplicateItem else {
             throw IdentityError.keychain("OSStatus \(status)")
         }
+        // Back the identity up to the container (see
+        // AndroidTVPersistence): the Keychain alone does not reliably
+        // survive a LiveContainer relaunch, and without this exact
+        // certificate the TV asks to pair again on every reopen.
+        AndroidTVPersistence.saveIdentityBackup(certificate: certificate, privateKey: privateKey)
     }
 
     /// RSA modulus and exponent of a certificate's public key, used in the pairing secret.

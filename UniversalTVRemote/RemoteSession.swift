@@ -234,7 +234,10 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
         androidTVDriver?.disconnect()
         pairingAttempted = false
         status = "Connecting…"
-        let paired = UserDefaults.standard.bool(forKey: "androidtv.paired.\(host)")
+        // Paired flag from either store (UserDefaults or the container
+        // file) — UserDefaults alone does not reliably survive a
+        // LiveContainer relaunch, and a lost flag means re-pairing.
+        let paired = AndroidTVPersistence.isPaired(host: host)
         let tvDevice = AndroidTVDevice(name: device.name, brand: .androidTV, host: host, isPaired: paired)
         let driver = AndroidTVDriver(device: tvDevice)
         driver.delegate = self
@@ -282,9 +285,13 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
 
     func driver(_ driver: TVDriver, didUpdateDevice device: AndroidTVDevice) {
         guard self.device.brand == .androidTV, let host = self.device.host else { return }
-        // Persist the paired flag (and only that — the driver's model
-        // learning is internal; our UI doesn't display it).
-        UserDefaults.standard.set(device.isPaired, forKey: "androidtv.paired.\(host)")
+        // Persist the paired flag in both stores (UserDefaults and the
+        // container file — see AndroidTVPersistence) so a relaunch
+        // reconnects straight to the control channel instead of
+        // pairing again. Only the flag is persisted here — the
+        // driver's model learning is internal; our UI doesn't
+        // display it.
+        AndroidTVPersistence.setPaired(host: host, paired: device.isPaired)
     }
 
     /// Starts a voice utterance (Android TV only): opens a voice session
@@ -400,7 +407,7 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
     /// No-op for other brands.
     func forgetPairedTV() {
         guard device.brand == .androidTV, let host = device.host else { return }
-        UserDefaults.standard.removeObject(forKey: "androidtv.paired.\(host)")
+        AndroidTVPersistence.removePaired(host: host)
         androidTVDriver?.disconnect()
         isConnected = false
         status = "Forgot \(device.name). Pair again to connect."

@@ -360,3 +360,152 @@ final class VoiceMessageTests: XCTestCase {
         XCTAssertEqual(AndroidTVDriver.voiceFlushChunks(buffer: &buffer), [])
     }
 }
+
+/// Tests for the v1.0.18 pairing persistence (AndroidTVPersistence):
+/// the client identity backed up to the app container and restored
+/// when the Keychain loses it, the paired flag mirrored to a file, and
+/// the migration guard that never discards an identity a TV knows.
+/// Offline: no TV, no network. Keychain use is confined to a throwaway
+/// slot; every test cleans up its own flags and files.
+final class AndroidTVPersistenceTests: XCTestCase {
+
+    private let host = "10.0.0.99"
+
+    override func tearDown() {
+        // Leave nothing behind for the next test (or the app): clear
+        // the throwaway paired flag, the migration marker and the
+        // backup file, and reset any identity this test minted.
+        AndroidTVPersistence.removePaired(host: host)
+        UserDefaults.standard.removeObject(forKey: "androidtv.identity.forkFresh")
+        ClientIdentity.reset()
+        super.tearDown()
+    }
+
+    func testPairedFlagMirroredToFile() {
+        // Starts unpaired in both stores.
+        XCTAssertFalse(AndroidTVPersistence.isPaired(host: host))
+        XCTAssertFalse(AndroidTVPersistence.loadState().pairedHosts.contains(host))
+
+        // Setting it writes both stores…
+        AndroidTVPersistence.setPaired(host: host, paired: true)
+        XCTAssertTrue(AndroidTVPersistence.isPaired(host: host))
+        XCTAssertTrue(UserDefaults.standard.bool(forKey: "androidtv.paired.\(host)"))
+        XCTAssertTrue(AndroidTVPersistence.loadState().pairedHosts.contains(host))
+        XCTAssertTrue(AndroidTVPersistence.hasAnyPairedHost)
+
+        // …and clearing it clears both.
+        AndroidTVPersistence.setPaired(host: host, paired: false)
+        XCTAssertFalse(AndroidTVPersistence.isPaired(host: host))
+        XCTAssertFalse(AndroidTVPersistence.loadState().pairedHosts.contains(host))
+
+        // The file alone is enough: write a paired host straight to
+        // the file (bypassing the UserDefaults mirror) and it still
+        // reads paired — this is the LiveContainer case, where
+        // UserDefaults does not survive a relaunch.
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("AndroidTV", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var state = AndroidTVPersistence.loadState()
+        state.pairedHosts.insert(host)
+        try! JSONEncoder().encode(state).write(to: dir.appendingPathComponent("state.json"), options: [.atomic])
+        XCTAssertFalse(UserDefaults.standard.bool(forKey: "androidtv.paired.\(host)"))
+        XCTAssertTrue(AndroidTVPersistence.isPaired(host: host))
+    }
+
+    func testIdentityBackupRestore() throws {
+        // Mint an identity under a throwaway slot (never the app's real
+        // one), then lose the Keychain copy only — the way a
+        // LiveContainer relaunch loses it — and load again: the exact
+        // same certificate must come back from the container backup.
+        let slot = "TestIdentity\(UUID().uuidString.prefix(8))"
+        let originalSlot = ClientIdentity.slot
+        ClientIdentity.slot = slot
+        defer { ClientIdentity.slot = originalSlot }
+        ClientIdentity.reset()
+        let first = try ClientIdentity.loadOrCreate()
+        let firstDER = SecCertificateCopyData(first.certificate) as Data
+        // The backup file exists after minting; keep its bytes aside.
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("AndroidTV", isDirectory: true)
+        let backupURL = dir.appendingPathComponent("identity.json")
+        let backupData = try XCTUnwrap(try? Data(contentsOf: backupURL))
+
+        // reset() clears the cache, the Keychain items and the backup
+        // file — then put the backup file back, so the only thing
+        // missing is the Keychain copy (the LiveContainer case).
+        ClientIdentity.reset()
+        try backupData.write(to: backupURL, options: [.atomic])
+        let again = try ClientIdentity.loadOrCreate()
+        XCTAssertEqual(SecCertificateCopyData(again.certificate) as Data, firstDER)
+    }
+
+    func testIdentityBackupRoundTrip() throws {
+        // The backup file itself round-trips: save a minted identity,
+        // read it back, and the certificate and key bytes match.
+        let slot = "TestIdentity\(UUID().uuidString.prefix(8))"
+        let originalSlot = ClientIdentity.slot
+        ClientIdentity.slot = slot
+        defer { ClientIdentity.slot = originalSlot }
+        ClientIdentity.reset()
+        let first = try ClientIdentity.loadOrCreate()
+        let backup = try XCTUnwrap(AndroidTVPersistence.loadIdentityBackup())
+        XCTAssertEqual(backup.certificateDER, SecCertificateCopyData(first.certificate) as Data)
+        // The backed-up key parses back as a 2048-bit RSA private key
+        // and its public half matches the certificate's.
+        let key = try XCTUnwrap(SecKeyCreateWithData(backup.privateKeyDER as CFData, [
+            kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
+            kSecAttrKeyClass as String: kSecAttrKeyClassPrivate,
+            kSecAttrKeySizeInBits as String: 2048,
+        ] as CFDictionary, nil))
+        let publicDER = try XCTUnwrap(SecKeyCopyExternalRepresentation(SecKeyCopyPublicKey(key)!, nil) as Data?)
+        let components = try XCTUnwrap(ClientIdentity.rsaComponents(of: first.certificate))
+        let parsed = try XCTUnwrap(DER.rsaPublicKeyComponents(Array(publicDER)))
+        XCTAssertEqual(components.modulus, parsed.modulus)
+        XCTAssertEqual(components.exponent, parsed.exponent)
+    }
+
+    func testMigrationSkipsPairedIdentity() throws {
+        // A paired host is proof the current identity is good: the
+        // migration must not discard it, even when its marker is lost.
+        let slot = "TestIdentity\(UUID().uuidString.prefix(8))"
+        let originalSlot = ClientIdentity.slot
+        ClientIdentity.slot = slot
+        defer { ClientIdentity.slot = originalSlot }
+        ClientIdentity.reset()
+        let first = try ClientIdentity.loadOrCreate()
+        let firstDER = SecCertificateCopyData(first.certificate) as Data
+
+        // Pair the host, then lose the migration marker in both stores.
+        AndroidTVPersistence.setPaired(host: host, paired: true)
+        UserDefaults.standard.removeObject(forKey: "androidtv.identity.forkFresh")
+        var state = AndroidTVPersistence.loadState()
+        state.forkFreshMigrated = false
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("AndroidTV", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try! JSONEncoder().encode(state).write(to: dir.appendingPathComponent("state.json"), options: [.atomic])
+        XCTAssertFalse(AndroidTVPersistence.isForkFreshMigrated)
+
+        // Migration runs — and must leave the identity alone. Check
+        // the Keychain directly: loadOrCreate would return the
+        // in-memory cache, which survives a reset and would hide a
+        // wrong discard.
+        ClientIdentity.migrateToFreshIdentityIfNeeded()
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassIdentity,
+            kSecReturnRef as String: true,
+            kSecMatchLimit as String: kSecMatchLimitAll,
+        ]
+        var result: CFTypeRef?
+        XCTAssertEqual(SecItemCopyMatching(query as CFDictionary, &result), errSecSuccess)
+        let identities = try XCTUnwrap(result as? [SecIdentity])
+        let ders = identities.compactMap { id -> Data? in
+            var cert: SecCertificate?
+            guard SecIdentityCopyCertificate(id, &cert) == errSecSuccess, let cert else { return nil }
+            return SecCertificateCopyData(cert) as Data
+        }
+        XCTAssertTrue(ders.contains(firstDER))
+        // …and it marks itself done, so it will not run again.
+        XCTAssertTrue(AndroidTVPersistence.isForkFreshMigrated)
+    }
+}
