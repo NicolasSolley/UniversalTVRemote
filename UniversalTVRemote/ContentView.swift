@@ -376,8 +376,8 @@ private struct RemoteView: View {
                         if session.capabilities.supportsPlayback {
                             remoteButton(nil, systemImage: "backward.fill") { send(.rewind) }
                             remoteButton(nil, systemImage: isPlaying ? "pause.fill" : "play.fill") {
-                                isPlaying.toggle()
                                 send(isPlaying ? .pause : .play)
+                                isPlaying.toggle()
                             }
                             remoteButton(nil, systemImage: "forward.fill") { send(.fastForward) }
                         }
@@ -723,7 +723,8 @@ private struct VolRockerView: View {
             }
             .buttonStyle(.plain)
         }
-        .frame(width: 64, maxHeight: .infinity)
+        .frame(width: 64)
+        .frame(maxHeight: .infinity)
         .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.08), lineWidth: 1))
     }
