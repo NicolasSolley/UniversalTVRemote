@@ -13,12 +13,24 @@ struct ContentView: View {
         NavigationView {
             if let session {
                 // The remote draws its own top bar (Devices pill, TV
-                // name, power, gear), so the navigation bar stays hidden
+                // name, power), so the navigation bar stays hidden
                 // here — no double header.
                 RemoteView(session: session, onBack: { self.session = nil })
                     .navigationBarHidden(true)
             } else {
                 DiscoveryListView(discovery: discovery) { device in
+                    // Stop the scan first, then navigate: the auto-scan
+                    // is still sweeping the subnet when the TV is tapped,
+                    // and its steady stream of main-actor merges starves
+                    // the navigation transition — that flood is the tap
+                    // delay, not the session or the connection. Cancelling
+                    // it frees the main thread, so the remote appears at
+                    // once; the connection then starts in the remote's
+                    // own .task, in the background, and the Connected
+                    // pill follows Connecting / Not connected / Connected.
+                    // The device list is kept (stop() never clears it),
+                    // and pull-to-refresh re-scans on the way back.
+                    discovery.stop()
                     session = RemoteSession(device: device)
                 }
                 // The list draws its own header ("Select a TV Device"),
@@ -227,7 +239,7 @@ private let remoteAccent = Color(red: 0.15, green: 0.45, blue: 1.0)
 
 /// Remote, redesigned in v1.0.12. The fork's remote screen is the
 /// design inspiration, not a template: a top bar (Devices pill, TV
-/// name, power, gear), a Connected pill, then the navigation area, a
+/// name, power), a Connected pill, then the navigation area, a
 /// Back/Home/Exit pill row, and a bottom row (Volume rocker, keyboard,
 /// Mute), with the diagnostic status text below. Dark with a blue
 /// accent. No ads,
@@ -247,8 +259,7 @@ private let remoteAccent = Color(red: 0.15, green: 0.45, blue: 1.0)
 /// screens the bottom row, buttons and spacing shrink too. Nothing is
 /// dropped — the only things that hide are the diagnostic line (while the
 /// pairing card or keyboard is up, since they show the status themselves)
-/// and the LG power note on the shortest screens (it also lives in
-/// Settings). Validated against iPhone 15 Plus (845pt), iPhone 13 mini
+/// and the LG power note on the shortest screens. Validated against iPhone 15 Plus (845pt), iPhone 13 mini
 /// (731pt) and iPhone SE (647pt) usable heights, with pairing card and
 /// keyboard — every combination fits.
 private struct RemoteLayout {
@@ -331,7 +342,6 @@ private struct RemoteView: View {
 
     @State private var keyboardText = ""
     @State private var showKeyboard = false
-    @State private var showSettings = false
 
     var body: some View {
         // No ScrollView on the remote (v1.0.15): everything fits on one
@@ -502,13 +512,11 @@ private struct RemoteView: View {
         }
         .task { await session.connect() }
         .onDisappear { session.disconnect() }
-        .sheet(isPresented: $showSettings) {
-            RemoteSettingsSheet(session: session)
-        }
     }
 
     /// Top bar: Devices pill (back to the list), TV name centered,
-    /// power and gear on the right. The gear opens the settings sheet.
+    /// power on the right. No gear — the Connected pill below already
+    /// shows the connection state, so a settings sheet is redundant.
     private func topBar(_ layout: RemoteLayout) -> some View {
         HStack(spacing: 10) {
             Button {
@@ -538,14 +546,6 @@ private struct RemoteView: View {
                 Image(systemName: "power")
                     .font(.headline.bold())
                     .foregroundStyle(.red)
-                    .frame(width: layout.topBarButton, height: layout.topBarButton)
-                    .background(Color.white.opacity(0.08), in: Circle())
-            }
-            .buttonStyle(.plain)
-            Button { showSettings = true } label: {
-                Image(systemName: "gearshape")
-                    .font(.headline)
-                    .foregroundStyle(.white)
                     .frame(width: layout.topBarButton, height: layout.topBarButton)
                     .background(Color.white.opacity(0.08), in: Circle())
             }
@@ -731,76 +731,3 @@ private struct RepeatButton<Label: View>: View {
     }
 }
 
-// MARK: - Settings sheet
-
-/// Settings sheet (gear in the top bar): connection status and
-/// diagnostics, the TV's identity, and — for Android TV — the
-/// "Forget this TV" reset. Nothing here sends a command to the TV
-/// except Forget (which only clears local pairing state).
-private struct RemoteSettingsSheet: View {
-    @ObservedObject var session: RemoteSession
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack {
-                Text("Settings")
-                    .font(.headline.bold())
-                    .foregroundStyle(.white)
-                Spacer()
-                Button("Done") { dismiss() }
-                    .buttonStyle(.bordered)
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Connection")
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.white)
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(session.isConnected ? Color.green : (session.isBusy ? Color.orange : Color.red))
-                        .frame(width: 9, height: 9)
-                    Text(session.isConnected ? "Connected to \(session.device.name)" : "Not connected")
-                        .font(.subheadline)
-                        .foregroundStyle(.white)
-                }
-                Text("Brand: \(session.device.brand.rawValue)")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                if let host = session.device.host {
-                    Text("Address: \(host)")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Status")
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.white)
-                Text(session.status.isEmpty ? "No status yet." : session.status)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-
-            if session.device.brand == .lg {
-                Text("Power turns the TV off. Turn it back on with the TV's own remote.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            if session.device.brand == .androidTV {
-                // Pairing reset: clears the pinned certificate and the
-                // paired flag so the next connect pairs from scratch
-                // (needed when the TV's certificate changed, e.g. after
-                // a TV reset).
-                Button("Forget this TV", role: .destructive) { session.forgetPairedTV() }
-                    .buttonStyle(.bordered)
-            }
-
-            Spacer()
-        }
-        .padding()
-        .background(Color(white: 0.08))
-    }
-}
