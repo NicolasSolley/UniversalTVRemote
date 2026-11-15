@@ -581,16 +581,19 @@ final class ImeCounterTrackerTests: XCTestCase {
     func testBatchEditFallbackWhenKeyInjectHasNoCounters() {
         var tracker = ImeCounterTracker()
         tracker.learnFromKeyInject(keyInjectMessage(appPackage: "com.android.vending", appCounter: 3, fieldCounter: 38).message(20)!)
-        XCTAssertEqual((tracker.imeCounter, tracker.imeFieldCounter), (3, 38))
+        XCTAssertEqual(tracker.imeCounter, 3)
+        XCTAssertEqual(tracker.imeFieldCounter, 38)
 
         // Switching to an app that reports 0 counters clears the
         // previous app's counters.
         tracker.learnFromKeyInject(keyInjectMessage(appPackage: "com.google.android.youtube.tv", appCounter: nil, fieldCounter: nil).message(20)!)
-        XCTAssertEqual((tracker.imeCounter, tracker.imeFieldCounter), (0, 0))
+        XCTAssertEqual(tracker.imeCounter, 0)
+        XCTAssertEqual(tracker.imeFieldCounter, 0)
 
         // A subsequent batch_edit populates the counters as fallback.
         tracker.learnFromBatchEdit(batchEditMessage(imeCounter: 9, fieldCounter: 4).message(21)!)
-        XCTAssertEqual((tracker.imeCounter, tracker.imeFieldCounter), (9, 4))
+        XCTAssertEqual(tracker.imeCounter, 9)
+        XCTAssertEqual(tracker.imeFieldCounter, 4)
     }
 
     func testBatchEditMessageCursorIsTextLength() {
