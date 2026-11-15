@@ -729,7 +729,7 @@ final class AndroidTVDriver {
             return
         }
         state = .pairing(.verifying)
-        sendPairing { m in m.message(40) { $0.data(1, secret) } }
+        sendPairing { m in m.message(40) { $0.data(1, Array(secret)) } }
     }
 
     /// The pairing secret: SHA-256 over the minimal big-endian bytes of
