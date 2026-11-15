@@ -231,7 +231,7 @@ private let remoteAccent = Color(red: 0.15, green: 0.45, blue: 1.0)
 /// then the navigation area, a playback row, a Back/Home/Exit pill
 /// row, and a bottom row (Volume rocker, mic or keyboard, Mute), with
 /// app shortcuts and the diagnostic status text below. Dark with a
-/// blue accent and a subtle blue/purple wave at the bottom. No ads,
+/// blue accent. No ads,
 /// no promos, no cast button, no tab bar.
 /// What stays ours: the D-pad is the default navigation (big circular
 /// pad, 230×230, annular sectors + 84pt OK); the playback row stays
@@ -241,8 +241,7 @@ private let remoteAccent = Color(red: 0.15, green: 0.45, blue: 1.0)
 /// rocker (use the TV's own remote or the on-screen guide for
 /// channels). Play/Pause is one button with a local toggle: it assumes
 /// the TV is playing, so the first tap sends Pause, then it alternates
-/// — the TV's real play state is not tracked. Info and Menu flank the
-/// playback row.
+/// — the TV's real play state is not tracked.
 private struct RemoteView: View {
     @ObservedObject var session: RemoteSession
     var onBack: () -> Void
@@ -334,12 +333,11 @@ private struct RemoteView: View {
                 }
 
                 // Playback row (ours — the reference has none, but
-                // transport is core): Info and Menu on the ends, Rewind
-                // / Play-Pause / Fast-forward in the middle. Play/Pause
-                // is the blue-filled primary control.
+                // transport is core): just Rewind / Play-Pause /
+                // Fast-forward, centered as a trio. Play/Pause is the
+                // blue-filled primary control.
                 if session.capabilities.supportsPlayback {
                     HStack(spacing: 20) {
-                        transportButton(systemImage: "star.fill", size: 48) { send(.info) }
                         transportButton(systemImage: "backward.fill", size: 56) { send(.rewind) }
                         Button {
                             send(isPlaying ? .pause : .play)
@@ -353,7 +351,6 @@ private struct RemoteView: View {
                         }
                         .buttonStyle(.plain)
                         transportButton(systemImage: "forward.fill", size: 56) { send(.fastForward) }
-                        transportButton(systemImage: "line.3.horizontal", size: 48) { send(.menu) }
                     }
                 }
 
@@ -394,12 +391,14 @@ private struct RemoteView: View {
                     }
                 }
 
-                // Bottom row: tall labeled Volume rocker, the big mic
-                // circle (Android TV only) or the keyboard button
-                // (Roku/Samsung/LG), and a labeled Mute square. Each
-                // label sits under its own control; nothing here is
-                // ever a dead button.
-                HStack(alignment: .center, spacing: 20) {
+                // Bottom row: three equal columns on one axis — the
+                // Volume rocker, the big mic circle (Android TV only)
+                // or the keyboard button (Roku/Samsung/LG), and the
+                // Mute square. Every control sits in a 190pt-tall cell
+                // so the three share top and bottom edges, and the
+                // labels sit on one shared baseline below. Nothing
+                // here is ever a dead button.
+                HStack(alignment: .top, spacing: 16) {
                     VStack(spacing: 6) {
                         VolRockerView(onUp: { send(.volumeUp) }, onDown: { send(.volumeDown) })
                             .frame(height: 190)
@@ -407,6 +406,7 @@ private struct RemoteView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                    .frame(maxWidth: .infinity)
                     if session.capabilities.supportsVoice {
                         // Voice (Android TV only): hold the mic button
                         // and talk — the TV acts on it.
@@ -431,10 +431,12 @@ private struct RemoteView: View {
                                     Task { await session.stopVoice() }
                                 }
                             }, perform: {})
+                            .frame(height: 190)
                             Text(session.isRecordingVoice ? "Listening…" : "Hold to talk")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+                        .frame(maxWidth: .infinity)
                     } else if session.capabilities.supportsTextInput {
                         VStack(spacing: 6) {
                             Button { showKeyboard.toggle() } label: {
@@ -451,10 +453,12 @@ private struct RemoteView: View {
                             }
                             .buttonStyle(.plain)
                             .accessibilityLabel("Keyboard")
+                            .frame(height: 190)
                             Text("Keyboard")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
+                        .frame(maxWidth: .infinity)
                     }
                     VStack(spacing: 6) {
                         Button { send(.mute) } label: {
@@ -471,10 +475,12 @@ private struct RemoteView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Mute")
+                        .frame(height: 190)
                         Text("Mute")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                    .frame(maxWidth: .infinity)
                 }
 
                 Text(session.status)
@@ -486,29 +492,11 @@ private struct RemoteView: View {
             }
             .padding(.top, 8)
         }
-        .background(waveBackground)
         .task { await session.connect() }
         .onDisappear { session.disconnect() }
         .sheet(isPresented: $showSettings) {
             RemoteSettingsSheet(session: session)
         }
-    }
-
-    /// Subtle blue/purple wave pinned to the bottom of the screen,
-    /// behind the scrolling content. Decorative only.
-    private var waveBackground: some View {
-        VStack {
-            Spacer()
-            WaveShape()
-                .fill(
-                    LinearGradient(
-                        colors: [Color.blue.opacity(0.35), Color.purple.opacity(0.25)],
-                        startPoint: .leading, endPoint: .trailing)
-                )
-                .frame(height: 130)
-        }
-        .ignoresSafeArea(edges: .bottom)
-        .allowsHitTesting(false)
     }
 
     /// Top bar: Devices pill (back to the list), TV name centered,
@@ -628,7 +616,7 @@ private struct RemoteView: View {
         .accessibilityLabel(label)
     }
 
-    /// Circular transport button (Info, Rewind, Fast-forward, Menu):
+    /// Circular transport button (Rewind, Fast-forward):
     /// dark circle, white icon.
     private func transportButton(systemImage: String, size: CGFloat, action: @escaping () -> Void) -> some View {
         Button(action: action) {
@@ -938,25 +926,5 @@ private struct RemoteSettingsSheet: View {
         }
         .padding()
         .background(Color(white: 0.08))
-    }
-}
-
-/// One gentle S-curve band for the bottom of the remote screen
-/// (see RemoteView.waveBackground). Decorative only.
-private struct WaveShape: Shape {
-    func path(in rect: CGRect) -> Path {
-        let w = rect.width, h = rect.height
-        var path = Path()
-        path.move(to: CGPoint(x: 0, y: h * 0.55))
-        path.addCurve(to: CGPoint(x: w * 0.5, y: h * 0.35),
-                      control1: CGPoint(x: w * 0.18, y: h * 0.15),
-                      control2: CGPoint(x: w * 0.32, y: h * 0.75))
-        path.addCurve(to: CGPoint(x: w, y: h * 0.5),
-                      control1: CGPoint(x: w * 0.68, y: h * 0.0),
-                      control2: CGPoint(x: w * 0.82, y: h * 0.9))
-        path.addLine(to: CGPoint(x: w, y: h))
-        path.addLine(to: CGPoint(x: 0, y: h))
-        path.closeSubpath()
-        return path
     }
 }
