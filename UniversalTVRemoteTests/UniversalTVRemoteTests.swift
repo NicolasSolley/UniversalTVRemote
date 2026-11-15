@@ -334,14 +334,14 @@ final class TLSHandshakeRecorderTests: XCTestCase {
             tlsRecord(type: 0x16, payload: serverHello(version: 0x0303, cipher: 0xC02F))))
     }
 
-    func testSummarizeServerHelloDoneWithoutCertificate() {
+    func testSummarizeServerHelloDoneWithoutCertificate() throws {
         let bytes = tlsRecord(type: 0x16, payload: serverHello(version: 0x0303, cipher: 0xC02F)
             + handshakeMessage(type: 14, body: Data()))
         let summary = try XCTUnwrap(TLSHandshakeRecorder.summarize(bytes))
         XCTAssertTrue(summary.contains("no Certificate message"), summary)
     }
 
-    func testSummarizeTLS13Encrypted() {
+    func testSummarizeTLS13Encrypted() throws {
         let bytes = tlsRecord(type: 0x16, payload: serverHello(version: 0x0304, cipher: 0x1301))
             + tlsRecord(type: 0x23, payload: Data([1, 2, 3]))
         let summary = try XCTUnwrap(TLSHandshakeRecorder.summarize(bytes))
