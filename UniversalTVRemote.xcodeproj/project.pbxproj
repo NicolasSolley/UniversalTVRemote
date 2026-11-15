@@ -27,6 +27,9 @@
 		75A414E9689F4CBC9432185A /* TLSChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A055354F469A4F6490EDA8B4 /* TLSChannel.swift */; };
 		5AF9BD0811EC404DA4C61FEC /* ClientIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 348C9CB233854A5582BFB152 /* ClientIdentity.swift */; };
 		BED832E1F6B84808AF16169E /* DER.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DAE2FF6AF9A4DFE94D42706 /* DER.swift */; };
+		7006548123A62E39BD92E2E2 /* AndroidTVDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50B9A8A48B284AC87DA029E7 /* AndroidTVDriver.swift */; };
+		BB8C16CA6FEEC10B968891E4 /* TVDriver.swift in Sources */ = {isa = PBXBuildFile; fileRef = B31DE1C629FB89933019D787 /* TVDriver.swift */; };
+		FE47CBBBD9A474F7FEFD4EEF /* RemoteKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = F94B0C77585DE654707F560A /* RemoteKey.swift */; };
 		041547DB8A35806CE609C942 /* UniversalTVRemoteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E337D5391F45CC9E22AA4BE /* UniversalTVRemoteTests.swift */; };
 		EBD11B9EC1324CF79C2D0EE2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9AF4BF83DEBB406CBEFB6EF6 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
@@ -52,6 +55,9 @@
 		A055354F469A4F6490EDA8B4 /* TLSChannel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TLSChannel.swift; sourceTree = "<group>"; };
 		348C9CB233854A5582BFB152 /* ClientIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientIdentity.swift; sourceTree = "<group>"; };
 		0DAE2FF6AF9A4DFE94D42706 /* DER.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DER.swift; sourceTree = "<group>"; };
+		50B9A8A48B284AC87DA029E7 /* AndroidTVDriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AndroidTVDriver.swift; sourceTree = "<group>"; };
+		B31DE1C629FB89933019D787 /* TVDriver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVDriver.swift; sourceTree = "<group>"; };
+		F94B0C77585DE654707F560A /* RemoteKey.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteKey.swift; sourceTree = "<group>"; };
 		972A40E4CA0C442CA69E7D7B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		9AF4BF83DEBB406CBEFB6EF6 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A369EC5675FA4FD78AF1EFA3 /* UniversalTVRemote.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = UniversalTVRemote.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -106,6 +112,9 @@
 				3D9FA26B157E48029FE78890 /* SamsungRemote.swift */,
 				5A2A7AE1F572DF83190FC71D /* SubnetSweep.swift */,
 				A055354F469A4F6490EDA8B4 /* TLSChannel.swift */,
+				50B9A8A48B284AC87DA029E7 /* AndroidTVDriver.swift */,
+				B31DE1C629FB89933019D787 /* TVDriver.swift */,
+				F94B0C77585DE654707F560A /* RemoteKey.swift */,
 				D7774389067A4C1C9F6ACCF6 /* TVDevice.swift */,
 				5CBEB188AB8744F7B202E1AD /* UniversalTVRemoteApp.swift */,
 				8477BEAB10E2447A9FCAB9A8 /* X509.swift */,
@@ -271,6 +280,9 @@
 				75A414E9689F4CBC9432185A /* TLSChannel.swift in Sources */,
 				5AF9BD0811EC404DA4C61FEC /* ClientIdentity.swift in Sources */,
 				BED832E1F6B84808AF16169E /* DER.swift in Sources */,
+				7006548123A62E39BD92E2E2 /* AndroidTVDriver.swift in Sources */,
+				BB8C16CA6FEEC10B968891E4 /* TVDriver.swift in Sources */,
+				FE47CBBBD9A474F7FEFD4EEF /* RemoteKey.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

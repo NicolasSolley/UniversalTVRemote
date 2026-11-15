@@ -3,12 +3,11 @@ import CryptoKit
 import Security
 @testable import UniversalTVRemote
 
-/// Tests for the ported Android TV code (v1.0.15): DER encoding, the
-/// client identity, the pairing secret, and certificate pinning.
+/// Tests for the ported Android TV code (v1.0.15–v1.0.16): DER encoding, the
+/// client identity, the pairing secret, and the voice message bytes.
 /// Offline: no TV, no network. Key generation uses SecKeyCreateRandomKey
 /// with non-permanent keys, except ClientIdentity's own mint/reset test
-/// (which uses a throwaway slot) and the pin store's round-trip test
-/// (which uses a throwaway host name). Both clean up after themselves.
+/// (which uses a throwaway slot). Both clean up after themselves.
 final class DERAndIdentityTests: XCTestCase {
 
     /// Mint a self-signed certificate with the DER helpers, as
@@ -265,71 +264,31 @@ final class PairingSecretTests: XCTestCase {
 
         let code = String(format: "%02x", firstByte) + "3456"
         XCTAssertEqual(
-            AndroidTVRemote.pairingSecret(code: code, clientCertificateDER: clientDER,
-                                          serverCertificateDER: serverDER),
+            AndroidTVDriver.pairingSecret(code: code, clientCertificate: clientCert,
+                                          serverCertificate: serverCert),
             digest)
 
-        // A code whose first byte does not match the digest is rejected.
+        // The digest depends only on the code's last 4 hex chars (the
+        // suffix), so a wrong first byte yields the SAME digest — and
+        // the checksum in submitPairingCode (first byte of the digest
+        // must equal the code's first byte, as the TV checks) rejects
+        // it. The driver's pairingSecret itself returns the digest for
+        // any 6-hex code, as in the fork; the check lives in the caller.
         let wrongCode = String(format: "%02x", firstByte ^ 0xFF) + "3456"
-        XCTAssertNil(
-            AndroidTVRemote.pairingSecret(code: wrongCode, clientCertificateDER: clientDER,
-                                          serverCertificateDER: serverDER))
-
-        // Garbage certificates are rejected.
-        XCTAssertNil(
-            AndroidTVRemote.pairingSecret(code: code, clientCertificateDER: Data(),
-                                          serverCertificateDER: serverDER))
-        XCTAssertNil(
-            AndroidTVRemote.pairingSecret(code: code, clientCertificateDER: clientDER,
-                                          serverCertificateDER: Data()))
-    }
-}
-
-final class PinningTests: XCTestCase {
-
-    func testVerifyAcceptsAnythingWithoutPin() {
-        // Trust on first use: no pin stored, any certificate is accepted.
-        XCTAssertTrue(AndroidTVDriver.certificateMatchesPin(
-            presentedDER: Data([1, 2, 3]), expectedDER: nil))
-        XCTAssertTrue(AndroidTVDriver.certificateMatchesPin(
-            presentedDER: Data(), expectedDER: nil))
-    }
-
-    func testVerifyAcceptsMatchingPin() {
-        let der = Data([0x30, 0x03, 0x02, 0x01, 0x05])
-        XCTAssertTrue(AndroidTVDriver.certificateMatchesPin(
-            presentedDER: der, expectedDER: der))
-    }
-
-    func testVerifyRejectsNonMatchingPin() {
-        XCTAssertFalse(AndroidTVDriver.certificateMatchesPin(
-            presentedDER: Data([1]), expectedDER: Data([2])))
-        XCTAssertFalse(AndroidTVDriver.certificateMatchesPin(
-            presentedDER: Data(), expectedDER: Data([1])))
-    }
-
-    func testPinStoreRoundTrip() {
-        let host = "test-pin-\(UUID().uuidString)"
-        let der = Data([0x30, 0x82, 0x01, 0x00, 0x02, 0x01, 0x05])
-        XCTAssertNil(AndroidTVPinStore.pinnedCertificateDER(for: host))
-        AndroidTVPinStore.set(der, for: host)
-        XCTAssertEqual(AndroidTVPinStore.pinnedCertificateDER(for: host), der)
-        // Storing again replaces the pin.
-        let der2 = Data([0x30, 0x03, 0x02, 0x01, 0x07])
-        AndroidTVPinStore.set(der2, for: host)
-        XCTAssertEqual(AndroidTVPinStore.pinnedCertificateDER(for: host), der2)
-        // Clearing removes it.
-        AndroidTVPinStore.clear(for: host)
-        XCTAssertNil(AndroidTVPinStore.pinnedCertificateDER(for: host))
-        // Clearing a host that was never pinned is a no-op.
-        AndroidTVPinStore.clear(for: host)
-        XCTAssertNil(AndroidTVPinStore.pinnedCertificateDER(for: host))
-    }
-
-    func testCertificateChangedErrorMessage() {
         XCTAssertEqual(
-            AndroidTVRemote.AndroidTVError.certificateChanged.localizedDescription,
-            "This TV's certificate changed since you paired it. Forget the TV and pair again.")
+            AndroidTVDriver.pairingSecret(code: wrongCode, clientCertificate: clientCert,
+                                          serverCertificate: serverCert),
+            digest)
+        let wrongFirstByte = try XCTUnwrap(UInt8(wrongCode.prefix(2), radix: 16))
+        XCTAssertNotEqual(digest.first, wrongFirstByte)
+
+        // A code that isn't 6 hex characters is rejected.
+        XCTAssertNil(
+            AndroidTVDriver.pairingSecret(code: "XYZ", clientCertificate: clientCert,
+                                          serverCertificate: serverCert))
+        XCTAssertNil(
+            AndroidTVDriver.pairingSecret(code: "12345", clientCertificate: clientCert,
+                                          serverCertificate: serverCert))
     }
 }
 

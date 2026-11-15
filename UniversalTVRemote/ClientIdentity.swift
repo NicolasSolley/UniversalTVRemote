@@ -2,8 +2,11 @@
 // MIT License, Copyright (c) 2026 Nathan Butler. Adapted for UniversalTVRemote:
 // the keychain slot is "UniversalTVRemote" (so the certificate subject is
 // "UniversalTVRemote XXXX"), and the label / key tag match the identity this
-// app minted in v1.0.10–v1.0.14, so the existing keychain item is reused
-// instead of minting a second identity — and reset() removes it.
+// app minted in v1.0.10–v1.0.14. v1.0.16: any identity minted by the pre-fork
+// code is discarded once (migrateToFreshIdentityIfNeeded) and a fresh one
+// is minted with the fork's exact code — the old identity never paired
+// with any TV, so nothing is lost, and the TV then sees the same
+// certificate shape the working reference app presents.
 
 import CryptoKit
 import Foundation
@@ -51,6 +54,18 @@ enum ClientIdentity {
         guard let found = find() else { throw IdentityError.keychain("identity not found after creation") }
         cached = found
         return found
+    }
+
+    /// One-time migration (v1.0.16): discard any client identity minted by
+    /// the pre-fork code and mint fresh with the fork's exact code on the
+    /// next loadOrCreate, so the TV sees the same certificate shape the
+    /// working reference app presents. The old identity never paired with
+    /// any TV (the QM7 never paired; Samsung uses its own pairing), so
+    /// nothing is lost. Runs once, guarded by a UserDefaults flag.
+    static func migrateToFreshIdentityIfNeeded() {
+        guard !UserDefaults.standard.bool(forKey: "androidtv.identity.forkFresh") else { return }
+        reset()
+        UserDefaults.standard.set(true, forKey: "androidtv.identity.forkFresh")
     }
 
     /// Throws away the key so the next pairing starts fresh.

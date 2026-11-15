@@ -72,7 +72,7 @@ struct RemoteCapabilities {
             // Text input is not implemented (IME batch edits need live
             // counters that cannot be verified without a real TV), so the
             // keyboard is hidden for Android TV. Voice IS implemented:
-            // the remote session carries 8 kHz PCM (see AndroidTVRemote).
+            // the remote session carries 8 kHz PCM (see AndroidTVDriver).
             return RemoteCapabilities(
                 supportsDigits: true, supportsTextInput: false, supportsApps: false,
                 supportsSeparatePause: true, supportsPlayback: true,
@@ -90,7 +90,7 @@ struct RemoteCapabilities {
 /// into the brand's real protocol. All failure states surface as
 /// plain-language status text; nothing is faked.
 @MainActor
-final class RemoteSession: ObservableObject {
+final class RemoteSession: ObservableObject, TVDriverDelegate {
     /// `var`, not `let`: the Roku connect updates the stored device
     /// name from /query/device-info (user-renamed Rokus).
     var device: TVDevice
@@ -113,9 +113,16 @@ final class RemoteSession: ObservableObject {
 
     private let samsung = SamsungRemote()
     private let lg: LGRemote
-    private let androidTV = AndroidTVRemote()
-    /// Continuation the Android TV code provider is waiting on.
-    private var codeContinuation: CheckedContinuation<String, Error>?
+    /// The fork's Android TV driver (TVDriver.swift): RemoteSession is
+    /// its delegate. Created per connect, like the fork's AppModel.
+    private var androidTVDriver: AndroidTVDriver?
+    /// Auto-pair guard: the tap is the explicit pair action in our UI
+    /// (the fork's Pair button), but only once per connect — a second
+    /// .unpaired is a real failure, not a retry loop.
+    private var pairingAttempted = false
+    /// Voice session counter (the fork has no voice; our mic button
+    /// needs one id per utterance).
+    private var voiceSessionCounter = 0
     private let voiceCapture = VoiceCapture()
     /// Session id of the utterance in progress, if any.
     private var voiceSessionId: Int?
@@ -197,36 +204,12 @@ final class RemoteSession: ObservableObject {
                 status = "Couldn't connect to the TV. Make sure it's on and on the same Wi-Fi network."
             }
         case .androidTV:
-            status = "Connecting…"
-            defer { awaitingPairingCode = false }
-            do {
-                try await androidTV.connect(to: host) { [weak self] in
-                    guard let self else { throw CancellationError() }
-                    self.awaitingPairingCode = true
-                    self.status = "A 6-character code is showing on your TV — type it below."
-                    // No timeout here: the user exits via Pair/Cancel, and
-                    // disconnect() resumes this continuation if the view
-                    // goes away. (A timeout that cancelled this task would
-                    // leave the continuation suspended forever.)
-                    return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<String, Error>) in
-                        self.codeContinuation = continuation
-                    }
-                }
-                isConnected = true
-                status = "Connected to \(device.name)."
-            } catch is CancellationError {
-                isConnected = false
-                status = "Pairing cancelled."
-            } catch let error as AndroidTVRemote.AndroidTVError {
-                isConnected = false
-                // v1.0.15: the fork's driver reports a plain-language
-                // failure reason; the diagnostic probes (and their
-                // notes) are gone, so the reason is the whole status.
-                status = error.localizedDescription
-            } catch {
-                isConnected = false
-                status = "Couldn't connect to the TV. Make sure it's on and on the same Wi-Fi network."
-            }
+            // The fork's driver reports state through the delegate
+            // (below); connectAndroidTV only starts it and returns.
+            // Pairing starts from the .unpaired callback — the tap is
+            // the explicit pair action in our UI (the fork's Pair
+            // button).
+            connectAndroidTV(host: host)
         case .airPlay, .other:
             status = "This device was found, but there's no public way to control it from an app."
         }
@@ -234,14 +217,77 @@ final class RemoteSession: ObservableObject {
 
     func disconnect() {
         stopVoiceCapture()
-        codeContinuation?.resume(throwing: CancellationError())
-        codeContinuation = nil
         awaitingPairingCode = false
         RokuRemote.resetQueue()
         Task { await samsung.disconnect() }
         Task { await lg.disconnect() }
-        Task { await androidTV.disconnect() }
+        androidTVDriver?.disconnect()
         isConnected = false
+    }
+
+    // MARK: - Android TV (the fork's driver; RemoteSession is the delegate)
+
+    /// Starts the fork's Android TV driver for `host`. One-time identity
+    /// migration first (v1.0.16): any identity minted by the pre-fork
+    /// code is discarded and a fresh one is minted with the fork's exact
+    /// code, so the TV sees the same certificate shape the working
+    /// reference app presents.
+    private func connectAndroidTV(host: String) {
+        ClientIdentity.migrateToFreshIdentityIfNeeded()
+        androidTVDriver?.disconnect()
+        pairingAttempted = false
+        status = "Connecting…"
+        let paired = UserDefaults.standard.bool(forKey: "androidtv.paired.\(host)")
+        let tvDevice = AndroidTVDevice(name: device.name, brand: .androidTV, host: host, isPaired: paired)
+        let driver = AndroidTVDriver(device: tvDevice)
+        driver.delegate = self
+        androidTVDriver = driver
+        driver.connect()
+    }
+
+    // MARK: TVDriverDelegate
+
+    func driver(_ driver: TVDriver, didChangeState state: ConnectionState) {
+        guard device.brand == .androidTV else { return }
+        switch state {
+        case .connected:
+            isConnected = true
+            awaitingTVPrompt = false
+            status = "Connected to \(device.name)."
+        case .failed(let reason):
+            isConnected = false
+            awaitingPairingCode = false
+            awaitingTVPrompt = false
+            status = reason
+        case .pairing(.enterCode(_, let error)):
+            awaitingPairingCode = true
+            status = error ?? "A 6-character code is showing on your TV — type it below."
+        case .pairing(.verifying):
+            status = "Checking the code…"
+        case .pairing(.acceptOnTV):
+            awaitingTVPrompt = true
+            status = "Accept the prompt on your TV."
+        case .unpaired:
+            // The TV doesn't know our certificate: pair from scratch.
+            // Only once per connect; a second .unpaired is a real
+            // failure, not a retry loop.
+            if !pairingAttempted {
+                pairingAttempted = true
+                androidTVDriver?.pair()
+            } else {
+                isConnected = false
+                status = "The TV isn't paired. Try connecting again."
+            }
+        case .connecting, .idle:
+            status = "Connecting…"
+        }
+    }
+
+    func driver(_ driver: TVDriver, didUpdateDevice device: AndroidTVDevice) {
+        guard self.device.brand == .androidTV, let host = self.device.host else { return }
+        // Persist the paired flag (and only that — the driver's model
+        // learning is internal; our UI doesn't display it).
+        UserDefaults.standard.set(device.isPaired, forKey: "androidtv.paired.\(host)")
     }
 
     /// Starts a voice utterance (Android TV only): opens the mic, sends
@@ -263,11 +309,18 @@ final class RemoteSession: ObservableObject {
             try await voiceCapture.start { [weak self] samples in
                 self?.voiceContinuation?.yield(samples)
             }
-            let id = try await androidTV.beginVoice()
+            guard let driver = androidTVDriver, driver.state == .connected else {
+                stopVoiceCapture()
+                status = "Not connected — tap a button to connect first."
+                return
+            }
+            voiceSessionCounter += 1
+            let id = voiceSessionCounter
+            driver.sendVoiceBegin(sessionId: id)
             voiceSessionId = id
             voicePumpTask = Task {
                 for await samples in stream {
-                    try? await androidTV.sendVoiceSamples(samples, sessionId: id)
+                    driver.sendVoiceSamples(samples, sessionId: id)
                 }
             }
             isRecordingVoice = true
@@ -292,7 +345,7 @@ final class RemoteSession: ObservableObject {
         voicePumpTask = nil
         voiceSessionId = nil
         isRecordingVoice = false
-        try? await androidTV.endVoice(sessionId: id)
+        androidTVDriver?.sendVoiceEnd(sessionId: id)
         status = "Sent."
     }
 
@@ -318,25 +371,31 @@ final class RemoteSession: ObservableObject {
         }
         pairingCode = ""
         awaitingPairingCode = false
-        codeContinuation?.resume(returning: code)
-        codeContinuation = nil
+        // The fork's driver validates the code itself and re-prompts
+        // (via the delegate) when it doesn't check out.
+        androidTVDriver?.submitPairingCode(code)
     }
 
     /// Called by the pairing-code UI when the user cancels pairing.
     func cancelPairing() {
         pairingCode = ""
         awaitingPairingCode = false
-        codeContinuation?.resume(throwing: CancellationError())
-        codeContinuation = nil
+        // The fork's cancel: drop the pairing channel and go back to
+        // unpaired. Block the auto-pair — the user chose to stop.
+        pairingAttempted = true
+        androidTVDriver?.disconnect()
+        androidTVDriver?.connect()
+        status = "Pairing cancelled."
     }
 
-    /// Forget the Android TV pairing: clears the pinned server
-    /// certificate and the paired flag so the next connect pairs from
-    /// scratch (e.g. after the TV's certificate changed). No-op for
-    /// other brands.
+    /// Forget the Android TV pairing: clears the paired flag so the next
+    /// connect pairs from scratch. The shared client identity is kept
+    /// (the fork's forget removes the device, not the identity).
+    /// No-op for other brands.
     func forgetPairedTV() {
         guard device.brand == .androidTV, let host = device.host else { return }
-        Task { await androidTV.forget(host: host) }
+        UserDefaults.standard.removeObject(forKey: "androidtv.paired.\(host)")
+        androidTVDriver?.disconnect()
         isConnected = false
         status = "Forgot \(device.name). Pair again to connect."
     }
@@ -369,9 +428,6 @@ final class RemoteSession: ObservableObject {
             isConnected = false
             status = error.localizedDescription
         } catch let error as LGError {
-            isConnected = false
-            status = error.localizedDescription
-        } catch let error as AndroidTVRemote.AndroidTVError {
             isConnected = false
             status = error.localizedDescription
         } catch {
@@ -482,37 +538,37 @@ final class RemoteSession: ObservableObject {
     }
 
     private func sendAndroidTV(_ command: RemoteCommand, to host: String) async throws {
+        // The fork's driver sends (and queues + reconnects when paired)
+        // and never throws; `host` is unused — the driver holds it.
+        guard let driver = androidTVDriver else { return }
         switch command {
-        case .power: try await androidTV.sendKey(.power, to: host)
+        case .power: driver.send(.power)
         case .powerOff: break // No distinct power-off key; .power toggles.
-        case .volumeUp: try await androidTV.sendKey(.volumeUp, to: host)
-        case .volumeDown: try await androidTV.sendKey(.volumeDown, to: host)
-        case .mute: try await androidTV.sendKey(.volumeMute, to: host)
-        case .channelUp: try await androidTV.sendKey(.channelUp, to: host)
-        case .channelDown: try await androidTV.sendKey(.channelDown, to: host)
-        case .up: try await androidTV.sendKey(.dpadUp, to: host)
-        case .down: try await androidTV.sendKey(.dpadDown, to: host)
-        case .left: try await androidTV.sendKey(.dpadLeft, to: host)
-        case .right: try await androidTV.sendKey(.dpadRight, to: host)
-        case .enter: try await androidTV.sendKey(.dpadCenter, to: host)
-        case .back: try await androidTV.sendKey(.back, to: host)
-        case .home: try await androidTV.sendKey(.home, to: host)
-        case .exit: try await androidTV.sendKey(.back, to: host) // fork: exit == back (code 4)
-        case .info: try await androidTV.sendKey(.info, to: host)
-        case .menu: try await androidTV.sendKey(.menu, to: host)
-        case .input: try await androidTV.sendKey(.input, to: host)
-        case .search: try await androidTV.sendKey(.search, to: host)
-        case .backspace: try await androidTV.sendKey(.backspace, to: host)
-        case .play: try await androidTV.sendKey(.mediaPlay, to: host)
-        case .pause: try await androidTV.sendKey(.mediaPause, to: host)
-        case .stop: try await androidTV.sendKey(.mediaStop, to: host)
-        case .rewind: try await androidTV.sendKey(.mediaRewind, to: host)
-        case .fastForward: try await androidTV.sendKey(.mediaFastForward, to: host)
-        case .digit(let n):
-            if let key = AndroidTVRemote.Key.digit(n) {
-                try await androidTV.sendKey(key, to: host)
-            }
-        case .text(let text): try await androidTV.sendText(text, to: host)
+        case .volumeUp: driver.send(.volumeUp)
+        case .volumeDown: driver.send(.volumeDown)
+        case .mute: driver.send(.mute)
+        case .channelUp: driver.send(.channelUp)
+        case .channelDown: driver.send(.channelDown)
+        case .up: driver.send(.up)
+        case .down: driver.send(.down)
+        case .left: driver.send(.left)
+        case .right: driver.send(.right)
+        case .enter: driver.send(.select)
+        case .back: driver.send(.back)
+        case .home: driver.send(.home)
+        case .exit: driver.send(.exit) // fork: exit == back (code 4)
+        case .info: driver.send(.info)
+        case .menu: driver.send(.menu)
+        case .input: driver.send(.input)
+        case .search: driver.send(.search)
+        case .backspace: driver.send(.backspace)
+        case .play: driver.send(.play)
+        case .pause: driver.send(.pause)
+        case .stop: driver.send(.stop)
+        case .rewind: driver.send(.rewind)
+        case .fastForward: driver.send(.fastForward)
+        case .digit(let n): driver.send(.digit(n))
+        case .text(let text): driver.sendText(text)
         }
     }
 
