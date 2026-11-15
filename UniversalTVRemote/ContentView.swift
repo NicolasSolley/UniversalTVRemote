@@ -297,14 +297,13 @@ private struct RemoteLayout {
         if keyboardShown { fixed += extraCompact ? 36 : (compact ? 40 : 44) }
         fixed += 38 // connection pill
         if showLGNote { fixed += 16 }
-        fixed += 54 // nav toggle
         if hasPlayback { fixed += playSize }
         fixed += pillsButtonHeight + 6 + 16 // pills row + label
         if hasApps { fixed += 22 + 8 + appsButtonHeight } // "Apps" + buttons
         fixed += bottomCell + 6 + 16 // bottom row + labels
         if showDiagnostic { fixed += CGFloat(diagnosticLines) * 17 }
         // Gaps between sections.
-        var sections = 8 // topBar, pill, toggle, pad, playback, pills, bottom, diagnostic
+        var sections = 7 // topBar, pill, pad, playback, pills, bottom, diagnostic
         if pairingShown { sections += 1 }
         if keyboardShown { sections += 1 }
         if showLGNote { sections += 1 }
@@ -314,8 +313,10 @@ private struct RemoteLayout {
         let gaps = CGFloat(sections - 1) * gap
         // The pad absorbs the rest, down to a floor (lower while the
         // pairing card or keyboard is up — the pad isn't the focus then).
+        // Cap is the swipe pad's design height: it is the master control
+        // now, so it takes the space the old toggle used to take.
         let floor: CGFloat = pairingShown ? 80 : (keyboardShown ? 60 : 100)
-        let padSize = min(230, max(floor, h - fixed - gaps))
+        let padSize = min(300, max(floor, h - fixed - gaps))
 
         return RemoteLayout(gap: gap, topPadding: topPadding, topBarButton: topBarButton,
                             pairingCardPadding: pairingCardPadding, pairingCardSpacing: pairingCardSpacing,
@@ -332,22 +333,16 @@ private struct RemoteView: View {
     @ObservedObject var session: RemoteSession
     var onBack: () -> Void
 
-    @State private var navMode: NavMode = .dpad
     @State private var keyboardText = ""
     @State private var showKeyboard = false
     @State private var showSettings = false
     /// Assume the TV is playing until the user taps Play/Pause.
     @State private var isPlaying = true
 
-    enum NavMode: String, CaseIterable {
-        case swipe = "Swipe"
-        case dpad = "D-Pad"
-    }
-
     var body: some View {
         // No ScrollView on the remote (v1.0.15): everything fits on one
         // page. The layout sizes itself from the available height — the
-        // D-pad / swipe pad absorbs the slack, and on short screens the
+        // swipe pad absorbs the slack, and on short screens the
         // bottom row, buttons and spacing shrink too. Nothing is dropped.
         GeometryReader { geo in
             let layout = RemoteLayout.make(
@@ -420,18 +415,11 @@ private struct RemoteView: View {
                         .padding(.horizontal)
                 }
 
-                // Wide D-Pad | Swipe toggle.
-                navToggle
-
-                // Navigation: big circular D-pad or the big swipe pad,
-                // behind the toggle. D-pad is the default. Both size
+                // Navigation: the swipe pad is the one and only
+                // navigation control — no D-pad, no toggle. It sizes
                 // from the layout so the page fits without scrolling.
-                if navMode == .dpad {
-                    CircularDPadView(size: layout.padSize) { send($0) }
-                } else {
-                    SwipePadView(height: layout.padSize) { send($0) }
-                        .padding(.horizontal)
-                }
+                SwipePadView(height: layout.padSize) { send($0) }
+                    .padding(.horizontal)
 
                 // Playback row (ours — the reference has none, but
                 // transport is core): just Rewind / Play-Pause /
@@ -695,35 +683,6 @@ private struct RemoteView: View {
         Task { await session.send(command) }
     }
 
-    /// Wide D-Pad | Swipe segmented toggle: icon + label per segment,
-    /// the selected one filled blue. D-pad is the default mode.
-    private var navToggle: some View {
-        HStack(spacing: 0) {
-            toggleSegment(icon: "dpad", label: "D-Pad", selected: navMode == .dpad) { navMode = .dpad }
-            toggleSegment(icon: "hand.tap", label: "Swipe", selected: navMode == .swipe) { navMode = .swipe }
-        }
-        .padding(3)
-        .background(Color.white.opacity(0.08), in: Capsule())
-        .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
-        .padding(.horizontal)
-    }
-
-    private func toggleSegment(icon: String, label: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: icon)
-                    .font(.title3)
-                Text(label)
-                    .font(.headline)
-            }
-            .foregroundStyle(selected ? .white : .secondary)
-            .frame(maxWidth: .infinity, minHeight: 48)
-            .background(selected ? remoteAccent : Color.clear, in: Capsule())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
-    }
-
     /// Circular transport button (Rewind, Fast-forward):
     /// dark circle, white icon.
     private func transportButton(systemImage: String, size: CGFloat, action: @escaping () -> Void) -> some View {
@@ -817,93 +776,6 @@ private struct SwipePadView: View {
                         }
                     }
             )
-    }
-}
-
-// MARK: - Circular D-Pad
-
-/// Big circular D-pad: four curved directional segments (annular
-/// sectors with small gaps) around a central round OK button. Dark and
-/// neutral — no accent color. Taps are hit-tested against the sector
-/// shape itself, so the corners of the square frame do nothing.
-/// The size comes from the layout so the page fits without scrolling;
-/// the OK button never shrinks below a tappable 44pt.
-private struct CircularDPadView: View {
-    var size: CGFloat
-    var onCommand: (RemoteCommand) -> Void
-
-    private let gap: CGFloat = 3 // degrees of gap on each side of a sector
-
-    var body: some View {
-        let okSize = max(44, size * 84 / 230)
-        ZStack {
-            // Base disc: shows through the gaps between segments.
-            Circle()
-                .fill(Color.white.opacity(0.05))
-                .frame(width: size, height: size)
-            sector(.up, systemImage: "chevron.up", startAngle: -135, endAngle: -45)
-            sector(.right, systemImage: "chevron.right", startAngle: -45, endAngle: 45)
-            sector(.down, systemImage: "chevron.down", startAngle: 45, endAngle: 135)
-            sector(.left, systemImage: "chevron.left", startAngle: 135, endAngle: 225)
-            // Central OK button.
-            Button {
-                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                onCommand(.enter)
-            } label: {
-                Text("OK")
-                    .font(.headline.bold())
-                    .foregroundStyle(.white)
-                    .frame(width: okSize, height: okSize)
-                    .background(Color.white.opacity(0.12), in: Circle())
-                    .overlay(Circle().stroke(Color.white.opacity(0.10), lineWidth: 1))
-            }
-            .buttonStyle(.plain)
-        }
-        .frame(width: size, height: size)
-    }
-
-    private func sector(_ command: RemoteCommand, systemImage: String, startAngle: Double, endAngle: Double) -> some View {
-        let shape = AnnularSector(startAngle: .degrees(startAngle + gap), endAngle: .degrees(endAngle - gap))
-        let midAngle = (startAngle + endAngle) / 2
-        let midRadius = (size / 2) * (1 + 0.38) / 2 // between inner and outer radius
-        let radians = midAngle * .pi / 180
-        let x = size / 2 + midRadius * cos(radians)
-        let y = size / 2 + midRadius * sin(radians)
-        return Button {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            onCommand(command)
-        } label: {
-            ZStack {
-                shape.fill(Color.white.opacity(0.10))
-                Image(systemName: systemImage)
-                    .font(.title3.bold())
-                    .foregroundStyle(.white)
-                    .position(x: x, y: y)
-            }
-            .frame(width: size, height: size)
-        }
-        .buttonStyle(.plain)
-        .contentShape(shape)
-    }
-}
-
-/// One annular sector (a ring segment): an outer arc, an inner arc back,
-/// closed. Angles use SwiftUI's convention (0° = east, positive =
-/// clockwise, since y grows downward).
-private struct AnnularSector: Shape {
-    var startAngle: Angle
-    var endAngle: Angle
-    var innerFraction: CGFloat = 0.38
-
-    func path(in rect: CGRect) -> Path {
-        let center = CGPoint(x: rect.midX, y: rect.midY)
-        let outer = min(rect.width, rect.height) / 2
-        let inner = outer * innerFraction
-        var path = Path()
-        path.addArc(center: center, radius: outer, startAngle: startAngle, endAngle: endAngle, clockwise: false)
-        path.addArc(center: center, radius: inner, startAngle: endAngle, endAngle: startAngle, clockwise: true)
-        path.closeSubpath()
-        return path
     }
 }
 
