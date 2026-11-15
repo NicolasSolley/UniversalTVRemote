@@ -112,9 +112,6 @@ enum X509 {
     private static let sha256WithRSAOID = [1, 2, 840, 113549, 1, 1, 11]
     private static let commonNameOID = [2, 5, 4, 3]
     private static let basicConstraintsOID = [2, 5, 29, 19]
-    private static let keyUsageOID = [2, 5, 29, 15]
-    private static let extendedKeyUsageOID = [2, 5, 29, 37]
-    private static let clientAuthOID = [1, 3, 6, 1, 5, 5, 7, 3, 2]
     private static let subjectAltNameOID = [2, 5, 29, 17]
 
     // MARK: - Self-signed certificate
@@ -126,20 +123,18 @@ enum X509 {
     }
 
     /// Mint a minimal self-signed RSA certificate for `commonName`.
-    /// Valid 10 years from now. The TV does not validate the chain — it
-    /// binds this certificate during pairing — but the shape must match
-    /// the reference implementation (tronikos/androidtvremote2
-    /// certificate_generator.py) exactly: basicConstraints CA:TRUE with
-    /// path_length 0, NON-critical, plus a subjectAltName, serial 1000.
-    /// v1.0.3 minted a critical CA:TRUE cert with no path length, and
-    /// some TLS stacks reject a client certificate shaped that way.
-    /// v1.0.6 adds, on top of that shape, a NON-critical keyUsage
-    /// (digitalSignature + keyEncipherment) and a NON-critical
-    /// extendedKeyUsage (clientAuth): SecureTransport rejected the bare
-    /// CA:TRUE cert with no usage flags as a client identity
-    /// (errSSLBadCert, -9808) before the TV's certificate ever arrived.
-    /// The TV hashes only the RSA modulus/exponent for the pairing
-    /// secret, so these extensions cannot change the TV side.
+    /// Valid from yesterday for 20 years. The shape mirrors the working
+    /// reference app (iamnbutler/open-tv-remote, which pairs the TCL
+    /// QM7) exactly: basicConstraints CA:TRUE with path_length 0,
+    /// NON-critical, plus a subjectAltName, random 8-byte serial. No
+    /// keyUsage, no extendedKeyUsage — the reference cert has neither,
+    /// and it pairs fine. (v1.0.6 added both on the hypothesis that
+    /// SecureTransport rejected a bare CA:TRUE cert as a client identity
+    /// — disproven by the reference cert working and by our own
+    /// no-identity probe failing identically. The extensions were
+    /// removed in v1.0.10.) The TV hashes only the RSA modulus/exponent
+    /// for the pairing secret, so these extensions cannot change the
+    /// TV side.
     static func makeSelfSigned(commonName: String, keyPair: (publicKey: SecKey, privateKey: SecKey)) throws -> Data {
         guard let publicKeyDER = SecKeyCopyExternalRepresentation(keyPair.publicKey, nil) as Data? else {
             throw NSError(domain: "X509", code: 1,
@@ -149,29 +144,28 @@ enum X509 {
         let algorithm = sequence(oid(sha256WithRSAOID) + null())
         let name = sequence(set(sequence(oid(commonNameOID) + utf8String(commonName))))
         let now = Date()
-        let validity = sequence(utcTime(now) + utcTime(now.addingTimeInterval(10 * 365 * 24 * 3600)))
+        let validity = sequence(utcTime(now.addingTimeInterval(-86_400))
+            + utcTime(now.addingTimeInterval(20 * 365 * 24 * 3600)))
         let spki = sequence(sequence(oid(rsaEncryptionOID) + null()) + bitString(publicKeyDER))
         // Extensions [3]: basicConstraints CA:TRUE, path_length 0,
-        // NON-critical, + keyUsage (digitalSignature + keyEncipherment) +
-        // extendedKeyUsage (clientAuth), both NON-critical, + SAN dNSName.
-        // The dNSName GeneralName is context-specific primitive tag [2] (0x82).
-        // keyUsage BIT STRING: 5 unused bits, bits digitalSignature (0x80)
-        // + keyEncipherment (0x20) = 0xA0. Built with a raw TLV (not the
-        // bitString helper, which prepends a 0-unused-bits byte).
+        // NON-critical, + SAN dNSName. The dNSName GeneralName is
+        // context-specific primitive tag [2] (0x82).
         let extensions = explicit(3, sequence(
             extensionItem(oidComponents: basicConstraintsOID, critical: false,
                           value: sequence(boolean(true) + integer(0)))
-            + extensionItem(oidComponents: keyUsageOID, critical: false,
-                            value: tlv(tag: 0x03, content: Data([0x05, 0xA0])))
-            + extensionItem(oidComponents: extendedKeyUsageOID, critical: false,
-                            value: sequence(oid(clientAuthOID)))
             + extensionItem(oidComponents: subjectAltNameOID, critical: false,
                             value: sequence(tlv(tag: 0x82, content: Data(commonName.utf8))))
         ))
 
+        // Random 8-byte serial, top bit cleared so it stays positive —
+        // the reference app's serial.
+        var serial = [UInt8](repeating: 0, count: 8)
+        _ = SecRandomCopyBytes(kSecRandomDefault, serial.count, &serial)
+        serial[0] &= 0x7F
+
         let tbs = sequence(
             explicit(0, integer(2)) +
-            integer(1000) +
+            integer(Data(serial)) +
             algorithm +
             name +
             validity +
@@ -417,17 +411,13 @@ enum X509 {
         return result
     }
 
-    /// Whether the certificate's extensions contain a keyUsage extension
-    /// (OID 2.5.29.15). Used to detect pre-v1.0.6 identities, which were
-    /// minted without one and must be regenerated. Returns true (keep)
-    /// when the extensions cannot be parsed at all — only a
-    /// positively-parsed extensions list missing keyUsage triggers
-    /// regeneration, so a parser quirk can never force a fresh identity
-    /// on every launch (which would break re-pairing with an
-    /// already-paired TV).
-    static func hasKeyUsageExtension(certificateDER: Data) -> Bool {
-        guard let extensions = extensions(certificateDER: certificateDER) else { return true }
-        return extensions.contains { $0.oid == [2, 5, 29, 15] }
+    /// First four hex digits of the certificate's SHA-256 — stable for
+    /// as long as the identity is. Used in the PairingRequest client
+    /// name so the TV shows which device is pairing (mirrors the
+    /// reference app's shortID).
+    static func shortID(certificateDER: Data) -> String {
+        sha256Fingerprint(certificateDER: certificateDER)
+            .prefix(2).map { String(format: "%02X", $0) }.joined()
     }
 
     /// SHA-256 fingerprint of a certificate's DER bytes (for LG cert pinning).

@@ -5,23 +5,19 @@ import Security
 
 /// Tests for the Android TV certificate handling, pairing secret, and
 /// certificate pinning. Offline: no TV, no network. Key generation uses
-/// SecKeyGeneratePair with non-permanent keys (nothing is stored in the
+/// SecKeyCreateRandomKey with non-permanent keys (nothing is stored in the
 /// Keychain except the pin store's own round-trip test, which uses a
 /// throwaway host name).
 final class X509Tests: XCTestCase {
 
     /// Mint a fresh RSA keypair + self-signed certificate, as the app does.
     private func mintedCert(commonName: String = "UniversalTVRemote") throws -> (der: Data, publicKeyDER: Data) {
-        var publicKeyOpt: SecKey?
-        var privateKeyOpt: SecKey?
-        let parameters: [String: Any] = [
+        let attributes: [String: Any] = [
             kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
             kSecAttrKeySizeInBits as String: 2048,
         ]
-        let status = SecKeyGeneratePair(parameters as CFDictionary, &publicKeyOpt, &privateKeyOpt)
-        XCTAssertEqual(status, errSecSuccess)
-        let publicKey = try XCTUnwrap(publicKeyOpt)
-        let privateKey = try XCTUnwrap(privateKeyOpt)
+        let privateKey = try XCTUnwrap(SecKeyCreateRandomKey(attributes as CFDictionary, nil))
+        let publicKey = try XCTUnwrap(SecKeyCopyPublicKey(privateKey))
         let publicKeyDER = SecKeyCopyExternalRepresentation(publicKey, nil) as Data?
         let der = try X509.makeSelfSigned(
             commonName: commonName,
@@ -39,15 +35,23 @@ final class X509Tests: XCTestCase {
         // CN == SAN == the client name.
         XCTAssertEqual(X509.subjectCommonName(certificateDER: der), "UniversalTVRemote")
 
-        // Serial 1000 (the reference implementation's serial).
-        XCTAssertEqual(X509.serialNumber(certificateDER: der), 1000)
+        // Serial is random 8 bytes (the reference app's serial): it
+        // parses, is non-zero, and differs between mints.
+        let serialHex = try XCTUnwrap(X509.serialNumberHex(certificateDER: der))
+        XCTAssertTrue(serialHex.hasPrefix("0x"), serialHex)
+        XCTAssertGreaterThan(serialHex.count, 2)
+        XCTAssertNotNil(X509.serialNumber(certificateDER: der))
+        let (der2, _) = try mintedCert()
+        XCTAssertNotEqual(X509.serialNumberHex(certificateDER: der),
+                          X509.serialNumberHex(certificateDER: der2))
 
-        // Extensions, in mint order: basicConstraints, keyUsage,
-        // extendedKeyUsage, subjectAltName — all non-critical.
+        // Extensions, in mint order: basicConstraints, subjectAltName —
+        // all non-critical. No keyUsage, no extendedKeyUsage: the
+        // reference app's certificate has neither.
         let extensions = try XCTUnwrap(X509.extensions(certificateDER: der))
-        XCTAssertEqual(extensions.count, 4)
+        XCTAssertEqual(extensions.count, 2)
         XCTAssertEqual(extensions.map { $0.oid },
-                       [[2, 5, 29, 19], [2, 5, 29, 15], [2, 5, 29, 37], [2, 5, 29, 17]])
+                       [[2, 5, 29, 19], [2, 5, 29, 17]])
 
         // basicConstraints: CA:TRUE, pathlen 0, non-critical.
         let bc = try XCTUnwrap(extensions.first { $0.oid == [2, 5, 29, 19] })
@@ -60,23 +64,6 @@ final class X509Tests: XCTestCase {
         XCTAssertEqual(bcParts[0].content, Data([0xFF])) // TRUE
         XCTAssertEqual(bcParts[1].tag, 0x02) // INTEGER
         XCTAssertEqual(bcParts[1].content, Data([0x00])) // pathlen 0
-
-        // keyUsage: digitalSignature + keyEncipherment, non-critical.
-        // BIT STRING content: 5 unused bits, bits 0x80 + 0x20 = 0xA0.
-        let ku = try XCTUnwrap(extensions.first { $0.oid == [2, 5, 29, 15] })
-        XCTAssertFalse(ku.critical)
-        let kuTLV = try XCTUnwrap(X509.readTLV(ku.value, offset: 0))
-        XCTAssertEqual(kuTLV.tag, 0x03) // BIT STRING
-        XCTAssertEqual(kuTLV.content, Data([0x05, 0xA0]))
-
-        // extendedKeyUsage: clientAuth only, non-critical.
-        let eku = try XCTUnwrap(extensions.first { $0.oid == [2, 5, 29, 37] })
-        XCTAssertFalse(eku.critical)
-        let ekuTLV = try XCTUnwrap(X509.readTLV(eku.value, offset: 0))
-        XCTAssertEqual(ekuTLV.tag, 0x30)
-        let ekuOIDs = X509.children(of: ekuTLV.content)
-            .compactMap { X509.oidComponents($0.content) }
-        XCTAssertEqual(ekuOIDs, [[1, 3, 6, 1, 5, 5, 7, 3, 2]])
 
         // subjectAltName: dNSName == CN, non-critical.
         let san = try XCTUnwrap(extensions.first { $0.oid == [2, 5, 29, 17] })
@@ -92,7 +79,7 @@ final class X509Tests: XCTestCase {
         // kSecOID*/kSecPropertyKeyValue constants) is macOS-only and does
         // not exist in the iOS Security framework — it fails CI with
         // "cannot find in scope". The DER-level assertions above verify
-        // the same keyUsage bits, EKU OIDs, and SAN names.
+        // the same SAN names.
 
         // Unparseable input is rejected, not misread.
         XCTAssertNil(X509.extensions(certificateDER: Data([0x30, 0x03, 0x02, 0x01, 0x00])))
@@ -124,17 +111,15 @@ final class X509Tests: XCTestCase {
 final class PairingSecretTests: XCTestCase {
 
     private func mintedCert(commonName: String) throws -> Data {
-        var publicKey: SecKey?
-        var privateKey: SecKey?
-        let parameters: [String: Any] = [
+        let attributes: [String: Any] = [
             kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
             kSecAttrKeySizeInBits as String: 2048,
         ]
-        XCTAssertEqual(SecKeyGeneratePair(parameters as CFDictionary, &publicKey, &privateKey),
-                       errSecSuccess)
+        let privateKey = try XCTUnwrap(SecKeyCreateRandomKey(attributes as CFDictionary, nil))
+        let publicKey = try XCTUnwrap(SecKeyCopyPublicKey(privateKey))
         return try X509.makeSelfSigned(
             commonName: commonName,
-            keyPair: (publicKey: try XCTUnwrap(publicKey), privateKey: try XCTUnwrap(privateKey)))
+            keyPair: (publicKey: publicKey, privateKey: privateKey))
     }
 
     func testPairingSecretKnownVector() throws {
@@ -268,17 +253,15 @@ final class TLSHandshakeRecorderTests: XCTestCase {
     }
 
     private func mintedCert() throws -> Data {
-        var publicKey: SecKey?
-        var privateKey: SecKey?
-        let parameters: [String: Any] = [
+        let attributes: [String: Any] = [
             kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
             kSecAttrKeySizeInBits as String: 2048,
         ]
-        XCTAssertEqual(SecKeyGeneratePair(parameters as CFDictionary, &publicKey, &privateKey),
-                       errSecSuccess)
+        let privateKey = try XCTUnwrap(SecKeyCreateRandomKey(attributes as CFDictionary, nil))
+        let publicKey = try XCTUnwrap(SecKeyCopyPublicKey(privateKey))
         return try X509.makeSelfSigned(
             commonName: "UniversalTVRemote",
-            keyPair: (publicKey: try XCTUnwrap(publicKey), privateKey: try XCTUnwrap(privateKey)))
+            keyPair: (publicKey: publicKey, privateKey: privateKey))
     }
 
     func testClientHelloStructure() {
@@ -307,7 +290,8 @@ final class TLSHandshakeRecorderTests: XCTestCase {
         XCTAssertTrue(summary.contains("0xC02F"), summary)
         XCTAssertTrue(summary.contains("1 cert"), summary)
         XCTAssertTrue(summary.contains("CN=UniversalTVRemote"), summary)
-        XCTAssertTrue(summary.contains("serial=0x3E8"), summary)
+        let serialHex = try XCTUnwrap(X509.serialNumberHex(certificateDER: der))
+        XCTAssertTrue(summary.contains("serial=\(serialHex)"), summary)
         XCTAssertTrue(summary.contains("sig=sha256WithRSAEncryption"), summary)
     }
 
@@ -361,7 +345,10 @@ final class TLSHandshakeRecorderTests: XCTestCase {
     func testX509SignatureAlgorithmAndSerialHex() throws {
         let der = try mintedCert()
         XCTAssertEqual(X509.signatureAlgorithm(certificateDER: der), "sha256WithRSAEncryption")
-        XCTAssertEqual(X509.serialNumberHex(certificateDER: der), "0x3E8")
+        // Random 8-byte serial: parses as minimal hex, never the old fixed 1000.
+        let serialHex = try XCTUnwrap(X509.serialNumberHex(certificateDER: der))
+        XCTAssertTrue(serialHex.hasPrefix("0x"), serialHex)
+        XCTAssertNotEqual(serialHex, "0x3E8")
         XCTAssertNil(X509.signatureAlgorithm(certificateDER: Data()))
         XCTAssertNil(X509.serialNumberHex(certificateDER: Data()))
     }

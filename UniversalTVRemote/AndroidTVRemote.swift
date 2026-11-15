@@ -2,6 +2,9 @@ import Foundation
 import Network
 import CryptoKit
 import Security
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// Android TV / Google TV remote control — Android TV Remote protocol v2.
 ///
@@ -103,9 +106,20 @@ actor AndroidTVRemote {
         }
     }
 
-    /// The client name sent in PairingRequest — and, matching the reference
-    /// implementation, the certificate's CN/SAN. One source of truth.
-    static let clientName = "UniversalTVRemote"
+    /// The client name sent in PairingRequest — shown on the TV while
+    /// pairing, tagged with the certificate's fingerprint so devices can
+    /// be told apart. Mirrors the working reference app: its client name
+    /// ("Open Remote (iPhone XXXX)") is NOT the certificate's CN, and
+    /// the TV accepts it, so the name is a display string, not a
+    /// protocol binding.
+    static func clientName(for certificateDER: Data) -> String {
+        #if os(macOS)
+        let kind = "Mac"
+        #else
+        let kind = UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
+        #endif
+        return "Universal TV Remote (\(kind) \(X509.shortID(certificateDER: certificateDER)))"
+    }
 
     /// Feature bits (RemoteConfigure code1) from remote.py.
     private static let featurePing = 1
@@ -580,6 +594,11 @@ actor AndroidTVRemote {
                 replyToConfigure(payload)
             case (2, 2): // remote_set_active
                 sendRemoteMessage(Protobuf.messageField(2, Protobuf.varintField(1, UInt64(activeFeatures))))
+                // The reference marks the session connected on set_active
+                // as well as remote_start; some TVs send only one of
+                // them. The second resume is a no-op (continuation nilled).
+                readyContinuation?.resume()
+                readyContinuation = nil
             case (8, 2): // remote_ping_request
                 guard let payload = reader.readBytes() else { return }
                 replyToPing(payload)
@@ -682,7 +701,7 @@ actor AndroidTVRemote {
 
         // 1. Pairing request.
         let request = Protobuf.stringField(1, "atvremote") // service_name
-            + Protobuf.stringField(2, Self.clientName) // client_name
+            + Protobuf.stringField(2, Self.clientName(for: identity.certificateDER)) // client_name
         try await sendPairingMessage(outerMessage(Protobuf.messageField(10, request)))
 
         // 2. Wait until the TV shows the code (configuration_ack received).
@@ -917,7 +936,6 @@ final class TLSConnection {
 
     private let connection: NWConnection
     private let tlsOptions: NWProtocolTLS.Options
-    private let queue = DispatchQueue(label: "com.nicolassolley.universaltvremote.tls")
     private var buffer = Data()
     private var stopped = false
     /// True once the TV presented its certificate during the handshake.
@@ -940,21 +958,17 @@ final class TLSConnection {
         return presentedDER == expectedDER
     }
 
-    /// TLS options shared by both paths: minimum TLS 1.2, maximum
-    /// unset so the handshake negotiates the highest version the TV
-    /// offers (TLS 1.3 included). v1.0.5 pinned min+max to TLS 1.2 on
-    /// the hypothesis that the TCL QM7's TLS stack choked on a TLS 1.3
-    /// ClientHello — but the no-identity probe ran with the same pin
-    /// and failed identically, and EVOLLY's iPhone app pairs the QM7
-    /// fine, so the pin was not the fix and may itself be the problem
-    /// if the TV requires TLS 1.3. The client identity, verify block,
-    /// and trust-on-first-use pinning are unchanged; nothing here
-    /// disables TLS security.
+    /// TLS options shared by both paths: bare defaults, exactly like
+    /// the working reference app — no min/max TLS version is set, so
+    /// the handshake negotiates the highest version the TV offers
+    /// (TLS 1.3 included). v1.0.5 pinned min+max to TLS 1.2 and v1.0.9
+    /// set min TLS 1.2; both failed identically on the QM7 (-9808),
+    /// while the reference app pairs it with bare defaults, so the
+    /// explicit version setting was itself a difference to remove.
+    /// The client identity, verify block, and trust-on-first-use
+    /// pinning are unchanged; nothing here disables TLS security.
     private static func baseTLSOptions() -> NWProtocolTLS.Options {
-        let tlsOptions = NWProtocolTLS.Options()
-        sec_protocol_options_set_min_tls_protocol_version(
-            tlsOptions.securityProtocolOptions, .TLSv12)
-        return tlsOptions
+        NWProtocolTLS.Options()
     }
 
     /// Failable: if `sec_identity_create` returns nil there is no client
@@ -972,10 +986,12 @@ final class TLSConnection {
             tlsOptions.securityProtocolOptions, secIdentity)
         self.tlsOptions = tlsOptions
         self.expectedServerCertificateDER = expectedServerCertificateDER
-        let parameters = NWParameters(tls: tlsOptions)
-        // No `.interactive` case exists; `.responsiveData` is the service
-        // class for traffic the user is actively waiting on.
-        parameters.serviceClass = .responsiveData
+        // TCP options mirror the reference app: a 6s connect timeout and
+        // noDelay. No service class is set (the reference sets none).
+        let tcpOptions = NWProtocolTCP.Options()
+        tcpOptions.connectionTimeout = 6
+        tcpOptions.noDelay = true
+        let parameters = NWParameters(tls: tlsOptions, tcp: tcpOptions)
         connection = NWConnection(host: NWEndpoint.Host(host),
                                   port: NWEndpoint.Port(rawValue: port)!,
                                   using: parameters)
@@ -989,8 +1005,10 @@ final class TLSConnection {
         let tlsOptions = Self.baseTLSOptions()
         self.tlsOptions = tlsOptions
         self.expectedServerCertificateDER = nil
-        let parameters = NWParameters(tls: tlsOptions)
-        parameters.serviceClass = .responsiveData
+        let tcpOptions = NWProtocolTCP.Options()
+        tcpOptions.connectionTimeout = 6
+        tcpOptions.noDelay = true
+        let parameters = NWParameters(tls: tlsOptions, tcp: tcpOptions)
         connection = NWConnection(host: NWEndpoint.Host(host),
                                   port: NWEndpoint.Port(rawValue: port)!,
                                   using: parameters)
@@ -1006,16 +1024,14 @@ final class TLSConnection {
         // (trust on first use) any certificate is accepted; with a pin,
         // only the exact pinned DER is accepted, and a mismatch fails
         // the handshake and is flagged via `pinMismatch` — never
-        // silently accepted.
+        // silently accepted. The trust is read the reference app's way
+        // (sec_trust_copy_ref + SecTrustCopyCertificateChain, leaf
+        // first), on the main queue, like the reference app.
         sec_protocol_options_set_verify_block(
             tlsOptions.securityProtocolOptions, { [weak self] _, trust, complete in
-                // The verify block hands us a `sec_trust_t` (an `any OS_sec_trust`
-                // existential); the Security APIs want a concrete `SecTrust`.
-                // The value is always a real SecTrust, but the compiler only
-                // accepts a forced downcast here (`as!`), not `as` or `as?`.
-                // (And `trust` itself is non-optional, so no `if let` on it.)
-                let secTrust = trust as! SecTrust
-                if let certificate = SecTrustGetCertificateAtIndex(secTrust, 0) {
+                let secTrust = sec_trust_copy_ref(trust).takeRetainedValue()
+                if let chain = SecTrustCopyCertificateChain(secTrust) as? [SecCertificate],
+                   let certificate = chain.first {
                     let der = SecCertificateCopyData(certificate) as Data
                     self?.serverCertificateSeen = true
                     self?.onServerCertificate?(der)
@@ -1034,20 +1050,30 @@ final class TLSConnection {
                     return
                 }
                 complete(true)
-            }, queue)
+            }, .main)
         connection.stateUpdateHandler = { [weak self] state in
-            guard let self else { return }
+            guard let self, !self.stopped else { return }
             switch state {
             case .ready:
                 self.onReady?()
             case .failed(let error):
                 self.lastFailure = error
                 self.onFailure?(error)
+            case .waiting(let error):
+                // Unreachable host or refused connection: don't hang
+                // around for the caller's timeout — fail fast, like the
+                // reference app.
+                self.lastFailure = error
+                self.onFailure?(error)
+            case .cancelled:
+                self.lastFailure = nil
+                self.onFailure?(NSError(domain: "TLSConnection", code: 0,
+                    userInfo: [NSLocalizedDescriptionKey: "The TV closed the connection."]))
             default:
                 break
             }
         }
-        connection.start(queue: queue)
+        connection.start(queue: .main)
         receiveLoop()
     }
 
@@ -1061,7 +1087,7 @@ final class TLSConnection {
     }
 
     private func receiveLoop() {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, _, error in
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
             guard let self, !self.stopped else { return }
             if let data, !data.isEmpty {
                 self.buffer.append(data)
@@ -1075,6 +1101,15 @@ final class TLSConnection {
                 // NWError text entirely (exactly what v1.0.4 showed).
                 self.lastFailure = error
                 self.onFailure?(error)
+                return
+            }
+            if isComplete {
+                // The TV closed the connection cleanly: stop receiving
+                // and surface the close instead of looping on a dead
+                // socket (the reference app cancels + finishes here).
+                self.lastFailure = nil
+                self.onFailure?(NSError(domain: "TLSConnection", code: 0,
+                    userInfo: [NSLocalizedDescriptionKey: "The TV closed the connection."]))
                 return
             }
             self.receiveLoop()

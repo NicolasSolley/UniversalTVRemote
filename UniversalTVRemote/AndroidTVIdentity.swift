@@ -8,12 +8,15 @@ enum AndroidTVIdentity {
     private static let keyTag = "com.nicolassolley.universaltvremote.androidtv.key"
     private static let certLabel = "UniversalTVRemote AndroidTV"
 
-    /// The certificate's common name. It must equal the PairingRequest
-    /// client_name: the reference implementation mints its certificate
-    /// with CN == SAN == client_name. (An earlier build used a per-install
-    /// UUID CN; identities minted that way are dropped by load(), below.)
-    private static func clientCommonName() -> String {
-        AndroidTVRemote.clientName
+    /// The certificate's common name: per-install unique, mirroring the
+    /// working reference app ("FreeRemote XXXX"). Android TVs keep one
+    /// pairing per certificate subject, so a shared name lets each new
+    /// pairing replace the last. Minted fresh at create() time; load()
+    /// reads it back off the stored certificate.
+    private static func newClientCommonName() -> String {
+        var suffix = [UInt8](repeating: 0, count: 4)
+        _ = SecRandomCopyBytes(kSecRandomDefault, suffix.count, &suffix)
+        return "UniversalTVRemote " + suffix.map { String(format: "%02X", $0) }.joined()
     }
 
     struct Loaded {
@@ -33,22 +36,15 @@ enum AndroidTVIdentity {
         guard let identity = loadIdentity(),
               let certificate = loadCertificate() else { return nil }
         let certDER = SecCertificateCopyData(certificate) as Data
-        // Drop identities minted under the old scheme (per-install UUID
-        // CN, critical CA:TRUE cert) — they can never pair. A nil CN
-        // lookup is treated as "unknown, keep it", so a lookup quirk can
-        // never force a fresh identity on every launch (which would break
-        // re-pairing with an already-paired TV).
+        // Only identities minted under the per-install scheme pair: the
+        // CN must start with "UniversalTVRemote " (a fixed CN, a UUID
+        // CN, or any other shape is an old identity that never paired
+        // with a TV, so dropping it breaks no working pairing). A nil
+        // CN lookup is treated as "unknown, keep it", so a lookup quirk
+        // can never force a fresh identity on every launch (which would
+        // break re-pairing with an already-paired TV).
         if let cn = X509.subjectCommonName(certificateDER: certDER),
-           cn != AndroidTVRemote.clientName {
-            return nil
-        }
-        // v1.0.6: drop identities minted without a keyUsage extension —
-        // SecureTransport rejected that bare CA:TRUE cert as a client
-        // identity (errSSLBadCert, -9808) before the TV's certificate
-        // ever arrived. The TV never paired with us, so no binding
-        // breaks by minting fresh. (loadOrCreate → create() deletes the
-        // old keypair + certificate first.)
-        if !X509.hasKeyUsageExtension(certificateDER: certDER) {
+           !cn.hasPrefix("UniversalTVRemote ") {
             return nil
         }
         return Loaded(identity: identity, certificateDER: certDER)
@@ -62,22 +58,23 @@ enum AndroidTVIdentity {
             kSecAttrIsPermanent as String: true,
             kSecAttrApplicationTag as String: tagData,
             kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+            kSecAttrLabel as String: certLabel,
         ]
-        let parameters: [String: Any] = [
+        let attributes: [String: Any] = [
             kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
             kSecAttrKeySizeInBits as String: 2048,
             kSecPrivateKeyAttrs as String: privateAttrs,
         ]
-        var publicKey: SecKey?
-        var privateKey: SecKey?
-        let status = SecKeyGeneratePair(parameters as CFDictionary, &publicKey, &privateKey)
-        guard status == errSecSuccess, let publicKey, let privateKey else {
+        var error: Unmanaged<CFError>?
+        guard let privateKey = SecKeyCreateRandomKey(attributes as CFDictionary, &error),
+              let publicKey = SecKeyCopyPublicKey(privateKey) else {
             throw NSError(domain: "AndroidTVIdentity", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "Could not generate keypair"])
+                          userInfo: [NSLocalizedDescriptionKey:
+                            "Could not generate keypair (\(error?.takeRetainedValue().localizedDescription ?? "unknown error"))"])
         }
 
         let certDER = try X509.makeSelfSigned(
-            commonName: clientCommonName(),
+            commonName: newClientCommonName(),
             keyPair: (publicKey: publicKey, privateKey: privateKey))
         guard let certificate = SecCertificateCreateWithData(nil, certDER as CFData) else {
             throw NSError(domain: "AndroidTVIdentity", code: 2,
