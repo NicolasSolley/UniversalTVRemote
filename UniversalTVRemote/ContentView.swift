@@ -164,6 +164,13 @@ private struct DiscoveryListView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 12)
+            // The whole row is the tap target. Without this, SwiftUI
+            // hit-tests only the label's drawn content — the name text
+            // (and the badge) — so taps on the empty space between the
+            // text and the row's edge fell through to the ScrollView
+            // and did nothing. The rectangle makes the badge, the text,
+            // the spacer and the padding all tappable.
+            .contentShape(Rectangle())
         }
         .disabled(!device.brand.supportsControl)
         .buttonStyle(.plain)
