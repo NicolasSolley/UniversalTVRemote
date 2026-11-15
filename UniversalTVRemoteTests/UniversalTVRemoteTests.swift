@@ -343,7 +343,7 @@ final class TLSHandshakeRecorderTests: XCTestCase {
 
     func testSummarizeTLS13Encrypted() throws {
         let bytes = tlsRecord(type: 0x16, payload: serverHello(version: 0x0304, cipher: 0x1301))
-            + tlsRecord(type: 0x23, payload: Data([1, 2, 3]))
+            + tlsRecord(type: 0x17, payload: Data([1, 2, 3]))
         let summary = try XCTUnwrap(TLSHandshakeRecorder.summarize(bytes))
         XCTAssertTrue(summary.contains("TLS 1.3"), summary)
         XCTAssertTrue(summary.contains("encrypted"), summary)
