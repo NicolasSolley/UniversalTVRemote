@@ -509,3 +509,115 @@ final class AndroidTVPersistenceTests: XCTestCase {
         XCTAssertTrue(AndroidTVPersistence.isForkFreshMigrated)
     }
 }
+
+/// Tests for the v1.0.22 Android TV text-input fix. The reference
+/// (androidtvremote2, tests/test_remote.py) is the spec — these mirror
+/// its cases: counters come from remote_ime_key_inject, a show request
+/// updates the field counter, a batch edit is only a fallback when the
+/// key inject carried no counters, and send_text puts the cursor after
+/// the text (start/end are its length). Offline: no TV, no network —
+/// messages are built with ProtoWriter and parsed back with ProtoMessage.
+final class ImeCounterTrackerTests: XCTestCase {
+
+    /// A field-20 remote_ime_key_inject: app_info (counter + package)
+    /// and text_field_status (counter_field). Counters are optional —
+    /// omitting one mirrors a key inject that carries no counter.
+    private func keyInjectMessage(appPackage: String, appCounter: Int?, fieldCounter: Int?) -> ProtoMessage {
+        var w = ProtoWriter()
+        w.message(20) { inject in
+            inject.message(1) { app in
+                if let appCounter { app.int(1, appCounter) }
+                app.string(12, appPackage)
+            }
+            inject.message(2) { field in
+                if let fieldCounter { field.int(1, fieldCounter) }
+            }
+        }
+        return ProtoMessage(w.bytes)!
+    }
+
+    /// A field-22 remote_ime_show_request with the focused field's
+    /// counter_field.
+    private func showRequestMessage(fieldCounter: Int) -> ProtoMessage {
+        var w = ProtoWriter()
+        w.message(22) { show in
+            show.message(2) { status in status.int(1, fieldCounter) }
+        }
+        return ProtoMessage(w.bytes)!
+    }
+
+    /// A field-21 remote_ime_batch_edit carrying only its counters.
+    private func batchEditMessage(imeCounter: Int, fieldCounter: Int) -> ProtoMessage {
+        var w = ProtoWriter()
+        w.message(21) { b in
+            b.int(1, imeCounter)
+            b.int(2, fieldCounter)
+        }
+        return ProtoMessage(w.bytes)!
+    }
+
+    func testKeyInjectSetsCounters() {
+        var tracker = ImeCounterTracker()
+        tracker.learnFromKeyInject(keyInjectMessage(appPackage: "org.jellyfin.androidtv", appCounter: 5, fieldCounter: 141).message(20)!)
+        XCTAssertEqual(tracker.imeCounter, 5)
+        XCTAssertEqual(tracker.imeFieldCounter, 141)
+    }
+
+    func testBatchEditDoesNotOverwriteKeyInjectCounters() {
+        var tracker = ImeCounterTracker()
+        tracker.learnFromKeyInject(keyInjectMessage(appPackage: "org.jellyfin.androidtv", appCounter: 5, fieldCounter: 141).message(20)!)
+        tracker.learnFromBatchEdit(batchEditMessage(imeCounter: 1, fieldCounter: 1).message(21)!)
+        XCTAssertEqual(tracker.imeCounter, 5)
+        XCTAssertEqual(tracker.imeFieldCounter, 141)
+    }
+
+    func testShowRequestUpdatesFieldCounter() {
+        var tracker = ImeCounterTracker()
+        tracker.learnFromShowRequest(showRequestMessage(fieldCounter: 7).message(22)!)
+        XCTAssertEqual(tracker.imeFieldCounter, 7)
+        XCTAssertEqual(tracker.imeCounter, 0)
+    }
+
+    func testBatchEditFallbackWhenKeyInjectHasNoCounters() {
+        var tracker = ImeCounterTracker()
+        tracker.learnFromKeyInject(keyInjectMessage(appPackage: "com.android.vending", appCounter: 3, fieldCounter: 38).message(20)!)
+        XCTAssertEqual((tracker.imeCounter, tracker.imeFieldCounter), (3, 38))
+
+        // Switching to an app that reports 0 counters clears the
+        // previous app's counters.
+        tracker.learnFromKeyInject(keyInjectMessage(appPackage: "com.google.android.youtube.tv", appCounter: nil, fieldCounter: nil).message(20)!)
+        XCTAssertEqual((tracker.imeCounter, tracker.imeFieldCounter), (0, 0))
+
+        // A subsequent batch_edit populates the counters as fallback.
+        tracker.learnFromBatchEdit(batchEditMessage(imeCounter: 9, fieldCounter: 4).message(21)!)
+        XCTAssertEqual((tracker.imeCounter, tracker.imeFieldCounter), (9, 4))
+    }
+
+    func testBatchEditMessageCursorIsTextLength() {
+        // send_text("abcd") with counters 5/141: field 21, then
+        // ime_counter 5, field_counter 141 (varint 0x8D 0x01), one
+        // edit_info (insert 1) whose object has start = end = 4 —
+        // the text's length, not length - 1.
+        let writer = AndroidTVDriver.imeBatchEditMessage(text: "abcd", imeCounter: 5, imeFieldCounter: 141)
+        XCTAssertEqual(Data(writer.bytes), Data([
+            0xAA, 0x01, 0x15,
+            0x08, 0x05,
+            0x10, 0x8D, 0x01,
+            0x1A, 0x0E,
+            0x08, 0x01,
+            0x12, 0x0A,
+            0x08, 0x04, 0x10, 0x04, 0x1A, 0x04, 0x61, 0x62, 0x63, 0x64,
+        ]))
+        // And parsed back, the same shape the reference asserts.
+        let msg = ProtoMessage(writer.bytes)!
+        let edit = msg.message(21)!
+        XCTAssertEqual(edit.int(1), 5)
+        XCTAssertEqual(edit.int(2), 141)
+        let info = edit.message(3)!
+        XCTAssertEqual(info.int(1), 1)
+        let object = info.message(2)!
+        XCTAssertEqual(object.int(1), 4)
+        XCTAssertEqual(object.int(2), 4)
+        XCTAssertEqual(object.string(3), "abcd")
+    }
+}

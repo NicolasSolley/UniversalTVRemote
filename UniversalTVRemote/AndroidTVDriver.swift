@@ -29,6 +29,60 @@ import Network
 import UIKit
 #endif
 
+/// Tracks the IME counters for the focused text field, exactly like
+/// androidtvremote2's RemoteProtocol (remote.py, the reference this
+/// driver is ported from). The counters identify which text field a
+/// batch edit targets — text sent with counters that don't match the
+/// focused field is silently ignored by the TV.
+///
+/// Sources, in the reference's priority order:
+/// - field 20 remote_ime_key_inject: app_info.counter and
+///   text_field_status.counter_field (the primary source — the TV
+///   sends it when the foreground app or focused field changes);
+/// - field 22 remote_ime_show_request: the focused field announces
+///   its counter_field when it gains focus;
+/// - field 21 remote_ime_batch_edit: fallback ONLY when the key
+///   inject carried no counter. A key inject with counter 0 clears
+///   the "has" flag (and the counter), so stale counters from a
+///   previous app are dropped instead of being sent to the new one.
+///
+/// v1.0.21 only read field 21 — the TV sends that only when the
+/// field's text changes, so on a freshly focused empty search box
+/// the counters stayed 0/0 and every batch edit was ignored. The
+/// fork has the same gap (its text path was never field-tested).
+struct ImeCounterTracker {
+    private(set) var imeCounter = 0
+    private(set) var imeFieldCounter = 0
+    private var hasImeCounter = false
+    private var hasImeFieldCounter = false
+
+    /// Field 20: the primary source. Assigns unconditionally (a 0
+    /// clears a stale counter), and "has" is true only for nonzero —
+    /// the reference's `bool(counter)` semantics.
+    mutating func learnFromKeyInject(_ inject: ProtoMessage) {
+        imeCounter = inject.message(1)?.int(1) ?? 0
+        hasImeCounter = imeCounter != 0
+        imeFieldCounter = inject.message(2)?.int(1) ?? 0
+        hasImeFieldCounter = imeFieldCounter != 0
+    }
+
+    /// Field 22: the focused field announcing itself. Only updates
+    /// when the status submessage is present; "has" is set
+    /// unconditionally, like the reference.
+    mutating func learnFromShowRequest(_ show: ProtoMessage) {
+        guard let status = show.message(2) else { return }
+        imeFieldCounter = status.int(1) ?? 0
+        hasImeFieldCounter = true
+    }
+
+    /// Field 21: fallback only — never overwrites counters learned
+    /// from a key inject or show request.
+    mutating func learnFromBatchEdit(_ edit: ProtoMessage) {
+        if !hasImeCounter { imeCounter = edit.int(1) ?? 0 }
+        if !hasImeFieldCounter { imeFieldCounter = edit.int(2) ?? 0 }
+    }
+}
+
 /// Android TV Remote Service protocol v2 — the same one Google's own TV remote uses.
 /// Works with every Google TV / Android TV (Sony, TCL, Hisense, Philips, Chromecast, Shield…).
 @MainActor
@@ -46,8 +100,11 @@ final class AndroidTVDriver: TVDriver {
     private var pendingLaunch: TVApp?
     /// Package name of the app in the foreground, as reported by the TV.
     private(set) var currentApp: String?
-    private var imeCounter = 0
-    private var imeFieldCounter = 0
+    /// The focused text field's IME counters, learned from the TV's
+    /// field-20/22 messages (field 21 is only a fallback) — see
+    /// ImeCounterTracker. Reset on disconnect: the reference creates
+    /// a fresh protocol per connection.
+    private var ime = ImeCounterTracker()
     /// Shown alongside the next code prompt (e.g. after a wrong code forces a fresh one).
     private var nextPairingError: String?
 
@@ -75,6 +132,7 @@ final class AndroidTVDriver: TVDriver {
     func disconnect() {
         pendingKeys = []
         pendingLaunch = nil
+        ime = ImeCounterTracker()
         voiceBeginContinuation?.resume(throwing: VoiceSessionError.notConnected)
         voiceBeginContinuation = nil
         voiceBuffer = Data()
@@ -145,10 +203,20 @@ final class AndroidTVDriver: TVDriver {
             return
         } else if let inject = msg.message(20) {
             currentApp = inject.message(1)?.string(12)
+            // The reference's primary source for the IME counters —
+            // v1.0.21 only read the app package here and threw the
+            // counters away, which is why text never arrived.
+            ime.learnFromKeyInject(inject)
+            return
+        } else if let show = msg.message(22) {
+            // The focused field announcing its counter when it gains
+            // focus — v1.0.21 had no handler for this at all.
+            ime.learnFromShowRequest(show)
             return
         } else if let edit = msg.message(21) {
-            imeCounter = edit.int(1) ?? imeCounter
-            imeFieldCounter = edit.int(2) ?? imeFieldCounter
+            // Fallback only: never overwrites counters learned from
+            // a key inject or show request (reference semantics).
+            ime.learnFromBatchEdit(edit)
             return
         } else if let begin = msg.message(30), let sessionId = begin.int(1) {
             // The TV answers our KEYCODE_SEARCH with RemoteVoiceBegin,
@@ -358,9 +426,15 @@ final class AndroidTVDriver: TVDriver {
         await remote.sendAndWait(message)
     }
 
-    func sendText(_ text: String) {
-        guard !text.isEmpty, state == .connected else { return }
-        let cursor = text.count - 1
+    /// The field-21 RemoteImeBatchEdit for `text` with the given
+    /// counters, built exactly like the reference's send_text
+    /// (androidtvremote2 remote.py): the cursor sits AFTER the text —
+    /// start and end are the text's length — and the insert op is 1.
+    /// Static so unit tests can assert the exact bytes. (v1.0.21
+    /// used `text.count - 1`, which puts the selection one position
+    /// early — out of range on a freshly focused empty field, so the
+    /// TV rejects the edit.)
+    nonisolated static func imeBatchEditMessage(text: String, imeCounter: Int, imeFieldCounter: Int) -> ProtoWriter {
         var m = ProtoWriter()
         m.message(21) { b in
             b.int(1, imeCounter)
@@ -368,13 +442,18 @@ final class AndroidTVDriver: TVDriver {
             b.message(3) { e in
                 e.int(1, 1)
                 e.message(2) { o in
-                    o.int(1, cursor)
-                    o.int(2, cursor)
+                    o.int(1, text.count)
+                    o.int(2, text.count)
                     o.string(3, text)
                 }
             }
         }
-        remote?.send(m)
+        return m
+    }
+
+    func sendText(_ text: String) {
+        guard !text.isEmpty, state == .connected else { return }
+        remote?.send(Self.imeBatchEditMessage(text: text, imeCounter: ime.imeCounter, imeFieldCounter: ime.imeFieldCounter))
     }
 
     func launch(_ app: TVApp) {

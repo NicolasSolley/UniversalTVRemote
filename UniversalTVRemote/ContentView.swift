@@ -390,6 +390,17 @@ private struct RemoteView: View {
                                 .textInputAutocapitalization(.characters)
                                 .keyboardType(.asciiCapable)
                                 .focused($pairingCodeFocused)
+                                // Auto-pair the moment the 6th character
+                                // lands (v1.0.22): the code is exactly 6
+                                // characters, so there is nothing to wait
+                                // for — Pair stays as the retry fallback.
+                                // One attempt per 6-char entry:
+                                // submitPairingCode clears the field, so
+                                // the next attempt needs a fresh 5→6
+                                // transition (or a tap on Pair).
+                                .onChange(of: session.pairingCode) { code in
+                                    if code.count == 6 { session.submitPairingCode() }
+                                }
                                 .padding(.vertical, 10)
                                 .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
                                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.08), lineWidth: 1))

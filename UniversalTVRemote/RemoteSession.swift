@@ -71,11 +71,12 @@ struct RemoteCapabilities {
         case .androidTV:
             // Text input IS implemented: AndroidTVDriver.sendText builds
             // the field-21 IME batch edit and the incoming-message
-            // handler live-tracks imeCounter/imeFieldCounter from the
-            // TV's field-21 messages — the same path as the fork, and
+            // handler learns the counters from the TV's field-20 key
+            // inject and field-22 show request (field 21 is only a
+            // fallback) — the reference's exact flow, verified
+            // against androidtvremote2's own tests in v1.0.22.
             // requestedFeatures (623) already includes the IME bit.
-            // Awaiting field test on a real TV, which is the only part
-            // that cannot be verified here. Voice IS implemented: the
+            // Voice IS implemented: the
             // remote session carries 8 kHz PCM (see AndroidTVDriver).
             return RemoteCapabilities(
                 supportsDigits: true, supportsTextInput: true, supportsApps: false,
