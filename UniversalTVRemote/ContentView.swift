@@ -12,14 +12,11 @@ struct ContentView: View {
         // iOS 15, and NavigationStack needs iOS 16.
         NavigationView {
             if let session {
+                // The remote draws its own top bar (Devices pill, TV
+                // name, power, gear), so the navigation bar stays hidden
+                // here — no double header.
                 RemoteView(session: session, onBack: { self.session = nil })
-                    .navigationTitle(session.device.name)
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .navigationBarLeading) {
-                            Button("Devices") { session.disconnect(); self.session = nil }
-                        }
-                    }
+                    .navigationBarHidden(true)
             } else {
                 DiscoveryListView(discovery: discovery) { device in
                     session = RemoteSession(device: device)
@@ -222,35 +219,30 @@ private struct DiscoveryListView: View {
 
 // MARK: - Remote
 
-/// Apple TV-style remote, modeled on the reference "TV Remote" screen:
-/// a header row (keyboard button, centered "TV Remote" title), a row
-/// with Home, a D-pad/touchpad toggle, and Power, a big circular D-pad
-/// (or the touchpad, behind the toggle), a button grid with a tall VOL
-/// rocker on the right, and app shortcut cards at the bottom. Dark and
-/// neutral throughout — no accent color, no ads, no promos. The screen
-/// title in the navigation bar stays the TV's name (it identifies
-/// which TV is being controlled); the in-content header reads
-/// "TV Remote" as in the reference.
-/// The big circular D-pad is the main navigation (default on open).
-/// The touchpad stays as the alternate behind the toggle, but it is a
-/// modest 230×230 square — the same footprint as the D-pad — not a
-/// giant pad dominating the screen. Voice: a hold-to-talk mic button
-/// in the lower section (Android TV only — the only platform whose
-/// protocol carries phone mic audio).
-/// Dropped to keep the layout clean: the number pad (digits were the
-/// only way to type channel numbers directly) and the channel rocker
-/// (channel up/down were the only way to change channels directly) —
-/// neither has a replacement on this screen; use the TV's own remote
-/// or the on-screen guide for channels. The Stop button is gone too
-/// (no slot in the reference; Play/Pause covers transport). The
-/// Input/exit button from the reference is omitted: no brand controller
-/// has a verified source/input key, so it would be a dead button.
-/// Replay sends Rewind (the closest transport command — the row below
-/// has a Rewind button too, so both rewind). Star sends Info (on Roku
-/// the * key IS the options/info key). Menu takes the omitted mic
-/// button's slot in the last grid row. Play/Pause is one button with a
-/// local toggle: it assumes the TV is playing, so the first tap sends
-/// Pause, then it alternates — the TV's real play state is not tracked.
+/// Blue accent for the redesigned remote (v1.0.12): the selected
+/// toggle segment, the mic ring, the Play/Pause button, the Devices
+/// pill text. One accent, used sparingly — the rest stays dark and
+/// neutral.
+private let remoteAccent = Color(red: 0.15, green: 0.45, blue: 1.0)
+
+/// Remote, redesigned in v1.0.12. The fork's remote screen is the
+/// design inspiration, not a template: a top bar (Devices pill, TV
+/// name, power, gear), a Connected pill, a wide D-Pad | Swipe toggle,
+/// then the navigation area, a playback row, a Back/Home/Exit pill
+/// row, and a bottom row (Volume rocker, mic or keyboard, Mute), with
+/// app shortcuts and the diagnostic status text below. Dark with a
+/// blue accent and a subtle blue/purple wave at the bottom. No ads,
+/// no promos, no cast button, no tab bar.
+/// What stays ours: the D-pad is the default navigation (big circular
+/// pad, 230×230, annular sectors + 84pt OK); the playback row stays
+/// even though the reference has none; the mic is hold-to-talk and
+/// Android TV only; app shortcut cards stay where launching works.
+/// Dropped to keep the layout clean: the number pad and the channel
+/// rocker (use the TV's own remote or the on-screen guide for
+/// channels). Play/Pause is one button with a local toggle: it assumes
+/// the TV is playing, so the first tap sends Pause, then it alternates
+/// — the TV's real play state is not tracked. Info and Menu flank the
+/// playback row.
 private struct RemoteView: View {
     @ObservedObject var session: RemoteSession
     var onBack: () -> Void
@@ -258,18 +250,19 @@ private struct RemoteView: View {
     @State private var navMode: NavMode = .dpad
     @State private var keyboardText = ""
     @State private var showKeyboard = false
+    @State private var showSettings = false
     /// Assume the TV is playing until the user taps Play/Pause.
     @State private var isPlaying = true
 
     enum NavMode: String, CaseIterable {
-        case touchpad = "Touchpad"
+        case swipe = "Swipe"
         case dpad = "D-Pad"
     }
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 20) {
-                statusBanner
+            VStack(spacing: 18) {
+                topBar
 
                 // Pairing code (Android TV): the TV shows a 6-character code.
                 if session.awaitingPairingCode {
@@ -298,33 +291,8 @@ private struct RemoteView: View {
                     .padding(.horizontal)
                 }
 
-                // Header: keyboard button on the left (only where the
-                // platform supports text input), "TV Remote" centered,
-                // right kept empty (cast is out of scope — nothing in
-                // its place).
-                HStack {
-                    if session.capabilities.supportsTextInput {
-                        Button { showKeyboard.toggle() } label: {
-                            Image(systemName: "keyboard")
-                                .font(.headline)
-                                .foregroundStyle(.white)
-                                .frame(width: 44, height: 44)
-                                .background(Color.white.opacity(0.10), in: Circle())
-                        }
-                        .buttonStyle(.plain)
-                    } else {
-                        Color.clear.frame(width: 44, height: 44)
-                    }
-                    Spacer()
-                    Text("TV Remote")
-                        .font(.headline.bold())
-                        .foregroundStyle(.white)
-                    Spacer()
-                    Color.clear.frame(width: 44, height: 44)
-                }
-                .padding(.horizontal, 8)
-
-                // Keyboard / text input, revealed by the header button.
+                // Keyboard / text input, revealed by the keyboard
+                // button in the bottom row.
                 if showKeyboard, session.capabilities.supportsTextInput {
                     HStack {
                         TextField("Type on the TV…", text: $keyboardText)
@@ -343,15 +311,8 @@ private struct RemoteView: View {
                     .padding(.horizontal)
                 }
 
-                // Home / nav toggle / Power.
-                HStack {
-                    remoteSquareButton(systemImage: "house") { send(.home) }
-                    Spacer()
-                    navToggle
-                    Spacer()
-                    remoteSquareButton(systemImage: "power", tint: .red) { send(.power) }
-                }
-                .padding(.horizontal)
+                connectionPill
+
                 if session.device.brand == .lg {
                     Text("Power turns the TV off. Turn it back on with the TV's own remote.")
                         .font(.caption)
@@ -360,31 +321,47 @@ private struct RemoteView: View {
                         .padding(.horizontal)
                 }
 
-                // Navigation: big circular D-pad or touchpad, behind the toggle.
+                // Wide D-Pad | Swipe toggle.
+                navToggle
+
+                // Navigation: big circular D-pad or the big swipe pad,
+                // behind the toggle. D-pad is the default.
                 if navMode == .dpad {
                     CircularDPadView { send($0) }
                 } else {
-                    TouchpadView { send($0) }
+                    SwipePadView { send($0) }
+                        .padding(.horizontal)
                 }
 
-                // Button grid + tall VOL rocker on the right.
-                HStack(alignment: .top, spacing: 12) {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: 3), spacing: 12) {
-                        remoteButton(nil, systemImage: "arrow.left") { send(.back) }
-                        remoteButton(nil, systemImage: "arrow.counterclockwise") { send(.rewind) }
-                        remoteButton(nil, systemImage: "star.fill") { send(.info) }
-                        if session.capabilities.supportsPlayback {
-                            remoteButton(nil, systemImage: "backward.fill") { send(.rewind) }
-                            remoteButton(nil, systemImage: isPlaying ? "pause.fill" : "play.fill") {
-                                send(isPlaying ? .pause : .play)
-                                isPlaying.toggle()
-                            }
-                            remoteButton(nil, systemImage: "forward.fill") { send(.fastForward) }
+                // Playback row (ours — the reference has none, but
+                // transport is core): Info and Menu on the ends, Rewind
+                // / Play-Pause / Fast-forward in the middle. Play/Pause
+                // is the blue-filled primary control.
+                if session.capabilities.supportsPlayback {
+                    HStack(spacing: 20) {
+                        transportButton(systemImage: "star.fill", size: 48) { send(.info) }
+                        transportButton(systemImage: "backward.fill", size: 56) { send(.rewind) }
+                        Button {
+                            send(isPlaying ? .pause : .play)
+                            isPlaying.toggle()
+                        } label: {
+                            Image(systemName: isPlaying ? "pause.fill" : "play.fill")
+                                .font(.title2.bold())
+                                .foregroundStyle(.white)
+                                .frame(width: 64, height: 64)
+                                .background(remoteAccent, in: Circle())
                         }
-                        remoteButton(nil, systemImage: "line.3.horizontal") { send(.menu) }
-                        remoteButton(nil, systemImage: "speaker.slash.fill") { send(.mute) }
+                        .buttonStyle(.plain)
+                        transportButton(systemImage: "forward.fill", size: 56) { send(.fastForward) }
+                        transportButton(systemImage: "line.3.horizontal", size: 48) { send(.menu) }
                     }
-                    VolRockerView(onUp: { send(.volumeUp) }, onDown: { send(.volumeDown) })
+                }
+
+                // Back / Home / Exit pill row with labels underneath.
+                HStack(spacing: 16) {
+                    pillButton(systemImage: "arrow.left", label: "Back") { send(.back) }
+                    pillButton(systemImage: "house", label: "Home") { send(.home) }
+                    pillButton(systemImage: "rectangle.portrait.and.arrow.right", label: "Exit") { send(.exit) }
                 }
                 .padding(.horizontal)
 
@@ -417,33 +394,84 @@ private struct RemoteView: View {
                     }
                 }
 
-                // Voice (Android TV only): hold the mic button and
-                // talk — the TV acts on it. Shown only where voice is
-                // actually implemented; never a dead button. Sits in
-                // the lower section, near the app shortcuts.
-                if session.capabilities.supportsVoice {
-                    VStack(spacing: 8) {
-                        ZStack {
-                            Circle()
-                                .fill(session.isRecordingVoice
-                                      ? Color.red.opacity(0.85)
-                                      : Color.white.opacity(0.10))
-                            Circle()
-                                .stroke(Color.white.opacity(session.isRecordingVoice ? 0.4 : 0.08), lineWidth: 1)
-                            Image(systemName: session.isRecordingVoice ? "mic.fill" : "mic")
-                                .font(.title2)
-                                .foregroundStyle(.white)
-                        }
-                        .frame(width: 72, height: 72)
-                        .accessibilityLabel("Hold to talk")
-                        .onLongPressGesture(minimumDuration: 0.15, pressing: { pressing in
-                            if pressing {
-                                Task { await session.startVoice() }
-                            } else {
-                                Task { await session.stopVoice() }
+                // Bottom row: tall labeled Volume rocker, the big mic
+                // circle (Android TV only) or the keyboard button
+                // (Roku/Samsung/LG), and a labeled Mute square. Each
+                // label sits under its own control; nothing here is
+                // ever a dead button.
+                HStack(alignment: .center, spacing: 20) {
+                    VStack(spacing: 6) {
+                        VolRockerView(onUp: { send(.volumeUp) }, onDown: { send(.volumeDown) })
+                            .frame(height: 190)
+                        Text("Volume")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    if session.capabilities.supportsVoice {
+                        // Voice (Android TV only): hold the mic button
+                        // and talk — the TV acts on it.
+                        VStack(spacing: 6) {
+                            ZStack {
+                                Circle()
+                                    .fill(session.isRecordingVoice
+                                          ? Color.red.opacity(0.85)
+                                          : Color.white.opacity(0.10))
+                                Circle()
+                                    .stroke(session.isRecordingVoice ? Color.red.opacity(0.6) : remoteAccent, lineWidth: 2.5)
+                                Image(systemName: session.isRecordingVoice ? "mic.fill" : "mic")
+                                    .font(.title)
+                                    .foregroundStyle(.white)
                             }
-                        }, perform: {})
-                        Text(session.isRecordingVoice ? "Listening…" : "Hold to talk")
+                            .frame(width: 88, height: 88)
+                            .accessibilityLabel("Hold to talk")
+                            .onLongPressGesture(minimumDuration: 0.15, pressing: { pressing in
+                                if pressing {
+                                    Task { await session.startVoice() }
+                                } else {
+                                    Task { await session.stopVoice() }
+                                }
+                            }, perform: {})
+                            Text(session.isRecordingVoice ? "Listening…" : "Hold to talk")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if session.capabilities.supportsTextInput {
+                        VStack(spacing: 6) {
+                            Button { showKeyboard.toggle() } label: {
+                                ZStack {
+                                    Circle()
+                                        .fill(Color.white.opacity(0.10))
+                                    Circle()
+                                        .stroke(showKeyboard ? remoteAccent : Color.white.opacity(0.08), lineWidth: 2.5)
+                                    Image(systemName: "keyboard")
+                                        .font(.title)
+                                        .foregroundStyle(.white)
+                                }
+                                .frame(width: 88, height: 88)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Keyboard")
+                            Text("Keyboard")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    VStack(spacing: 6) {
+                        Button { send(.mute) } label: {
+                            ZStack {
+                                RoundedRectangle(cornerRadius: 24)
+                                    .fill(Color.white.opacity(0.10))
+                                RoundedRectangle(cornerRadius: 24)
+                                    .stroke(Color.white.opacity(0.08), lineWidth: 1)
+                                Image(systemName: "speaker.slash.fill")
+                                    .font(.title)
+                                    .foregroundStyle(.white)
+                            }
+                            .frame(width: 88, height: 88)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Mute")
+                        Text("Mute")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -455,43 +483,115 @@ private struct RemoteView: View {
                     .multilineTextAlignment(.center)
                     .padding(.horizontal)
                     .padding(.bottom, 24)
-
-                // Android TV pairing can be reset: clears the pinned
-                // certificate and the paired flag so the next connect
-                // pairs from scratch (needed when the TV's certificate
-                // changed, e.g. after a TV reset).
-                if session.device.brand == .androidTV {
-                    Button("Forget this TV", role: .destructive) { session.forgetPairedTV() }
-                        .buttonStyle(.bordered)
-                        .padding(.bottom, 24)
-                }
             }
             .padding(.top, 8)
         }
+        .background(waveBackground)
         .task { await session.connect() }
         .onDisappear { session.disconnect() }
+        .sheet(isPresented: $showSettings) {
+            RemoteSettingsSheet(session: session)
+        }
     }
 
-    private var statusBanner: some View {
-        Group {
-            if session.isBusy {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text(session.awaitingTVPrompt
-                         ? "Check your TV and accept the connection prompt."
-                         : "Connecting…")
-                        .font(.subheadline)
-                }
-                .padding(.horizontal, 14).padding(.vertical, 10)
-                .background(Color.cyan.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
-            } else if !session.isConnected, session.supportsControl {
-                Text("Not connected — tap a button to reconnect.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 14).padding(.vertical, 10)
-                    .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
-            }
+    /// Subtle blue/purple wave pinned to the bottom of the screen,
+    /// behind the scrolling content. Decorative only.
+    private var waveBackground: some View {
+        VStack {
+            Spacer()
+            WaveShape()
+                .fill(
+                    LinearGradient(
+                        colors: [Color.blue.opacity(0.35), Color.purple.opacity(0.25)],
+                        startPoint: .leading, endPoint: .trailing)
+                )
+                .frame(height: 130)
         }
+        .ignoresSafeArea(edges: .bottom)
+        .allowsHitTesting(false)
+    }
+
+    /// Top bar: Devices pill (back to the list), TV name centered,
+    /// power and gear on the right. The gear opens the settings sheet.
+    private var topBar: some View {
+        HStack(spacing: 10) {
+            Button {
+                session.disconnect()
+                onBack()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "tv")
+                        .font(.subheadline.bold())
+                    Text("Devices")
+                        .font(.subheadline.bold())
+                }
+                .foregroundStyle(remoteAccent)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.white.opacity(0.08), in: Capsule())
+                .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            Spacer()
+            Text(session.device.name)
+                .font(.headline.bold())
+                .foregroundStyle(.white)
+                .lineLimit(1)
+            Spacer()
+            Button { send(.power) } label: {
+                Image(systemName: "power")
+                    .font(.headline.bold())
+                    .foregroundStyle(.red)
+                    .frame(width: 44, height: 44)
+                    .background(Color.white.opacity(0.08), in: Circle())
+            }
+            .buttonStyle(.plain)
+            Button { showSettings = true } label: {
+                Image(systemName: "gearshape")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                    .frame(width: 44, height: 44)
+                    .background(Color.white.opacity(0.08), in: Circle())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal)
+    }
+
+    /// Connected pill: status dot + one-line state. Green when
+    /// connected, amber while connecting (or waiting on the TV's
+    /// prompt), red when not connected, gray for discovery-only
+    /// devices. Replaces the old status banner — the same states,
+    /// in one place.
+    private var connectionPill: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(connectionDotColor)
+                .frame(width: 9, height: 9)
+            Text(connectionLabel)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
+        .background(Color.white.opacity(0.08), in: Capsule())
+        .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+    }
+
+    private var connectionDotColor: Color {
+        if !session.supportsControl { return .gray }
+        if session.isConnected { return .green }
+        if session.isBusy { return .orange }
+        return .red
+    }
+
+    private var connectionLabel: String {
+        if !session.supportsControl { return "Discovery only" }
+        if session.isConnected { return "Connected" }
+        if session.isBusy {
+            return session.awaitingTVPrompt ? "Check your TV" : "Connecting…"
+        }
+        return "Not connected"
     }
 
     private func send(_ command: RemoteCommand) {
@@ -499,57 +599,66 @@ private struct RemoteView: View {
         Task { await session.send(command) }
     }
 
-    /// Segmented D-pad / touchpad toggle: two icon segments in a dark
-    /// pill; the selected segment is highlighted. The keyboard is NOT
-    /// part of this toggle — it has its own button in the header.
+    /// Wide D-Pad | Swipe segmented toggle: icon + label per segment,
+    /// the selected one filled blue. D-pad is the default mode.
     private var navToggle: some View {
         HStack(spacing: 0) {
-            toggleSegment(icon: "dpad", selected: navMode == .dpad, label: "D-Pad") { navMode = .dpad }
-            toggleSegment(icon: "hand.tap", selected: navMode == .touchpad, label: "Touchpad") { navMode = .touchpad }
+            toggleSegment(icon: "dpad", label: "D-Pad", selected: navMode == .dpad) { navMode = .dpad }
+            toggleSegment(icon: "hand.tap", label: "Swipe", selected: navMode == .swipe) { navMode = .swipe }
         }
-        .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+        .padding(3)
+        .background(Color.white.opacity(0.08), in: Capsule())
+        .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+        .padding(.horizontal)
     }
 
-    private func toggleSegment(icon: String, selected: Bool, label: String, action: @escaping () -> Void) -> some View {
+    private func toggleSegment(icon: String, label: String, selected: Bool, action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            Image(systemName: icon)
-                .font(.title3)
-                .foregroundStyle(selected ? .white : .secondary)
-                .frame(width: 56, height: 44)
-                .background(selected ? Color.white.opacity(0.16) : Color.clear, in: RoundedRectangle(cornerRadius: 10))
-                .padding(2)
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.title3)
+                Text(label)
+                    .font(.headline)
+            }
+            .foregroundStyle(selected ? .white : .secondary)
+            .frame(maxWidth: .infinity, minHeight: 48)
+            .background(selected ? remoteAccent : Color.clear, in: Capsule())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
     }
 
-    /// Dark rounded-square button for Home and Power in the header row.
-    /// Power's icon is red; Home's is white.
-    private func remoteSquareButton(systemImage: String, tint: Color = .white, action: @escaping () -> Void) -> some View {
+    /// Circular transport button (Info, Rewind, Fast-forward, Menu):
+    /// dark circle, white icon.
+    private func transportButton(systemImage: String, size: CGFloat, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.title3.bold())
-                .foregroundStyle(tint)
-                .frame(width: 56, height: 56)
-                .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
-                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.08), lineWidth: 1))
+                .foregroundStyle(.white)
+                .frame(width: size, height: size)
+                .background(Color.white.opacity(0.10), in: Circle())
+                .overlay(Circle().stroke(Color.white.opacity(0.08), lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
 
-    @ViewBuilder
-    private func remoteButton(_ title: String?, systemImage: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 4) {
-                Image(systemName: systemImage).font(.title3.bold())
-                if let title { Text(title).font(.caption2) }
+    /// Wide pill button with an icon and a label underneath
+    /// (Back / Home / Exit row).
+    private func pillButton(systemImage: String, label: String, action: @escaping () -> Void) -> some View {
+        VStack(spacing: 6) {
+            Button(action: action) {
+                Image(systemName: systemImage)
+                    .font(.title2.bold())
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, minHeight: 56)
+                    .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 28))
+                    .overlay(RoundedRectangle(cornerRadius: 28).stroke(Color.white.opacity(0.08), lineWidth: 1))
             }
-            .frame(maxWidth: .infinity, minHeight: 56)
-            .padding(.horizontal, 6)
-            .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.08), lineWidth: 1))
+            .buttonStyle(.plain)
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
-        .buttonStyle(.plain)
     }
 
     /// Installed apps for the current brand, with the three big ones
@@ -572,33 +681,53 @@ private struct RemoteView: View {
         }
     }
 }
-// MARK: - Touchpad
+// MARK: - Swipe pad
 
-private struct TouchpadView: View {
+/// Big swipe pad (the Swipe half of the toggle): near full-width,
+/// with directional chevrons around a hand and "Swipe to navigate".
+/// One drag is one command on release (tap = select) — the same
+/// gesture as the old touchpad, only the size and the look changed.
+private struct SwipePadView: View {
     var onCommand: (RemoteCommand) -> Void
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 20)
+        RoundedRectangle(cornerRadius: 24)
             .fill(
                 LinearGradient(
-                    colors: [Color.white.opacity(0.10), Color.white.opacity(0.04)],
+                    colors: [Color(red: 0.10, green: 0.16, blue: 0.35),
+                             Color(red: 0.05, green: 0.07, blue: 0.18)],
                     startPoint: .top, endPoint: .bottom)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 20)
-                    .stroke(Color.white.opacity(0.10), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 24)
+                    .stroke(remoteAccent.opacity(0.55), lineWidth: 1.5)
             )
             .overlay {
-                VStack(spacing: 8) {
-                    Image(systemName: "hand.draw")
-                        .font(.title2)
+                VStack(spacing: 22) {
+                    Image(systemName: "chevron.up")
+                        .font(.title2.bold())
                         .foregroundStyle(.secondary)
-                    Text("Swipe to move  •  Tap to select")
-                        .font(.caption)
+                    HStack(spacing: 56) {
+                        Image(systemName: "chevron.left")
+                            .font(.title2.bold())
+                            .foregroundStyle(.secondary)
+                        Image(systemName: "hand.tap")
+                            .font(.system(size: 44))
+                            .foregroundStyle(.white.opacity(0.85))
+                        Image(systemName: "chevron.right")
+                            .font(.title2.bold())
+                            .foregroundStyle(.secondary)
+                    }
+                    Image(systemName: "chevron.down")
+                        .font(.title2.bold())
+                        .foregroundStyle(.secondary)
+                    Text("Swipe to navigate")
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
             }
-            .frame(width: 230, height: 230)
+            .frame(maxWidth: .infinity)
+            .frame(height: 300)
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onEnded { value in
@@ -735,5 +864,99 @@ private struct VolRockerView: View {
         .frame(maxHeight: .infinity)
         .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.08), lineWidth: 1))
+    }
+}
+
+// MARK: - Settings sheet
+
+/// Settings sheet (gear in the top bar): connection status and
+/// diagnostics, the TV's identity, and — for Android TV — the
+/// "Forget this TV" reset. Nothing here sends a command to the TV
+/// except Forget (which only clears local pairing state).
+private struct RemoteSettingsSheet: View {
+    @ObservedObject var session: RemoteSession
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack {
+                Text("Settings")
+                    .font(.headline.bold())
+                    .foregroundStyle(.white)
+                Spacer()
+                Button("Done") { dismiss() }
+                    .buttonStyle(.bordered)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Connection")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.white)
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(session.isConnected ? Color.green : (session.isBusy ? Color.orange : Color.red))
+                        .frame(width: 9, height: 9)
+                    Text(session.isConnected ? "Connected to \(session.device.name)" : "Not connected")
+                        .font(.subheadline)
+                        .foregroundStyle(.white)
+                }
+                Text("Brand: \(session.device.brand.rawValue)")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                if let host = session.device.host {
+                    Text("Address: \(host)")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Status")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.white)
+                Text(session.status.isEmpty ? "No status yet." : session.status)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+
+            if session.device.brand == .lg {
+                Text("Power turns the TV off. Turn it back on with the TV's own remote.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if session.device.brand == .androidTV {
+                // Pairing reset: clears the pinned certificate and the
+                // paired flag so the next connect pairs from scratch
+                // (needed when the TV's certificate changed, e.g. after
+                // a TV reset).
+                Button("Forget this TV", role: .destructive) { session.forgetPairedTV() }
+                    .buttonStyle(.bordered)
+            }
+
+            Spacer()
+        }
+        .padding()
+        .background(Color(white: 0.08))
+    }
+}
+
+/// One gentle S-curve band for the bottom of the remote screen
+/// (see RemoteView.waveBackground). Decorative only.
+private struct WaveShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let w = rect.width, h = rect.height
+        var path = Path()
+        path.move(to: CGPoint(x: 0, y: h * 0.55))
+        path.addCurve(to: CGPoint(x: w * 0.5, y: h * 0.35),
+                      control1: CGPoint(x: w * 0.18, y: h * 0.15),
+                      control2: CGPoint(x: w * 0.32, y: h * 0.75))
+        path.addCurve(to: CGPoint(x: w, y: h * 0.5),
+                      control1: CGPoint(x: w * 0.68, y: h * 0.0),
+                      control2: CGPoint(x: w * 0.82, y: h * 0.9))
+        path.addLine(to: CGPoint(x: w, y: h))
+        path.addLine(to: CGPoint(x: 0, y: h))
+        path.closeSubpath()
+        return path
     }
 }
