@@ -473,7 +473,7 @@ private struct RemoteView: View {
                 // Navigation: the swipe pad is the one and only
                 // navigation control — no D-pad, no toggle. It sizes
                 // from the layout so the page fits without scrolling.
-                SwipePadView(height: layout.padSize) { send($0) }
+                SwipePadView(height: layout.padSize) { send($0, haptic: $1) }
                     .padding(.horizontal)
 
                 // Back / Home / Exit pill row — icons only, no labels.
@@ -707,11 +707,34 @@ private struct RemoteView: View {
 /// a bare pad — no chevrons, no hand icon, no label.
 /// One drag is one command on release (tap = select) — the same
 /// gesture as the old touchpad, only the size and the look changed.
+/// HOLDING the pad (v1.0.24) repeats the regular OK/select press
+/// while held — same timing as the volume hold (0.3s onset, then
+/// one press every 0.12s) — so holding it on a focused key (e.g.
+/// backspace in a search box) repeats that key instead of tapping
+/// many times. It is NOT backspace-specific: it is just the
+/// regular OK click repeated. A quick tap still sends exactly one
+/// OK press, and swipes still send single directional presses.
 /// The height comes from the layout so the pad fits the
 /// non-scrollable page on small phones.
 private struct SwipePadView: View {
     var height: CGFloat
-    var onCommand: (RemoteCommand) -> Void
+    /// Second parameter: whether the command should buzz. A tap
+    /// buzzes once, and the first repeat of a hold buzzes once;
+    /// later repeats of a hold are silent — the same rule as the
+    /// volume hold (v1.0.20), because buzzing at repeat rate is
+    /// faster than the TV moves.
+    var onCommand: (RemoteCommand, Bool) -> Void
+
+    @State private var repeatTask: Task<Void, Never>?
+    @State private var holdFired = false
+
+    /// Same timing as the volume hold (v1.0.19/20): repeats start
+    /// 0.3s after touch down, then one press every 0.12s (~8/s).
+    private static let holdOnset: UInt64 = 300_000_000
+    private static let holdInterval: UInt64 = 120_000_000
+    /// Finger movement within this box counts as a tap/hold;
+    /// beyond it, the gesture is a swipe.
+    private static let tapSlop: CGFloat = 14
 
     var body: some View {
         RoundedRectangle(cornerRadius: 24)
@@ -729,17 +752,59 @@ private struct SwipePadView: View {
             .frame(height: height)
             .gesture(
                 DragGesture(minimumDistance: 0)
-                    .onEnded { value in
+                    .onChanged { value in
                         let t = value.translation
-                        if abs(t.width) < 14, abs(t.height) < 14 {
-                            onCommand(.enter)
+                        if abs(t.width) >= Self.tapSlop || abs(t.height) >= Self.tapSlop {
+                            // It's a swipe — cancel any hold repeat.
+                            cancelHoldRepeat()
+                        } else if repeatTask == nil {
+                            // Finger down and still — start the hold timer.
+                            startHoldRepeat()
+                        }
+                    }
+                    .onEnded { value in
+                        // Capture before cancelling: if the hold already
+                        // fired repeats, the release must not add one
+                        // more OK press on top of them.
+                        let didHoldRepeat = holdFired
+                        cancelHoldRepeat()
+                        let t = value.translation
+                        if abs(t.width) < Self.tapSlop, abs(t.height) < Self.tapSlop {
+                            // Tap, or a hold that never reached onset:
+                            // exactly one OK press.
+                            if !didHoldRepeat {
+                                onCommand(.enter, true)
+                            }
                         } else if abs(t.width) > abs(t.height) {
-                            onCommand(t.width > 0 ? .right : .left)
+                            onCommand(t.width > 0 ? .right : .left, true)
                         } else {
-                            onCommand(t.height > 0 ? .down : .up)
+                            onCommand(t.height > 0 ? .down : .up, true)
                         }
                     }
             )
+    }
+
+    /// Starts the hold timer: first OK press after the onset, then
+    /// one every interval until the finger lifts or swipes. The
+    /// first repeat buzzes once; later repeats are silent.
+    private func startHoldRepeat() {
+        repeatTask = Task {
+            try? await Task.sleep(nanoseconds: Self.holdOnset)
+            guard !Task.isCancelled else { return }
+            holdFired = true
+            onCommand(.enter, true)
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: Self.holdInterval)
+                guard !Task.isCancelled else { return }
+                onCommand(.enter, false)
+            }
+        }
+    }
+
+    private func cancelHoldRepeat() {
+        repeatTask?.cancel()
+        repeatTask = nil
+        holdFired = false
     }
 }
 
