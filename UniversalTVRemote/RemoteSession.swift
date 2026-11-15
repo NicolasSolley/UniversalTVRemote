@@ -110,6 +110,12 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
     @Published var awaitingPairingCode = false
     /// The pairing code the user typed (6 hex characters for Android TV).
     @Published var pairingCode = ""
+    /// The latest pairing error to show on the pairing card (v1.0.23):
+    /// a wrong code, or the TV discarding the code and showing a new
+    /// one. Nil on the first prompt and while an attempt is in flight.
+    /// (The diagnostic line is hidden while the card is up, so the
+    /// error would otherwise be invisible.)
+    @Published var pairingError: String? = nil
     @Published var rokuApps: [RokuRemote.RokuApp] = []
     @Published var samsungApps: [SamsungRemote.SamsungApp] = []
     @Published var lgApps: [LGApp] = []
@@ -220,6 +226,7 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
     func disconnect() {
         stopVoiceCapture()
         awaitingPairingCode = false
+        pairingError = nil
         RokuRemote.resetQueue()
         Task { await samsung.disconnect() }
         Task { await lg.disconnect() }
@@ -238,6 +245,7 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
         ClientIdentity.migrateToFreshIdentityIfNeeded()
         androidTVDriver?.disconnect()
         pairingAttempted = false
+        pairingError = nil
         status = "Connecting…"
         // Paired flag from either store (UserDefaults or the container
         // file) — UserDefaults alone does not reliably survive a
@@ -258,14 +266,17 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
         case .connected:
             isConnected = true
             awaitingTVPrompt = false
+            pairingError = nil
             status = "Connected to \(device.name)."
         case .failed(let reason):
             isConnected = false
             awaitingPairingCode = false
             awaitingTVPrompt = false
+            pairingError = nil
             status = reason
         case .pairing(.enterCode(_, let error)):
             awaitingPairingCode = true
+            pairingError = error
             status = error ?? "A 6-character code is showing on your TV — type it below."
         case .pairing(.verifying):
             status = "Checking the code…"
@@ -380,6 +391,8 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
     }
 
     /// Called by the pairing-code UI when the user submits the code.
+    /// (The UI calls this itself the moment the 6th character lands —
+    /// there is no Pair button anymore, v1.0.23.)
     func submitPairingCode() {
         let code = pairingCode.trimmingCharacters(in: .whitespacesAndNewlines)
         guard code.count == 6 else {
@@ -387,6 +400,7 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
             return
         }
         pairingCode = ""
+        pairingError = nil
         awaitingPairingCode = false
         // The fork's driver validates the code itself and re-prompts
         // (via the delegate) when it doesn't check out.

@@ -624,3 +624,30 @@ final class ImeCounterTrackerTests: XCTestCase {
         XCTAssertEqual(object.string(3), "abcd")
     }
 }
+
+/// Hardware volume buttons (v1.0.23): the pure direction test behind
+/// the outputVolume KVO — nil means "not a step", so the anchor
+/// reset's own echo (exactly zero delta) never fires a step.
+final class HardwareVolumeDirectionTests: XCTestCase {
+    func testStepUp() {
+        XCTAssertEqual(HardwareVolumeController.direction(from: 0.5, to: 0.5625), Optional(true))
+    }
+
+    func testStepDown() {
+        XCTAssertEqual(HardwareVolumeController.direction(from: 0.5, to: 0.4375), Optional(false))
+    }
+
+    func testNoStepForZeroDelta() {
+        XCTAssertNil(HardwareVolumeController.direction(from: 0.5, to: 0.5))
+    }
+
+    func testNoStepForTinyNoise() {
+        XCTAssertNil(HardwareVolumeController.direction(from: 0.5, to: 0.505))
+    }
+
+    func testLargeDeltaStillOneStep() {
+        // A jump from the anchor (e.g. the first press after a
+        // failed anchor) is still just one direction, not many.
+        XCTAssertEqual(HardwareVolumeController.direction(from: 0.5, to: 0.9625), Optional(true))
+    }
+}

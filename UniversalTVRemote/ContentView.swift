@@ -247,9 +247,8 @@ private let remoteAccent = Color(red: 0.15, green: 0.45, blue: 1.0)
 /// Remote, redesigned in v1.0.12. The fork's remote screen is the
 /// design inspiration, not a template: a top bar (Devices pill, TV
 /// name, power), a Connected pill, then the navigation area, a
-/// Back/Home/Exit pill row, and a bottom row (Volume rocker, keyboard,
-/// Mute), with the diagnostic status text below. Dark with a blue
-/// accent. No ads,
+/// Back/Home/Exit pill row, and a bottom row (keyboard, Mute), with
+/// the diagnostic status text below. Dark with a blue accent. No ads,
 /// no promos, no cast button, no tab bar.
 /// What stays ours: the mic is hold-to-talk and Android TV only.
 /// Dropped to keep the layout clean: the number pad and the channel
@@ -279,8 +278,6 @@ private struct RemoteLayout {
     var pillsButtonHeight: CGFloat
     var bottomCell: CGFloat
     var circleSize: CGFloat
-    var rockerWidth: CGFloat
-    var rockerButtonHeight: CGFloat
     var bottomRowTopPadding: CGFloat
     var diagnosticLines: Int
     var showDiagnostic: Bool
@@ -297,16 +294,17 @@ private struct RemoteLayout {
         let pairingCardSpacing: CGFloat = extraCompact ? 8 : (compact ? 9 : 10)
         let pillsButtonHeight: CGFloat = extraCompact ? 44 : (compact ? 48 : 56)
         // The apps row is gone (v1.0.18), so its height went to the
-        // bottom row instead — but v1.0.20 shrinks the row back: the
-        // rocker was way too big and crowded the pills above it
-        // (roughly back toward its v1.0.17 size). While the pairing
-        // card is up the bottom row stays compact — the card is the
-        // focus then, and the tall row would overflow short screens.
+        // bottom row instead — but v1.0.20 shrank the row back (the
+        // rocker was way too big and crowded the pills above it),
+        // and v1.0.23 removes the rocker entirely: the iPhone's
+        // physical volume buttons drive the TV volume now, so the
+        // bottom row is just two circles (keyboard, Mute) and the
+        // row shrinks again. While the pairing card is up the bottom
+        // row stays compact — the card is the focus then, and the
+        // tall row would overflow short screens.
         let bottomCell: CGFloat = pairingShown ? (extraCompact ? 90 : 110)
-            : (extraCompact ? 140 : (compact ? 156 : 168))
+            : (extraCompact ? 120 : (compact ? 132 : 144))
         let circleSize = min(112, bottomCell * 0.55)
-        let rockerWidth: CGFloat = extraCompact ? 80 : (compact ? 84 : 88)
-        let rockerButtonHeight = max(36, min(64, bottomCell * 0.40))
         // Breathing room above the bottom row (v1.0.20): the rocker
         // crowded the Back/Home/Exit pills, so the row sits clearly
         // lower now. Budgeted in `fixed` below, on top of the gap.
@@ -336,15 +334,16 @@ private struct RemoteLayout {
         // pairing card or keyboard is up — the pad isn't the focus then).
         // Cap is the swipe pad's design height: it is the master control
         // now, so it takes the space the old toggle used to take.
+        // v1.0.23 raises the cap 300 → 320: the rocker is gone, so the
+        // freed space goes to the pad on tall phones.
         let floor: CGFloat = pairingShown ? 80 : (keyboardShown ? 60 : 100)
-        let padSize = min(300, max(floor, h - fixed - gaps))
+        let padSize = min(320, max(floor, h - fixed - gaps))
 
         return RemoteLayout(gap: gap, topPadding: topPadding, topBarButton: topBarButton,
                             pairingCardPadding: pairingCardPadding, pairingCardSpacing: pairingCardSpacing,
                             padSize: padSize,
                             pillsButtonHeight: pillsButtonHeight,
                             bottomCell: bottomCell, circleSize: circleSize,
-                            rockerWidth: rockerWidth, rockerButtonHeight: rockerButtonHeight,
                             bottomRowTopPadding: bottomRowTopPadding,
                             diagnosticLines: diagnosticLines, showDiagnostic: showDiagnostic,
                             showLGNote: showLGNote)
@@ -359,6 +358,13 @@ private struct RemoteView: View {
     @State private var showKeyboard = false
     @FocusState private var keyboardFocused: Bool
     @FocusState private var pairingCodeFocused: Bool
+    /// Hardware volume buttons drive the TV volume (v1.0.23):
+    /// the controller watches the iPhone's outputVolume while
+    /// this view is up and turns each press into a .volumeUp /
+    /// .volumeDown through the same session send path the rocker
+    /// used — no haptics, the button press itself is the feedback.
+    @StateObject private var hardwareVolume = HardwareVolumeController()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         // No ScrollView on the remote (v1.0.15): everything fits on one
@@ -382,31 +388,42 @@ private struct RemoteView: View {
                         Text("Enter the code shown on your TV")
                             .font(.headline)
                             .foregroundStyle(.white)
-                        HStack {
-                            TextField("Code", text: $session.pairingCode)
-                                .font(.system(.title3, design: .monospaced))
-                                .multilineTextAlignment(.center)
-                                .autocorrectionDisabled(true)
-                                .textInputAutocapitalization(.characters)
-                                .keyboardType(.asciiCapable)
-                                .focused($pairingCodeFocused)
-                                // Auto-pair the moment the 6th character
-                                // lands (v1.0.22): the code is exactly 6
-                                // characters, so there is nothing to wait
-                                // for — Pair stays as the retry fallback.
-                                // One attempt per 6-char entry:
-                                // submitPairingCode clears the field, so
-                                // the next attempt needs a fresh 5→6
-                                // transition (or a tap on Pair).
-                                .onChange(of: session.pairingCode) { code in
-                                    if code.count == 6 { session.submitPairingCode() }
+                        TextField("Code", text: $session.pairingCode)
+                            .font(.system(.title3, design: .monospaced))
+                            .multilineTextAlignment(.center)
+                            .autocorrectionDisabled(true)
+                            .textInputAutocapitalization(.characters)
+                            .keyboardType(.asciiCapable)
+                            .focused($pairingCodeFocused)
+                            // Auto-pair the moment the 6th character
+                            // lands (v1.0.22): the code is exactly 6
+                            // characters, so there is nothing to wait
+                            // for. There is no Pair button anymore
+                            // (v1.0.23) — a paste longer than the code
+                            // is trimmed to 6 first, so it still
+                            // pairs, and a failed attempt clears the
+                            // field, so retyping the 6th character
+                            // fires a fresh attempt.
+                            .onChange(of: session.pairingCode) { code in
+                                if code.count > 6 {
+                                    session.pairingCode = String(code.prefix(6))
+                                } else if code.count == 6 {
+                                    session.submitPairingCode()
                                 }
-                                .padding(.vertical, 10)
-                                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-                                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.08), lineWidth: 1))
-                            Button("Pair") { session.submitPairingCode() }
-                                .buttonStyle(.borderedProminent)
-                                .tint(remoteAccent)
+                            }
+                            .padding(.vertical, 10)
+                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.08), lineWidth: 1))
+                        // A failed attempt (wrong code, or the TV
+                        // discarding the code and showing a new one)
+                        // shows its error here on the card — the
+                        // diagnostic line is hidden while the card
+                        // is up, so this is the only place it shows.
+                        if let pairingError = session.pairingError {
+                            Text(pairingError)
+                                .font(.footnote)
+                                .foregroundStyle(.red)
+                                .multilineTextAlignment(.center)
                         }
                     }
                     .padding(layout.pairingCardPadding)
@@ -467,19 +484,19 @@ private struct RemoteView: View {
                 }
                 .padding(.horizontal)
 
-                // Bottom row: equal columns on one axis — the Volume
-                // rocker, the keyboard button (Roku/Samsung/LG), and
-                // the Mute square. (The mic button is out for now; the
-                // voice code stays dormant behind it. The apps row is
-                // gone in v1.0.18 — its space went to this row instead.)
+                // Bottom row: equal columns on one axis — the
+                // keyboard button and the Mute square. (The volume
+                // rocker is gone in v1.0.23: the iPhone's physical
+                // volume buttons drive the TV volume now. Mute stays
+                // — it's a distinct command the volume buttons can't
+                // do. The mic button is out for now; the voice code
+                // stays dormant behind it. The apps row is gone in
+                // v1.0.18 — its space went to this row instead.)
                 // Every control sits in a layout-sized cell so they
                 // share top and bottom edges. Icons only — the words
                 // underneath were removed in v1.0.19. Nothing here is
                 // ever a dead button.
                 HStack(alignment: .top, spacing: 16) {
-                    VolRockerView(buttonHeight: layout.rockerButtonHeight, width: layout.rockerWidth, onUp: { firstStep in send(.volumeUp, haptic: firstStep) }, onDown: { firstStep in send(.volumeDown, haptic: firstStep) })
-                        .frame(height: layout.bottomCell)
-                        .frame(maxWidth: .infinity)
                     if session.capabilities.supportsTextInput {
                         Button { showKeyboard.toggle() } label: {
                             ZStack {
@@ -532,9 +549,39 @@ private struct RemoteView: View {
             }
             .padding(.top, layout.topPadding)
             .frame(maxWidth: .infinity)
+            // The hidden MPVolumeView must sit in the hierarchy to
+            // suppress the system volume HUD while the remote is up.
+            .background(
+                HiddenVolumeView(volumeView: hardwareVolume.volumeView)
+                    .frame(width: 1, height: 1)
+                    .opacity(0.01)
+            )
         }
         .task { await session.connect() }
-        .onDisappear { session.disconnect() }
+        .onAppear {
+            // Hardware volume buttons → TV volume, scoped strictly
+            // to this view: start here, stop on disappear (and on
+            // backgrounding, below). The step goes through the
+            // session send path, so the Samsung 200 ms throttle,
+            // the Android TV direct path, and the per-brand behavior
+            // all apply unchanged. No haptic — the button press
+            // itself and the TV's volume change are the feedback.
+            hardwareVolume.onStep = { [session] up in
+                Task { await session.send(up ? .volumeUp : .volumeDown) }
+            }
+            hardwareVolume.start()
+        }
+        .onChange(of: scenePhase) { phase in
+            if phase == .background {
+                hardwareVolume.stop()
+            } else if phase == .active {
+                hardwareVolume.start()
+            }
+        }
+        .onDisappear {
+            hardwareVolume.stop()
+            session.disconnect()
+        }
     }
 
     /// Top bar: Devices pill (back to the list), TV name centered,
@@ -624,9 +671,11 @@ private struct RemoteView: View {
         session.supportsControl && session.isBusy && !session.awaitingTVPrompt
     }
 
-    /// `haptic` defaults to true — every tap buzzes once. The volume
-    /// rocker passes false for repeat steps of a hold (v1.0.20), so
-    /// a hold buzzes exactly once, on its first step.
+    /// `haptic` defaults to true — every tap buzzes once. (The
+    /// volume rocker used to pass false for repeat steps of a hold,
+    /// v1.0.20; the rocker is gone in v1.0.23, so no caller
+    /// overrides it now. The hardware volume buttons don't use
+    /// this at all — they call session.send directly, no haptic.)
     private func send(_ command: RemoteCommand, haptic: Bool = true) {
         if haptic { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
         Task { await session.send(command) }
@@ -691,99 +740,6 @@ private struct SwipePadView: View {
                         }
                     }
             )
-    }
-}
-
-// MARK: - Volume rocker
-
-/// Tall volume rocker: + on top, − at the bottom. (The VOL label
-/// in the middle was removed in v1.0.19 — the +/− icons say it
-/// all.) It stretches to the height of the button grid beside it.
-/// (The old volume/channel rocker pair is gone with the channel rocker;
-/// mute is a grid button now.) The +/− buttons are big targets with
-/// an explicit full-frame hit area, and they repeat while held — like
-/// the fork's KeyCap — so holding + or − keeps turning the volume.
-/// The button height comes from the layout so the rocker fits the
-/// shrunken bottom cell on short screens. The callbacks get `true`
-/// for the first step of a press and `false` for later repeat steps
-/// (v1.0.20) — the caller uses that for the hold haptic.
-private struct VolRockerView: View {
-    var buttonHeight: CGFloat
-    var width: CGFloat
-    var onUp: (_ firstStep: Bool) -> Void
-    var onDown: (_ firstStep: Bool) -> Void
-
-    var body: some View {
-        VStack(spacing: 0) {
-            RepeatButton(action: onUp) {
-                Image(systemName: "plus")
-                    .font(.title.bold())
-                    .foregroundStyle(.white)
-                    .frame(width: width, height: buttonHeight)
-            }
-            Spacer()
-            RepeatButton(action: onDown) {
-                Image(systemName: "minus")
-                    .font(.title.bold())
-                    .foregroundStyle(.white)
-                    .frame(width: width, height: buttonHeight)
-            }
-        }
-        .frame(width: width)
-        .frame(maxHeight: .infinity)
-        .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.08), lineWidth: 1))
-    }
-}
-
-/// A button that fires once on tap and repeats while held (the fork's
-/// KeyCap with repeats: true). Tap and hold are both driven by the
-/// long-press gesture itself — there is no Button underneath. That
-/// matters: with Button + onLongPressGesture the two gestures
-/// arbitrate the touch, so a hold could be taken as a tap and never
-/// repeat, and a hold always fired one extra command from the Button
-/// on release. Here a quick tap sends exactly one command, and a
-/// hold past the onset repeats until release — nothing extra.
-/// Onset ~0.3 s, then ~0.12 s between repeats (~8 steps/s), so
-/// sweeping the volume a long way is fast. The action gets `true`
-/// for the first step of a press (a tap, or the first repeat of a
-/// hold) and `false` for later repeat steps (v1.0.20) — the volume
-/// rocker uses that so a hold buzzes exactly once, on its first step,
-/// instead of buzzing on every repeat while the volume lags behind.
-private struct RepeatButton<Label: View>: View {
-    var action: (_ firstStep: Bool) -> Void
-    @ViewBuilder var label: () -> Label
-    @State private var holdTask: Task<Void, Never>?
-    @State private var repeated = false
-
-    private let onset: UInt64 = 300_000_000
-    private let interval: UInt64 = 120_000_000
-
-    var body: some View {
-        label()
-            .contentShape(Rectangle())
-            .onLongPressGesture(minimumDuration: 0.3, pressing: { pressing in
-                if pressing {
-                    repeated = false
-                    holdTask = Task {
-                        try? await Task.sleep(nanoseconds: onset)
-                        guard !Task.isCancelled else { return }
-                        while !Task.isCancelled {
-                            await MainActor.run {
-                                guard !Task.isCancelled else { return }
-                                let first = !repeated
-                                repeated = true
-                                action(first)
-                            }
-                            try? await Task.sleep(nanoseconds: interval)
-                        }
-                    }
-                } else {
-                    holdTask?.cancel()
-                    holdTask = nil
-                    if !repeated { action(true) }
-                }
-            }, perform: {})
     }
 }
 
