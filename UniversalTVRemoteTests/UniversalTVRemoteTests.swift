@@ -323,4 +323,40 @@ final class VoiceMessageTests: XCTestCase {
         // Exactly one full chunk stays one chunk.
         XCTAssertEqual(AndroidTVDriver.voicePayloadChunks(samples: Data(repeating: 0, count: 20 * 1024)).count, 1)
     }
+
+    func testVoiceFeaturesIncludeVoice() {
+        // The VOICE bit (8) is what makes the TV answer KEYCODE_SEARCH
+        // with RemoteVoiceBegin — without it no voice session can open.
+        XCTAssertNotEqual(AndroidTVDriver.requestedFeatures & 8, 0)
+        XCTAssertEqual(AndroidTVDriver.requestedFeatures, 623)
+    }
+
+    func testVoiceDrainChunks() {
+        // Small yields stay buffered: nothing under 8 KB goes out.
+        var buffer = Data()
+        XCTAssertEqual(AndroidTVDriver.voiceDrainChunks(samples: Data(repeating: 0xAB, count: 1000), buffer: &buffer), [])
+        XCTAssertEqual(buffer.count, 1000)
+        // Crossing 8 KB drains one 8–20 KB chunk; the tail stays buffered.
+        let chunks = AndroidTVDriver.voiceDrainChunks(samples: Data(repeating: 0xAB, count: 8000), buffer: &buffer)
+        XCTAssertEqual(chunks.count, 1)
+        XCTAssertEqual(chunks[0].count, 9000)
+        XCTAssertEqual(buffer.count, 0)
+        // A big yield drains 20 KB at a time, keeping the rest buffered.
+        var buffer2 = Data()
+        let big = AndroidTVDriver.voiceDrainChunks(samples: Data(repeating: 0xAB, count: 25_000), buffer: &buffer2)
+        XCTAssertEqual(big.count, 1)
+        XCTAssertEqual(big[0].count, 20 * 1024)
+        XCTAssertEqual(buffer2.count, 25_000 - 20 * 1024)
+    }
+
+    func testVoiceFlushChunksPadsTail() {
+        var buffer = Data(repeating: 0xAB, count: 100)
+        let chunks = AndroidTVDriver.voiceFlushChunks(buffer: &buffer)
+        XCTAssertEqual(chunks.count, 1)
+        XCTAssertEqual(chunks[0].count, 8 * 1024)
+        XCTAssertEqual(chunks[0].prefix(100), Data(repeating: 0xAB, count: 100))
+        XCTAssertEqual(buffer.count, 0)
+        // Empty buffer yields nothing.
+        XCTAssertEqual(AndroidTVDriver.voiceFlushChunks(buffer: &buffer), [])
+    }
 }

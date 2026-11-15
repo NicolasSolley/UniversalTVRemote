@@ -12,10 +12,11 @@
 //   instead of the fork's "Open Remote" — this app's name, same format.
 // - Key table: the fork's RemoteKey plus .play (126), .pause (127) and
 //   .stop (86) — this app's RemoteCommand has distinct play/pause/stop.
-// - Voice (ours — the fork has no voice): RemoteVoiceBegin / Payload /
-//   End (fields 30/31/32, ≤20 KB payloads, 16-bit PCM mono 8 kHz), same
-//   message bytes as v1.0.9–v1.0.15. Additive only; nothing in the
-//   pairing or remote-session flow is touched.
+// - Voice (ours — the fork has no voice): the reference flow
+//   (androidtvremote2): request the VOICE feature, send KEYCODE_SEARCH,
+//   wait for the TV's RemoteVoiceBegin, echo it, then stream 16-bit PCM
+//   mono 8 kHz in 8–20 KB payloads (fields 30/31/32). Additive only;
+//   nothing in the pairing or remote-session flow is touched.
 //
 // Port 6467: one-time pairing. The TV shows a 6-hex-digit code; we prove we saw it by
 //            hashing it together with both certificates' RSA keys.
@@ -50,8 +51,11 @@ final class AndroidTVDriver: TVDriver {
     /// Shown alongside the next code prompt (e.g. after a wrong code forces a fresh one).
     private var nextPairingError: String?
 
-    /// PING | KEY | IME | POWER | VOLUME | APP_LINK
-    private static let requestedFeatures = 1 | 2 | 4 | 32 | 64 | 512
+    /// PING | KEY | IME | VOICE | POWER | VOLUME | APP_LINK.
+    /// VOICE matters: without the bit the TV never answers KEYCODE_SEARCH
+    /// with RemoteVoiceBegin, so no voice session can open.
+    /// Internal (not private) so tests can assert the VOICE bit is set.
+    static let requestedFeatures = 1 | 2 | 4 | 8 | 32 | 64 | 512
     private var activeFeatures = requestedFeatures
 
     init(device: AndroidTVDevice) {
@@ -71,6 +75,9 @@ final class AndroidTVDriver: TVDriver {
     func disconnect() {
         pendingKeys = []
         pendingLaunch = nil
+        voiceBeginContinuation?.resume(throwing: VoiceSessionError.notConnected)
+        voiceBeginContinuation = nil
+        voiceBuffer = Data()
         remote?.onClose = nil
         remote?.cancel()
         remote = nil
@@ -142,6 +149,12 @@ final class AndroidTVDriver: TVDriver {
         } else if let edit = msg.message(21) {
             imeCounter = edit.int(1) ?? imeCounter
             imeFieldCounter = edit.int(2) ?? imeFieldCounter
+            return
+        } else if let begin = msg.message(30), let sessionId = begin.int(1) {
+            // The TV answers our KEYCODE_SEARCH with RemoteVoiceBegin,
+            // carrying the session id for the voice interaction.
+            voiceBeginContinuation?.resume(returning: sessionId)
+            voiceBeginContinuation = nil
             return
         } else {
             return
@@ -386,13 +399,42 @@ final class AndroidTVDriver: TVDriver {
     /// RemoteVoiceBegin = RemoteMessage field 30 { session_id field 1,
     /// package_name field 2 — not required when sending audio };
     /// RemoteVoicePayload = field 31 { session_id field 1, samples
-    /// field 2 — 16-bit PCM mono 8 kHz, split into 20 KB messages };
+    /// field 2 — 16-bit PCM mono 8 kHz, in 8–20 KB messages };
     /// RemoteVoiceEnd = field 32 { session_id field 1 }.
-    /// One session id per utterance (incrementing), consistent across
-    /// begin/payload/end. Sent on the same TLS remote session as key
-    /// events. No feature bit is requested for voice: the reference
-    /// sends these messages on the established session.
+    /// The session follows the reference (androidtvremote2
+    /// RemoteProtocol.start_voice): we send KEYCODE_SEARCH, the TV
+    /// answers with RemoteVoiceBegin carrying the session id, we echo
+    /// RemoteVoiceBegin with that id back, and only then stream audio.
+    /// Sending our own begin unprompted never opened a session — the TV
+    /// dropped the audio. Payloads must be 8–20 KB: the reference pads
+    /// to an 8 KB minimum (Shield TV rejected smaller ones) and caps
+    /// at 20 KB. Sent on the same TLS remote session as key events.
     static let maxVoicePayloadBytes = 20 * 1024
+    /// Minimum voice payload size (see above).
+    static let minVoicePayloadBytes = 8 * 1024
+
+    /// Errors starting a voice session.
+    enum VoiceSessionError: Error, LocalizedError {
+        case notConnected
+        case alreadyInProgress
+        case timedOut
+
+        var errorDescription: String? {
+            switch self {
+            case .notConnected: return "Not connected to the TV."
+            case .alreadyInProgress: return "A voice session is already open."
+            case .timedOut: return "The TV didn't open a voice session."
+            }
+        }
+    }
+
+    /// Wait for the TV's RemoteVoiceBegin, outstanding while a voice
+    /// session is being opened. Resumed by handleRemote (field 30),
+    /// by the 2 s timeout, or by disconnect().
+    private var voiceBeginContinuation: CheckedContinuation<Int, Error>?
+    /// PCM buffered for the utterance in progress; drained in 8–20 KB
+    /// payloads (see sendVoiceSamples).
+    private var voiceBuffer = Data()
 
     /// RemoteVoiceBegin for `sessionId` (no package_name — not required
     /// when sending audio). Unframed bytes; the channel frames on send.
@@ -420,7 +462,9 @@ final class AndroidTVDriver: TVDriver {
     }
 
     /// Split PCM samples into ≤20 KB payloads (the reference's message
-    /// size). Empty input yields no chunks.
+    /// size). Empty input yields no chunks. No minimum is applied here:
+    /// callers that stream live audio use voiceDrainChunks /
+    /// voiceFlushChunks, which enforce the 8 KB minimum.
     nonisolated static func voicePayloadChunks(samples: Data) -> [Data] {
         guard !samples.isEmpty else { return [] }
         var chunks: [Data] = []
@@ -433,6 +477,63 @@ final class AndroidTVDriver: TVDriver {
         return chunks
     }
 
+    /// Drain `buffer` into whole voice payloads: appends `samples`,
+    /// then returns every complete 8–20 KB chunk; the tail under 8 KB
+    /// stays in `buffer` for the next call. (Reference: payloads below
+    /// 8 KB are rejected.)
+    nonisolated static func voiceDrainChunks(samples: Data, buffer: inout Data) -> [Data] {
+        buffer.append(samples)
+        var chunks: [Data] = []
+        while buffer.count >= minVoicePayloadBytes {
+            let n = min(buffer.count, maxVoicePayloadBytes)
+            chunks.append(Data(buffer.prefix(n)))
+            buffer.removeFirst(n)
+        }
+        return chunks
+    }
+
+    /// Drain the tail of a voice utterance: whatever is left in `buffer`,
+    /// split into ≤20 KB pieces with each short piece padded with zeros
+    /// to the 8 KB minimum (the reference pads after splitting).
+    /// Empty buffer yields nothing.
+    nonisolated static func voiceFlushChunks(buffer: inout Data) -> [Data] {
+        guard !buffer.isEmpty else { return [] }
+        let tail = buffer
+        buffer = Data()
+        return voicePayloadChunks(samples: tail).map { piece in
+            piece.count < minVoicePayloadBytes
+                ? piece + Data(repeating: 0, count: minVoicePayloadBytes - piece.count)
+                : piece
+        }
+    }
+
+    /// Start a voice session the way the reference does: send
+    /// KEYCODE_SEARCH and wait up to 2 s for the TV's RemoteVoiceBegin,
+    /// then echo RemoteVoiceBegin with the TV's session id back — the TV
+    /// requires that echo before it accepts audio. Returns the session
+    /// id for payloads and end.
+    func beginVoiceSession() async throws -> Int {
+        guard state == .connected, remote != nil else { throw VoiceSessionError.notConnected }
+        guard voiceBeginContinuation == nil else { throw VoiceSessionError.alreadyInProgress }
+        let sessionId = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Int, Error>) in
+            voiceBeginContinuation = continuation
+            send(.search)
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                self?.voiceBeginTimedOut()
+            }
+        }
+        sendVoiceBegin(sessionId: sessionId)
+        return sessionId
+    }
+
+    /// Resume a pending voice-begin wait with a timeout. No-op unless a
+    /// wait is still outstanding (the TV may have answered already).
+    private func voiceBeginTimedOut() {
+        voiceBeginContinuation?.resume(throwing: VoiceSessionError.timedOut)
+        voiceBeginContinuation = nil
+    }
+
     func sendVoiceBegin(sessionId: Int) {
         guard state == .connected, let remote else { return }
         var m = ProtoWriter()
@@ -440,9 +541,30 @@ final class AndroidTVDriver: TVDriver {
         remote.send(m)
     }
 
+    /// Stream PCM for a voice session, buffering so every payload is
+    /// 8–20 KB (the reference: payloads under 8 KB are rejected). The
+    /// tail stays buffered until flushVoiceBuffer, called before
+    /// RemoteVoiceEnd.
     func sendVoiceSamples(_ samples: Data, sessionId: Int) {
         guard state == .connected, let remote else { return }
-        for chunk in Self.voicePayloadChunks(samples: samples) {
+        for chunk in Self.voiceDrainChunks(samples: samples, buffer: &voiceBuffer) {
+            var m = ProtoWriter()
+            m.message(31) { b in
+                b.uint(1, UInt64(sessionId))
+                b.data(2, Array(chunk))
+            }
+            remote.send(m)
+        }
+    }
+
+    /// Flush the buffered tail of a voice utterance (padded to the 8 KB
+    /// minimum). Call before sendVoiceEnd so the last audio is sent too.
+    func flushVoiceBuffer(sessionId: Int) {
+        guard state == .connected, let remote else {
+            voiceBuffer = Data()
+            return
+        }
+        for chunk in Self.voiceFlushChunks(buffer: &voiceBuffer) {
             var m = ProtoWriter()
             m.message(31) { b in
                 b.uint(1, UInt64(sessionId))

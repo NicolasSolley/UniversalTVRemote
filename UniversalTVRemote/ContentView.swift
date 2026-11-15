@@ -286,7 +286,7 @@ private struct RemoteLayout {
         let bottomCell: CGFloat = pairingShown ? (extraCompact ? 90 : 110)
             : (extraCompact ? 110 : (compact ? 130 : 140))
         let circleSize = min(88, bottomCell * 0.55)
-        let rockerButtonHeight = max(28, min(56, bottomCell * 0.32))
+        let rockerButtonHeight = max(36, min(60, bottomCell * 0.40))
         let showDiagnostic = !pairingShown && !keyboardShown
         let diagnosticLines = compact ? 2 : 3
         let showLGNote = isLG && !extraCompact
@@ -480,13 +480,13 @@ private struct RemoteView: View {
                     }
                 }
 
-                // Bottom row: three equal columns on one axis — the
-                // Volume rocker, the big mic circle (Android TV only)
-                // or the keyboard button (Roku/Samsung/LG), and the
-                // Mute square. Every control sits in a layout-sized
-                // cell so the three share top and bottom edges, and the
-                // labels sit on one shared baseline below. Nothing
-                // here is ever a dead button.
+                // Bottom row: equal columns on one axis — the Volume
+                // rocker, the keyboard button (Roku/Samsung/LG), and
+                // the Mute square. (The mic button is out for now; the
+                // voice code stays dormant behind it.) Every control
+                // sits in a layout-sized cell so they share top and
+                // bottom edges, and the labels sit on one shared
+                // baseline below. Nothing here is ever a dead button.
                 HStack(alignment: .top, spacing: 16) {
                     VStack(spacing: 6) {
                         VolRockerView(buttonHeight: layout.rockerButtonHeight, onUp: { send(.volumeUp) }, onDown: { send(.volumeDown) })
@@ -496,37 +496,7 @@ private struct RemoteView: View {
                             .foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity)
-                    if session.capabilities.supportsVoice {
-                        // Voice (Android TV only): hold the mic button
-                        // and talk — the TV acts on it.
-                        VStack(spacing: 6) {
-                            ZStack {
-                                Circle()
-                                    .fill(session.isRecordingVoice
-                                          ? Color.red.opacity(0.85)
-                                          : Color.white.opacity(0.10))
-                                Circle()
-                                    .stroke(session.isRecordingVoice ? Color.red.opacity(0.6) : remoteAccent, lineWidth: 2.5)
-                                Image(systemName: session.isRecordingVoice ? "mic.fill" : "mic")
-                                    .font(.title)
-                                    .foregroundStyle(.white)
-                            }
-                            .frame(width: layout.circleSize, height: layout.circleSize)
-                            .accessibilityLabel("Hold to talk")
-                            .onLongPressGesture(minimumDuration: 0.15, pressing: { pressing in
-                                if pressing {
-                                    Task { await session.startVoice() }
-                                } else {
-                                    Task { await session.stopVoice() }
-                                }
-                            }, perform: {})
-                            .frame(height: layout.bottomCell)
-                            Text(session.isRecordingVoice ? "Listening…" : "Hold to talk")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity)
-                    } else if session.capabilities.supportsTextInput {
+                    if session.capabilities.supportsTextInput {
                         VStack(spacing: 6) {
                             Button { showKeyboard.toggle() } label: {
                                 ZStack {
@@ -784,8 +754,11 @@ private struct SwipePadView: View {
 /// Tall volume rocker: + on top, a VOL label in the middle, − at the
 /// bottom. It stretches to the height of the button grid beside it.
 /// (The old volume/channel rocker pair is gone with the channel rocker;
-/// mute is a grid button now.) The +/− button height comes from the
-/// layout so the rocker fits the shrunken bottom cell on short screens.
+/// mute is a grid button now.) The +/− buttons are big targets with
+/// an explicit full-frame hit area, and they repeat while held — like
+/// the fork's KeyCap — so holding + or − keeps turning the volume.
+/// The button height comes from the layout so the rocker fits the
+/// shrunken bottom cell on short screens.
 private struct VolRockerView: View {
     var buttonHeight: CGFloat
     var onUp: () -> Void
@@ -793,30 +766,57 @@ private struct VolRockerView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Button(action: onUp) {
+            RepeatButton(action: onUp) {
                 Image(systemName: "plus")
-                    .font(.title3.bold())
+                    .font(.title.bold())
                     .foregroundStyle(.white)
-                    .frame(width: 64, height: buttonHeight)
+                    .frame(width: 84, height: buttonHeight)
             }
-            .buttonStyle(.plain)
             Spacer()
             Text("VOL")
                 .font(.caption2.bold())
                 .foregroundStyle(.secondary)
             Spacer()
-            Button(action: onDown) {
+            RepeatButton(action: onDown) {
                 Image(systemName: "minus")
-                    .font(.title3.bold())
+                    .font(.title.bold())
                     .foregroundStyle(.white)
-                    .frame(width: 64, height: buttonHeight)
+                    .frame(width: 84, height: buttonHeight)
             }
-            .buttonStyle(.plain)
         }
-        .frame(width: 64)
+        .frame(width: 84)
         .frame(maxHeight: .infinity)
         .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.08), lineWidth: 1))
+    }
+}
+
+/// A button that fires once on tap and repeats while held (the fork's
+/// KeyCap with repeats: true). A quick tap sends one command; holding
+/// past ~0.45 s repeats it every ~0.18 s until release.
+private struct RepeatButton<Label: View>: View {
+    var action: () -> Void
+    @ViewBuilder var label: () -> Label
+    @State private var repeatTask: Task<Void, Never>?
+
+    var body: some View {
+        Button(action: action) { label() }
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .onLongPressGesture(minimumDuration: 0.45, pressing: { pressing in
+                if !pressing {
+                    repeatTask?.cancel()
+                    repeatTask = nil
+                }
+            }, perform: {
+                repeatTask = Task {
+                    while !Task.isCancelled {
+                        try? await Task.sleep(nanoseconds: 180_000_000)
+                        guard !Task.isCancelled else { break }
+                        action()
+                    }
+                }
+            })
     }
 }
 

@@ -120,9 +120,6 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
     /// (the fork's Pair button), but only once per connect — a second
     /// .unpaired is a real failure, not a retry loop.
     private var pairingAttempted = false
-    /// Voice session counter (the fork has no voice; our mic button
-    /// needs one id per utterance).
-    private var voiceSessionCounter = 0
     private let voiceCapture = VoiceCapture()
     /// Session id of the utterance in progress, if any.
     private var voiceSessionId: Int?
@@ -290,14 +287,28 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
         UserDefaults.standard.set(device.isPaired, forKey: "androidtv.paired.\(host)")
     }
 
-    /// Starts a voice utterance (Android TV only): opens the mic, sends
-    /// RemoteVoiceBegin, and streams 8 kHz PCM until stopVoice().
-    /// Hold-to-talk: the UI calls this on press-down and stopVoice() on
-    /// release. A no-op when voice is unsupported or already recording.
+    /// Starts a voice utterance (Android TV only): opens a voice session
+    /// with the TV, then opens the mic and streams 8 kHz PCM until
+    /// stopVoice(). Hold-to-talk: the UI calls this on press-down and
+    /// stopVoice() on release. A no-op when voice is unsupported or
+    /// already recording.
+    /// The session follows the reference (androidtvremote2): the TV opens
+    /// it — we send SEARCH, the TV answers with RemoteVoiceBegin, we echo
+    /// it — and only then do we capture and stream. (Our old code sent
+    /// our own begin unprompted; the TV never opened a session, so it
+    /// dropped the audio and nothing the user said appeared.)
     func startVoice() async {
         guard capabilities.supportsVoice, !isRecordingVoice else { return }
-        guard isConnected else {
+        guard isConnected, let driver = androidTVDriver else {
             status = "Not connected — tap a button to connect first."
+            return
+        }
+        status = "Opening voice session…"
+        let sessionId: Int
+        do {
+            sessionId = try await driver.beginVoiceSession()
+        } catch {
+            status = "The TV didn't open a voice session. Try again."
             return
         }
         // AsyncStream.makeStream() needs iOS 17; the closure init below
@@ -309,27 +320,21 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
             try await voiceCapture.start { [weak self] samples in
                 self?.voiceContinuation?.yield(samples)
             }
-            guard let driver = androidTVDriver, driver.state == .connected else {
-                stopVoiceCapture()
-                status = "Not connected — tap a button to connect first."
-                return
-            }
-            voiceSessionCounter += 1
-            let id = voiceSessionCounter
-            driver.sendVoiceBegin(sessionId: id)
-            voiceSessionId = id
+            voiceSessionId = sessionId
             voicePumpTask = Task {
                 for await samples in stream {
-                    driver.sendVoiceSamples(samples, sessionId: id)
+                    driver.sendVoiceSamples(samples, sessionId: sessionId)
                 }
             }
             isRecordingVoice = true
             status = "Listening… speak now."
         } catch let error as VoiceCapture.VoiceCaptureError {
             stopVoiceCapture()
+            driver.sendVoiceEnd(sessionId: sessionId)
             status = error.localizedDescription
         } catch {
             stopVoiceCapture()
+            driver.sendVoiceEnd(sessionId: sessionId)
             status = "Couldn't start voice input."
         }
     }
@@ -345,6 +350,7 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
         voicePumpTask = nil
         voiceSessionId = nil
         isRecordingVoice = false
+        androidTVDriver?.flushVoiceBuffer(sessionId: id)
         androidTVDriver?.sendVoiceEnd(sessionId: id)
         status = "Sent."
     }
