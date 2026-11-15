@@ -281,6 +281,7 @@ private struct RemoteLayout {
     var circleSize: CGFloat
     var rockerWidth: CGFloat
     var rockerButtonHeight: CGFloat
+    var bottomRowTopPadding: CGFloat
     var diagnosticLines: Int
     var showDiagnostic: Bool
     var showLGNote: Bool
@@ -295,16 +296,21 @@ private struct RemoteLayout {
         let pairingCardPadding: CGFloat = extraCompact ? 10 : (compact ? 12 : 14)
         let pairingCardSpacing: CGFloat = extraCompact ? 8 : (compact ? 9 : 10)
         let pillsButtonHeight: CGFloat = extraCompact ? 44 : (compact ? 48 : 56)
-        // The apps row is gone (v1.0.18), so its height goes to the
-        // bottom row instead: volume and mute get much bigger. While
-        // the pairing card is up the bottom row stays compact — the
-        // card is the focus then, and the tall row would overflow
-        // short screens.
+        // The apps row is gone (v1.0.18), so its height went to the
+        // bottom row instead — but v1.0.20 shrinks the row back: the
+        // rocker was way too big and crowded the pills above it
+        // (roughly back toward its v1.0.17 size). While the pairing
+        // card is up the bottom row stays compact — the card is the
+        // focus then, and the tall row would overflow short screens.
         let bottomCell: CGFloat = pairingShown ? (extraCompact ? 90 : 110)
-            : (extraCompact ? 184 : (compact ? 208 : 226))
+            : (extraCompact ? 140 : (compact ? 156 : 168))
         let circleSize = min(112, bottomCell * 0.55)
-        let rockerWidth: CGFloat = extraCompact ? 88 : (compact ? 96 : 104)
-        let rockerButtonHeight = max(36, min(80, bottomCell * 0.40))
+        let rockerWidth: CGFloat = extraCompact ? 80 : (compact ? 84 : 88)
+        let rockerButtonHeight = max(36, min(64, bottomCell * 0.40))
+        // Breathing room above the bottom row (v1.0.20): the rocker
+        // crowded the Back/Home/Exit pills, so the row sits clearly
+        // lower now. Budgeted in `fixed` below, on top of the gap.
+        let bottomRowTopPadding: CGFloat = extraCompact ? 10 : (compact ? 14 : 18)
         let showDiagnostic = !pairingShown && !keyboardShown
         let diagnosticLines = compact ? 2 : 3
         let showLGNote = isLG && !extraCompact
@@ -317,6 +323,7 @@ private struct RemoteLayout {
         if showLGNote { fixed += 16 }
         fixed += pillsButtonHeight // pills row — icons only, no labels
         fixed += bottomCell // bottom row — icons only, no labels
+        fixed += bottomRowTopPadding // breathing room above the bottom row (v1.0.20)
         if showDiagnostic { fixed += CGFloat(diagnosticLines) * 17 }
         // Gaps between sections.
         var sections = 6 // topBar, pill, pad, pills, bottom, diagnostic
@@ -338,6 +345,7 @@ private struct RemoteLayout {
                             pillsButtonHeight: pillsButtonHeight,
                             bottomCell: bottomCell, circleSize: circleSize,
                             rockerWidth: rockerWidth, rockerButtonHeight: rockerButtonHeight,
+                            bottomRowTopPadding: bottomRowTopPadding,
                             diagnosticLines: diagnosticLines, showDiagnostic: showDiagnostic,
                             showLGNote: showLGNote)
     }
@@ -453,7 +461,7 @@ private struct RemoteView: View {
                 // underneath were removed in v1.0.19. Nothing here is
                 // ever a dead button.
                 HStack(alignment: .top, spacing: 16) {
-                    VolRockerView(buttonHeight: layout.rockerButtonHeight, width: layout.rockerWidth, onUp: { send(.volumeUp) }, onDown: { send(.volumeDown) })
+                    VolRockerView(buttonHeight: layout.rockerButtonHeight, width: layout.rockerWidth, onUp: { firstStep in send(.volumeUp, haptic: firstStep) }, onDown: { firstStep in send(.volumeDown, haptic: firstStep) })
                         .frame(height: layout.bottomCell)
                         .frame(maxWidth: .infinity)
                     if session.capabilities.supportsTextInput {
@@ -491,6 +499,7 @@ private struct RemoteView: View {
                     .frame(height: layout.bottomCell)
                     .frame(maxWidth: .infinity)
                 }
+                .padding(.top, layout.bottomRowTopPadding)
 
                 // Diagnostic status — capped to a few lines so the page
                 // fits; the full text lives in Settings. Hidden while
@@ -553,12 +562,19 @@ private struct RemoteView: View {
     /// connected, amber while connecting (or waiting on the TV's
     /// prompt), red when not connected, gray for discovery-only
     /// devices. Replaces the old status banner — the same states,
-    /// in one place.
+    /// in one place. While genuinely connecting (v1.0.20) a small
+    /// spinner sits next to the amber dot, so the remote shows
+    /// something is happening before it can be used.
     private var connectionPill: some View {
         HStack(spacing: 8) {
             Circle()
                 .fill(connectionDotColor)
                 .frame(width: 9, height: 9)
+            if isConnecting {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.white)
+            }
             Text(connectionLabel)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.white)
@@ -585,8 +601,18 @@ private struct RemoteView: View {
         return "Not connected"
     }
 
-    private func send(_ command: RemoteCommand) {
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    /// True while the session is actively connecting — busy, but
+    /// not waiting on the TV's own allow prompt (that state shows
+    /// "Check your TV" and needs the user, not a spinner).
+    private var isConnecting: Bool {
+        session.supportsControl && session.isBusy && !session.awaitingTVPrompt
+    }
+
+    /// `haptic` defaults to true — every tap buzzes once. The volume
+    /// rocker passes false for repeat steps of a hold (v1.0.20), so
+    /// a hold buzzes exactly once, on its first step.
+    private func send(_ command: RemoteCommand, haptic: Bool = true) {
+        if haptic { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
         Task { await session.send(command) }
     }
 
@@ -662,12 +688,14 @@ private struct SwipePadView: View {
 /// an explicit full-frame hit area, and they repeat while held — like
 /// the fork's KeyCap — so holding + or − keeps turning the volume.
 /// The button height comes from the layout so the rocker fits the
-/// shrunken bottom cell on short screens.
+/// shrunken bottom cell on short screens. The callbacks get `true`
+/// for the first step of a press and `false` for later repeat steps
+/// (v1.0.20) — the caller uses that for the hold haptic.
 private struct VolRockerView: View {
     var buttonHeight: CGFloat
     var width: CGFloat
-    var onUp: () -> Void
-    var onDown: () -> Void
+    var onUp: (_ firstStep: Bool) -> Void
+    var onDown: (_ firstStep: Bool) -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -701,9 +729,13 @@ private struct VolRockerView: View {
 /// on release. Here a quick tap sends exactly one command, and a
 /// hold past the onset repeats until release — nothing extra.
 /// Onset ~0.3 s, then ~0.12 s between repeats (~8 steps/s), so
-/// sweeping the volume a long way is fast.
+/// sweeping the volume a long way is fast. The action gets `true`
+/// for the first step of a press (a tap, or the first repeat of a
+/// hold) and `false` for later repeat steps (v1.0.20) — the volume
+/// rocker uses that so a hold buzzes exactly once, on its first step,
+/// instead of buzzing on every repeat while the volume lags behind.
 private struct RepeatButton<Label: View>: View {
-    var action: () -> Void
+    var action: (_ firstStep: Bool) -> Void
     @ViewBuilder var label: () -> Label
     @State private var holdTask: Task<Void, Never>?
     @State private var repeated = false
@@ -723,8 +755,9 @@ private struct RepeatButton<Label: View>: View {
                         while !Task.isCancelled {
                             await MainActor.run {
                                 guard !Task.isCancelled else { return }
+                                let first = !repeated
                                 repeated = true
-                                action()
+                                action(first)
                             }
                             try? await Task.sleep(nanoseconds: interval)
                         }
@@ -732,7 +765,7 @@ private struct RepeatButton<Label: View>: View {
                 } else {
                     holdTask?.cancel()
                     holdTask = nil
-                    if !repeated { action() }
+                    if !repeated { action(true) }
                 }
             }, perform: {})
     }
