@@ -1,3 +1,49 @@
+// Android TV / Google TV remote control — Android TV Remote protocol v2.
+//
+// v1.0.15 rebuild: the Android TV section is a port of the working
+// implementation from open-tv-remote (https://github.com/iamnbutler/open-tv-remote,
+// MIT License, Copyright (c) 2026 Nathan Butler), whose v1.3.0 IPA pairs
+// and controls the TCL QM7 this app could not reach. Our v1.0.7–v1.0.14
+// implementation (hand-rolled TLSConnection, X509, TLSHandshakeRecorder,
+// diagnostic probes) is replaced by the fork's TLSChannel, ClientIdentity,
+// DER and Protobuf code — see TLSChannel.swift, ClientIdentity.swift,
+// DER.swift, Protobuf.swift. Those files are the fork's code, near-verbatim.
+//
+// What changed vs. the fork (deliberate, documented):
+// - The fork's TVDriver protocol / TVDevice / delegate are not ported:
+//   this file's AndroidTVDriver takes a host + paired flag and reports
+//   state through closures, and AndroidTVRemote adapts it to the
+//   RemoteSession / RemoteCommand interface this app's UI already uses.
+// - The fork's connect() never pairs by design; this app pairs
+//   automatically when the user taps the TV, so the adapter drives
+//   pair-then-connect and shows the code prompt through RemoteSession.
+// - Certificate pinning (ours, from v1.0.7): the fork trusts any server
+//   certificate and binds trust to the pairing secret. This app also
+//   pins the TV's certificate at pairing (AndroidTVPinStore) and the
+//   driver checks the pin after the handshake, before any message is
+//   sent — a changed certificate fails with certificateChanged instead
+//   of silently re-trusting. Forget this TV clears the pin + flag.
+// - Voice (ours — the fork has no voice): RemoteVoiceBegin / Payload /
+//   End (fields 30/31/32, ≤20 KB payloads, 16-bit PCM mono 8 kHz), same
+//   message bytes as v1.0.9–v1.0.14 (covered by VoiceMessageTests).
+// - Key table: the fork's RemoteKey plus .play (126), .pause (127) and
+//   .stop (86) — our RemoteCommand has distinct play/pause/stop, and
+//   the old adapter sent those codes; .exit is 4, like the fork's.
+// - The client name shown on the TV while pairing says
+//   "Universal Remote (iPhone XXXX)" instead of the fork's "Open Remote".
+// - Not ported (no caller here): sendInteractive, launch,
+//   installedApps, supports(_:), the foreground-app tracking, and the
+//   model-name learning — Android TV shows no app shortcuts in our UI.
+// - The diagnostic probes and the handshake recorder are gone: the fork
+//   never probes, and the probes were three extra failed handshakes
+//   before the real attempt. A failure now reports the fork's
+//   plain-language reason as the status text.
+//
+// Transport: mutual TLS. Pairing on port 6467 (TV shows a 6-character
+// hex code; the client proves it saw the code with a SHA-256 secret
+// bound to both certificates), control on port 6466 with varint-framed
+// protobuf. No third-party dependencies.
+
 import Foundation
 import Network
 import CryptoKit
@@ -6,60 +52,31 @@ import Security
 import UIKit
 #endif
 
-/// Android TV / Google TV remote control — Android TV Remote protocol v2.
-///
-/// Verified against the actual protocol sources:
-/// - `remotemessage.proto` / `polo.proto` / `pairing.py` / `remote.py` from
-///   tronikos/androidtvremote2 (the same protocol the Google TV app uses).
-///
-/// Transport: mutual TLS. Pairing on port 6467 (TV shows a 6-digit hex
-/// code; the client proves it saw the code with a SHA-256 secret bound to
-/// both certificates), control on port 6466 with varint-framed protobuf.
-/// No third-party dependencies: protobuf is hand-rolled, the client
-/// certificate is minted with `X509`, TLS runs on Network.framework.
-///
-/// Text input is NOT implemented: IME batch edits need live counters from
-/// `remote_ime_key_inject`, which are hardware-sensitive and cannot be
-/// verified without a real TV. The UI hides the keyboard for Android TV.
-actor AndroidTVRemote {
-    /// Errors are step-named on purpose: the generic "Couldn't connect"
-    /// hid which step failed. Each case says where the flow died, and
-    /// the `detail` cases carry the underlying NWError/POSIX text.
-    enum AndroidTVError: Error, LocalizedError {
-        case pairingDenied
-        case pairingTimeout
-        case connectionFailed
-        case invalidCode
+// MARK: - Adapter (the interface RemoteSession uses)
+
+/// Android TV remote, as RemoteSession sees it: connect (pairing first
+/// if needed), disconnect, sendKey, voice, forget. The connection work
+/// is done by AndroidTVDriver (below); this class owns the paired flag,
+/// the pin, the code-prompt handoff, and the connect timeout.
+@MainActor
+final class AndroidTVRemote {
+
+    /// Pure value type — explicitly nonisolated so tests and other
+    /// non-isolated code can read the failure reasons.
+    nonisolated enum AndroidTVError: Error, LocalizedError {
         case notConnected
-        case identityUnavailable(detail: String)
-        case pairingTLSFailed(detail: String)
-        case remoteSessionFailed(detail: String)
-        case remoteSessionTimeout
-        case secretRejected
+        case connectionFailed(detail: String)
+        case pairingTimeout
         case certificateChanged
 
         var errorDescription: String? {
             switch self {
-            case .pairingDenied:
-                return "Pairing was refused. Check the TV and try again."
-            case .pairingTimeout:
-                return "Pairing timed out waiting for the TV to show its code."
-            case .connectionFailed:
-                return "Couldn't connect to the TV. Make sure it's on and on the same Wi-Fi network."
-            case .invalidCode:
-                return "That code doesn't look right — enter the 6-digit code shown on your TV."
             case .notConnected:
                 return "Not connected to the TV."
-            case .identityUnavailable(let detail):
-                return "Couldn't create the secure identity needed for pairing. (\(detail))"
-            case .pairingTLSFailed(let detail):
-                return "Couldn't open the TV's secure pairing connection. (\(detail))"
-            case .remoteSessionFailed(let detail):
-                return "The TV's remote session failed. (\(detail))"
-            case .remoteSessionTimeout:
-                return "The TV didn't start the remote session in time."
-            case .secretRejected:
-                return "The TV didn't accept that code. Check the code on the TV and try again."
+            case .connectionFailed(let detail):
+                return detail
+            case .pairingTimeout:
+                return "Pairing timed out waiting for the TV to show its code."
             case .certificateChanged:
                 return "This TV's certificate changed since you paired it. Forget the TV and pair again."
             }
@@ -67,7 +84,9 @@ actor AndroidTVRemote {
     }
 
     /// Android key codes used (values from remotemessage.proto).
-    enum Key: Int {
+    /// Identical to v1.0.14 — RemoteSession maps RemoteCommand onto these.
+    /// Pure value type — explicitly nonisolated.
+    nonisolated enum Key: Int {
         case home = 3
         case back = 4
         case digit0 = 7
@@ -109,173 +128,62 @@ actor AndroidTVRemote {
         }
     }
 
-    /// The client name sent in PairingRequest — shown on the TV while
-    /// pairing, tagged with the certificate's fingerprint so devices can
-    /// be told apart. Mirrors the working reference app: its client name
-    /// ("Open Remote (iPhone XXXX)") is NOT the certificate's CN, and
-    /// the TV accepts it, so the name is a display string, not a
-    /// protocol binding.
-    static func clientName(for certificateDER: Data) -> String {
-        #if os(macOS)
-        let kind = "Mac"
-        #else
-        let kind = UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
-        #endif
-        return "Universal TV Remote (\(kind) \(X509.shortID(certificateDER: certificateDER)))"
-    }
-
-    /// Feature bits (RemoteConfigure code1) from remote.py.
-    private static let featurePing = 1
-    private static let featureKey = 2
-    private static let featurePower = 32
-    private static let featureVolume = 64
-    private static let featureAppLink = 512
-    /// We request everything except IME (text input is not implemented).
-    private static let requestedFeatures = featurePing | featureKey | featurePower | featureVolume | featureAppLink // 611
-
-    private var remoteConnection: TLSConnection?
-    private var pairingConnection: TLSConnection?
-    private var remoteHost: String?
-    private var activeFeatures = 0
-    private var readyContinuation: CheckedContinuation<Void, Error>?
-    private var tlsReady = false
-    private var tlsReadyContinuation: CheckedContinuation<Void, Error>?
-    private var pairingCodeContinuation: CheckedContinuation<Void, Error>?
-    private var secretContinuation: CheckedContinuation<Void, Error>?
-    private var pairingServerCertificateDER: Data?
-    /// The server certificate the remote session presented (port 6466),
-    /// for pinning after a first connection succeeds.
-    private var remoteServerCertificateDER: Data?
-    /// What the (non-fatal) 6466 probe saw, when it failed — appended to
-    /// the status if pairing then fails too, so the probe step is visible.
-    private(set) var lastProbeNote: String?
-    /// What the plain-TCP Network.framework check saw — appended to the
-    /// status if pairing then fails too. Separates "Network.framework
-    /// can't reach the TV from this guest" from "the TLS handshake fails".
-    private(set) var lastTCPCheck: String?
-    /// What the no-identity TLS probe saw — appended to the status if
-    /// pairing then fails too. A TLS handshake with no client
-    /// certificate: if the TV presents its certificate here while the
-    /// mutual-TLS handshake dies with errSSLBadCert (-9808), our own
-    /// client identity is what SecureTransport rejects.
-    private(set) var lastNoIdentityProbe: String?
-    /// What the raw-TLS handshake recorder saw on ports 6467 and 6466
-    /// — appended to the status if pairing then fails too. The recorder
-    /// opens a plain TCP connection, sends its own ClientHello, and
-    /// reports the first thing the TV sends back (ServerHello version
-    /// and cipher, whether a Certificate message arrived, and the
-    /// certificate's CN / serial / signature algorithm) — the evidence
-    /// for why the mutual-TLS handshake dies with -9808.
-    private(set) var lastHandshakeRecord: String?
-
-    // MARK: - Public API
+    private var driver: AndroidTVDriver?
+    private var host: String?
+    private var connectContinuation: CheckedContinuation<Void, Error>?
+    /// Set once the driver reports the TV forgot us (.unpaired), so the
+    /// auto-pair that follows happens exactly once per connect.
+    private var pairingAttempted = false
+    private var connectTimeoutTask: Task<Void, Never>?
+    private var voiceSessionId = 0
 
     /// Connect to the TV, pairing first if needed.
     /// `codeProvider` is called on the main actor when the TV shows its
-    /// pairing code; it returns the 6-digit code the user types in.
+    /// pairing code; it returns the 6-character code the user types in.
     func connect(to host: String,
                  codeProvider: @escaping @MainActor () async throws -> String) async throws {
-        if remoteHost == host, remoteConnection != nil { return }
+        if self.host == host, let driver, driver.state == .connected { return }
         disconnect()
-        lastProbeNote = nil
-        lastTCPCheck = nil
-        lastNoIdentityProbe = nil
-        lastHandshakeRecord = nil
+        self.host = host
         // Paired before if the flag survived, or if a pin is stored:
         // the pin is set when pairing succeeds, so it covers a lost
-        // flag too. The real connection is attempted FIRST — no probes
-        // run before it. The fork goes straight to the connection and
-        // never probes; ours used to run three failed handshakes
-        // (plain-TCP check, no-identity probe, recorder) before the
-        // real attempt, and the TV may treat those as the connection.
+        // flag too.
         let paired = UserDefaults.standard.bool(forKey: "androidtv.paired.\(host)")
             || AndroidTVPinStore.pinnedCertificateDER(for: host) != nil
-
-        if paired {
-            // Try the remote session first: if the TV already trusts our
-            // certificate, this just works — no code prompt. The session enforces the pinned
-            // server certificate when one is stored for this host, and pins
-            // the certificate on a first successful connection. (Previously
-            // a paired TV went straight to pairing, which would demand a
-            // code on every reconnect and silently re-pin over a changed
-            // certificate — both wrong now that pinning exists.)
-            do {
-                try await openRemoteSession(host: host, timeout: 10)
-                UserDefaults.standard.set(true, forKey: "androidtv.paired.\(host)")
-                return
-            } catch let error as AndroidTVError {
-                // A pin mismatch is not a pairing problem: re-pairing here
-                // would silently overwrite the pin, so surface it instead
-                // and let the user forget the TV and pair again.
-                if case .certificateChanged = error {
-                    disconnect()
-                    throw error
-                }
-                lastProbeNote = "Probe: \(error.localizedDescription)"
-                disconnect()
-            } catch {
-                lastProbeNote = "Probe: \(error.localizedDescription)"
-                disconnect()
+        let driver = AndroidTVDriver(host: host, isPaired: paired)
+        driver.expectedServerCertificateDER = AndroidTVPinStore.pinnedCertificateDER(for: host)
+        driver.onStateChange = { [weak self] state in
+            self?.driverStateChanged(state, codeProvider: codeProvider)
+        }
+        driver.onIsPairedChange = { paired in
+            UserDefaults.standard.set(paired, forKey: "androidtv.paired.\(host)")
+        }
+        self.driver = driver
+        pairingAttempted = false
+        // 30s timeout on the pre-prompt phase only: a TV that accepts
+        // TCP and then never answers would otherwise hang the UI
+        // forever (the fork has no timeout; its channel's 6s TCP
+        // timeout bounds the unreachable case, not the black-hole one).
+        // The prompt cancels it, so a user mid-typing is never cut off
+        // — and a timeout firing mid-prompt would strand RemoteSession's
+        // code continuation, which is why the timeout lives here and not
+        // around the prompt.
+        armConnectTimeout()
+        try await waitForConnected {
+            if paired {
+                driver.connect()
+            } else {
+                driver.pair()
             }
-            // The real attempt failed: run the diagnostics now, before
-            // re-pairing. Their notes are appended to the status if
-            // pairing then fails too.
-            await runDiagnostics(host: host)
         }
-        // Unpaired, or the paired session failed: pair on 6467 first.
-        // The fork never touches 6466 before pairing, and neither do
-        // we now — the old session-first attempt was an extra failed
-        // handshake on a TV that has never seen our certificate.
-        do {
-            try await pair(host: host, codeProvider: codeProvider)
-        } catch {
-            // Pairing failed: run the diagnostics so the failure
-            // readout is complete.
-            await runDiagnostics(host: host)
-            disconnect()
-            throw error
-        }
-        do {
-            try await openRemoteSession(host: host, timeout: 10)
-        } catch {
-            // The session failed after pairing: run the diagnostics so
-            // the failure readout is complete.
-            await runDiagnostics(host: host)
-            disconnect()
-            throw error
+        // Connected: pin the TV's certificate on first success (trust on
+        // first use — the pin is what later connections are checked
+        // against).
+        if AndroidTVPinStore.pinnedCertificateDER(for: host) == nil,
+           let serverDER = driver.remoteServerCertificateDER {
+            AndroidTVPinStore.set(serverDER, for: host)
         }
         UserDefaults.standard.set(true, forKey: "androidtv.paired.\(host)")
-    }
-
-    /// Diagnostic probes, run ONLY on the failure path: a plain-TCP
-    /// reachability check, a TLS handshake with no client identity,
-    /// and the raw-TLS handshake recorder on both ports. Their notes
-    /// are appended to the status if the connection then fails, exactly
-    /// as when they ran first. Never thrown; notes only, never changes
-    /// the control path. Runs once per connect — a second failure in
-    /// the same attempt reuses the first readout.
-    private func runDiagnostics(host: String) async {
-        guard lastTCPCheck == nil else { return }
-        // The sweep proved BSD sockets + URLSession reach the TV from
-        // the guest, but the control path uses NWConnection. If plain
-        // NW TCP also fails, the guest's Network.framework path is
-        // broken — not the TLS handshake. Cheap when healthy (ready
-        // arrives in milliseconds); 3s worst case. Never thrown.
-        lastTCPCheck = await Self.plainTCPCheck(host: host, port: 6467)
-        // A TLS handshake to the pairing port with NO client identity.
-        // If the TV presents its certificate here while the mutual-TLS
-        // handshake dies with errSSLBadCert (-9808), SecureTransport
-        // is rejecting OUR client identity — not the TV. Never thrown.
-        // 5s worst case, milliseconds when healthy.
-        lastNoIdentityProbe = await Self.noIdentityTLSProbe(host: host, port: 6467)
-        // A raw-TLS handshake recorder that sends its own ClientHello
-        // over plain TCP and reports what the TV sends back. Both ports
-        // run at once (async let) so the worst case is one 5s timeout,
-        // not two. Never thrown; notes only.
-        async let record6467 = TLSHandshakeRecorder.record(host: host, port: 6467)
-        async let record6466 = TLSHandshakeRecorder.record(host: host, port: 6466)
-        let (rec6467, rec6466) = await (record6467, record6466)
-        lastHandshakeRecord = "\(rec6467) \(rec6466)"
     }
 
     /// Forget a TV: clears its pinned server certificate and the paired
@@ -284,7 +192,7 @@ actor AndroidTVRemote {
     /// the others. The next connect pairs from scratch and pins the
     /// TV's (new) certificate.
     func forget(host: String) {
-        if remoteHost == host { disconnect() }
+        if self.host == host { disconnect() }
         Self.forgetTV(host: host)
     }
 
@@ -295,35 +203,599 @@ actor AndroidTVRemote {
     }
 
     func disconnect() {
-        readyContinuation?.resume(throwing: CancellationError())
-        readyContinuation = nil
-        tlsReadyContinuation?.resume(throwing: CancellationError())
-        tlsReadyContinuation = nil
-        tlsReady = false
-        pairingCodeContinuation?.resume(throwing: CancellationError())
-        pairingCodeContinuation = nil
-        secretContinuation?.resume(throwing: CancellationError())
-        secretContinuation = nil
-        remoteConnection?.stop()
-        remoteConnection = nil
-        pairingConnection?.stop()
-        pairingConnection = nil
-        remoteHost = nil
-        activeFeatures = 0
+        abortConnect(with: CancellationError())
     }
 
     func sendKey(_ key: Key, to host: String) async throws {
-        guard remoteConnection != nil, remoteHost == host else {
+        guard let driver, self.host == host, driver.isPaired else {
             throw AndroidTVError.notConnected
         }
-        // RemoteKeyInject: field 10 of RemoteMessage.
-        let inject = Protobuf.varintField(1, UInt64(key.rawValue))
-            + Protobuf.varintField(2, 3) // RemoteDirection.SHORT
-        let message = Protobuf.messageField(10, inject)
-        remoteConnection?.send(Protobuf.varint(UInt64(message.count)) + message)
+        // The driver queues the key and reconnects if the TV dropped
+        // the idle session (the fork's behavior); a key to a TV that
+        // was never paired is notConnected above.
+        driver.send(Self.driverKey(for: key))
+    }
+
+    /// Text input (the fork's IME batch edit). RemoteSession wires
+    /// .text here; the UI still hides the keyboard for Android TV
+    /// (supportsTextInput is false), so this only runs if that changes.
+    func sendText(_ text: String, to host: String) async throws {
+        guard let driver, self.host == host else {
+            throw AndroidTVError.notConnected
+        }
+        driver.sendText(text)
     }
 
     // MARK: - Voice (port 6466 remote session)
+
+    /// Begin a voice utterance: sends RemoteVoiceBegin and returns the
+    /// session id to use for its payloads and end. Throws notConnected
+    /// when the remote session is not up.
+    func beginVoice() async throws -> Int {
+        guard let driver, driver.state == .connected else { throw AndroidTVError.notConnected }
+        voiceSessionId += 1
+        let id = voiceSessionId
+        driver.sendVoiceBegin(sessionId: id)
+        return id
+    }
+
+    /// Stream one chunk of 8 kHz mono Int16 PCM for the utterance
+    /// `sessionId`, split into ≤20 KB payload messages.
+    func sendVoiceSamples(_ samples: Data, sessionId: Int) async throws {
+        guard let driver, driver.state == .connected else { throw AndroidTVError.notConnected }
+        driver.sendVoiceSamples(samples, sessionId: sessionId)
+    }
+
+    /// End a voice utterance.
+    func endVoice(sessionId: Int) async throws {
+        guard let driver, driver.state == .connected else { throw AndroidTVError.notConnected }
+        driver.sendVoiceEnd(sessionId: sessionId)
+    }
+
+    /// The pairing secret: SHA-256 over the minimal big-endian bytes of
+    /// client modulus, client exponent, server modulus, server exponent,
+    /// then the last 4 hex chars of the code as bytes. The first byte of
+    /// the hash must equal the code's first byte (checked by the TV too).
+    /// Static (and nonisolated) so unit tests can verify it against a
+    /// known vector without a TV.
+    nonisolated static func pairingSecret(code: String, clientCertificateDER: Data,
+                                          serverCertificateDER: Data) -> Data? {
+        guard let clientCert = SecCertificateCreateWithData(nil, clientCertificateDER as CFData),
+              let serverCert = SecCertificateCreateWithData(nil, serverCertificateDER as CFData),
+              let digest = AndroidTVDriver.pairingSecret(code: code, clientCertificate: clientCert,
+                                                         serverCertificate: serverCert),
+              code.count == 6,
+              let firstByte = UInt8(code.prefix(2), radix: 16),
+              digest.first == firstByte else {
+            return nil
+        }
+        return digest
+    }
+
+    // MARK: - Driver state machine
+
+    /// Suspends until the driver reports .connected, or fails. The
+    /// `start` closure runs once the continuation exists, so a failure
+    /// that fires synchronously (e.g. no client identity) cannot be
+    /// lost. Resumed by driverStateChanged, abortConnect, or the
+    /// timeout — and by RemoteSession.disconnect() when the view goes
+    /// away (which calls disconnect() here).
+    private func waitForConnected(start: @escaping () -> Void) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            if Task.isCancelled {
+                continuation.resume(throwing: CancellationError())
+                return
+            }
+            self.connectContinuation = continuation
+            start()
+        }
+    }
+
+    private func driverStateChanged(_ state: AndroidTVDriver.ConnectionState,
+                                    codeProvider: @escaping @MainActor () async throws -> String) {
+        switch state {
+        case .connected:
+            disarmConnectTimeout()
+            connectContinuation?.resume()
+            connectContinuation = nil
+        case .failed(let reason):
+            disarmConnectTimeout()
+            if reason == AndroidTVError.certificateChanged.localizedDescription {
+                connectContinuation?.resume(throwing: AndroidTVError.certificateChanged)
+            } else {
+                connectContinuation?.resume(throwing: AndroidTVError.connectionFailed(detail: reason))
+            }
+            connectContinuation = nil
+        case .pairing(.enterCode):
+            // The TV is showing a code: the prompt is up, so the
+            // connect timeout no longer applies (the user is in control
+            // now). Ask for the code and submit what they type; a wrong
+            // code re-prompts through this same state.
+            disarmConnectTimeout()
+            Task { [weak self] in
+                guard let self, let driver = self.driver else { return }
+                do {
+                    let code = try await codeProvider()
+                    driver.submitPairingCode(code)
+                } catch {
+                    // The user cancelled the prompt (or the session went
+                    // away): stop pairing.
+                    self.disconnect()
+                }
+            }
+        case .unpaired:
+            // The TV no longer knows our certificate (reset, or pairing
+            // removed on the TV): pair from scratch — auto-pair-on-select.
+            // Only once per connect; a second .unpaired is a real failure.
+            if !pairingAttempted {
+                pairingAttempted = true
+                driver?.pair()
+            } else {
+                disarmConnectTimeout()
+                connectContinuation?.resume(throwing: AndroidTVError.connectionFailed(
+                    detail: "The TV isn't paired. Try connecting again."))
+                connectContinuation = nil
+            }
+        case .pairing(.verifying), .pairing(.acceptOnTV), .connecting, .idle:
+            break
+        }
+    }
+
+    private func armConnectTimeout() {
+        disarmConnectTimeout()
+        connectTimeoutTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 30_000_000_000)
+            guard let self else { return }
+            self.abortConnect(with: AndroidTVError.pairingTimeout)
+        }
+    }
+
+    private func disarmConnectTimeout() {
+        connectTimeoutTask?.cancel()
+        connectTimeoutTask = nil
+    }
+
+    /// Tear the connection down and fail any in-flight connect with
+    /// `error`. Idempotent: safe to call from disconnect, the timeout,
+    /// and task cancellation paths.
+    private func abortConnect(with error: Error) {
+        disarmConnectTimeout()
+        connectContinuation?.resume(throwing: error)
+        connectContinuation = nil
+        driver?.disconnect()
+        driver = nil
+        host = nil
+    }
+
+    /// Our Key (raw Android key codes) onto the driver's key enum.
+    private static func driverKey(for key: Key) -> AndroidTVKey {
+        if (7...16).contains(key.rawValue) { return .digit(key.rawValue - 7) }
+        switch key {
+        case .home: return .home
+        case .back: return .back
+        case .dpadUp: return .up
+        case .dpadDown: return .down
+        case .dpadLeft: return .left
+        case .dpadRight: return .right
+        case .dpadCenter: return .select
+        case .volumeUp: return .volumeUp
+        case .volumeDown: return .volumeDown
+        case .power: return .power
+        case .enter: return .enter
+        case .menu: return .menu
+        case .mediaPlayPause: return .playPause
+        case .mediaStop: return .stop
+        case .mediaRewind: return .rewind
+        case .mediaFastForward: return .fastForward
+        case .mediaPlay: return .play
+        case .mediaPause: return .pause
+        case .volumeMute: return .mute
+        case .info: return .info
+        case .channelUp: return .channelUp
+        case .channelDown: return .channelDown
+        case .backspace: return .backspace
+        case .search: return .search
+        case .input: return .input
+        case .digit0, .digit1, .digit2, .digit3, .digit4,
+             .digit5, .digit6, .digit7, .digit8, .digit9:
+            // Handled by the rawValue branch above.
+            return .digit(0)
+        }
+    }
+}
+
+// MARK: - Driver (ported from the fork's AndroidTVDriver)
+
+/// A brand-agnostic remote button. Each driver maps these onto whatever its TV speaks.
+/// (Ported from the fork's RemoteKey, plus .play / .pause / .stop —
+/// our RemoteCommand has distinct play/pause/stop keys and the old
+/// adapter sent codes 126 / 127 / 86 for them.)
+/// Pure value type — explicitly nonisolated.
+nonisolated enum AndroidTVKey: Hashable, Sendable {
+    case power
+    /// A full power-off, for TVs where the power key only toggles a standby or art mode.
+    case powerOff
+    case up, down, left, right, select
+    case back, home, menu, info, input, search
+    case volumeUp, volumeDown, mute
+    case channelUp, channelDown
+    case playPause, play, pause, stop, rewind, fastForward
+    case backspace, enter, exit
+    case digit(Int)
+}
+
+/// Android TV Remote Service protocol v2 — the same one Google's own TV remote uses.
+/// Works with every Google TV / Android TV (Sony, TCL, Hisense, Philips, Chromecast, Shield…).
+///
+/// Port 6467: one-time pairing. The TV shows a 6-hex-digit code; we prove we saw it by
+///            hashing it together with both certificates' RSA keys.
+/// Port 6466: the remote session itself, authenticated by our client certificate.
+///
+/// Ported from the fork's AndroidTVDriver, adapted: no TVDevice / delegate
+/// (host + paired flag + state closures instead), no app launching, no
+/// foreground-app tracking, plus the certificate-pin check and voice.
+/// (Ported from open-tv-remote, MIT License, Copyright (c) 2026 Nathan Butler.)
+@MainActor
+final class AndroidTVDriver {
+
+    /// Pure value types — explicitly nonisolated.
+    nonisolated enum PairingPrompt: Equatable, Sendable {
+        /// The TV is showing a code the user must type in.
+        case enterCode(length: Int, error: String?)
+        /// The TV is showing an Allow / Deny dialog.
+        case acceptOnTV
+        /// We've sent the code and are waiting for the TV to confirm it.
+        case verifying
+    }
+
+    nonisolated enum ConnectionState: Equatable, Sendable {
+        case idle
+        case connecting
+        /// We have no credentials yet. Pairing only starts when the user asks,
+        /// so nothing pops up on a TV someone else is watching.
+        case unpaired
+        case pairing(PairingPrompt)
+        case connected
+        case failed(String)
+
+        var isConnected: Bool { self == .connected }
+    }
+
+    /// Called on every state change (the adapter watches this).
+    var onStateChange: ((ConnectionState) -> Void)?
+    /// Called when the paired flag changes (the adapter persists it).
+    var onIsPairedChange: ((Bool) -> Void)?
+
+    private(set) var state: ConnectionState = .idle {
+        didSet { if state != oldValue { onStateChange?(state) } }
+    }
+    private(set) var isPaired: Bool {
+        didSet { if isPaired != oldValue { onIsPairedChange?(isPaired) } }
+    }
+
+    /// The pinned server-certificate DER, when one is stored for this
+    /// host (ours — the fork trusts any certificate). Checked after the
+    /// remote handshake, before any message is sent; a mismatch fails
+    /// with certificateChanged instead of silently re-trusting.
+    var expectedServerCertificateDER: Data?
+
+    /// DER of the certificate the remote channel's TV presented, if any.
+    /// The adapter pins it on first successful connect (trust on first use).
+    var remoteServerCertificateDER: Data? {
+        remote?.peerCertificate.map { SecCertificateCopyData($0) as Data }
+    }
+
+    private let host: String
+    private var remote: TLSChannel?
+    private var pairing: TLSChannel?
+    private var pendingKeys: [AndroidTVKey] = []
+    private var imeCounter = 0
+    private var imeFieldCounter = 0
+    /// Shown alongside the next code prompt (e.g. after a wrong code forces a fresh one).
+    private var nextPairingError: String?
+
+    /// PING | KEY | IME | POWER | VOLUME | APP_LINK
+    private static let requestedFeatures = 1 | 2 | 4 | 32 | 64 | 512
+    private var activeFeatures = requestedFeatures
+
+    init(host: String, isPaired: Bool) {
+        self.host = host
+        self.isPaired = isPaired
+    }
+
+    // MARK: Connection
+
+    func connect() {
+        guard isPaired else {
+            state = .unpaired
+            return
+        }
+        openRemote()
+    }
+
+    func disconnect() {
+        pendingKeys = []
+        remote?.onClose = nil
+        remote?.cancel()
+        remote = nil
+        pairing?.onClose = nil
+        pairing?.cancel()
+        pairing = nil
+        state = .idle
+    }
+
+    private func openRemote() {
+        guard remote == nil else { return }
+        let identity: ClientIdentity.Material
+        do { identity = try ClientIdentity.loadOrCreate() } catch {
+            state = .failed(error.localizedDescription)
+            return
+        }
+        state = .connecting
+        let channel = TLSChannel(host: host, port: 6466, identity: identity.identity)
+        channel.onReady = { [weak self] in
+            guard let self, let channel = self.remote else { return }
+            // Pin check (ours — see expectedServerCertificateDER): after
+            // the handshake, before any message is sent. A missing
+            // certificate fails closed when a pin is set.
+            if let expected = self.expectedServerCertificateDER {
+                let presented = channel.peerCertificate.map { SecCertificateCopyData($0) as Data }
+                guard let presented,
+                      Self.certificateMatchesPin(presentedDER: presented, expectedDER: expected) else {
+                    channel.onClose = nil
+                    channel.cancel()
+                    self.remote = nil
+                    self.state = .failed(AndroidTVRemote.AndroidTVError.certificateChanged.localizedDescription)
+                    return
+                }
+            }
+        }
+        channel.onMessage = { [weak self] in self?.handleRemote($0) }
+        channel.onClose = { [weak self] error, tlsRejected in
+            guard let self else { return }
+            let wasConnected = self.state == .connected
+            self.remote = nil
+            if tlsRejected && !wasConnected {
+                // The TV no longer knows our certificate (reset, or pairing removed on the TV).
+                self.isPaired = false
+                self.state = .unpaired
+            } else if wasConnected {
+                // TVs drop idle sessions. Go quiet; the next key press reconnects.
+                self.state = .idle
+            } else {
+                self.state = .failed(Self.describe(error))
+            }
+        }
+        remote = channel
+        channel.start()
+    }
+
+    private func handleRemote(_ msg: ProtoMessage) {
+        var reply = ProtoWriter()
+        if let configure = msg.message(1) {
+            let supported = configure.int(1) ?? Self.requestedFeatures
+            activeFeatures = Self.requestedFeatures & (supported == 0 ? Self.requestedFeatures : supported)
+            reply.message(1) { c in
+                c.int(1, activeFeatures)
+                c.message(2) { d in
+                    d.int(3, 1)
+                    d.string(4, "1")
+                    d.string(5, "atvremote")
+                    d.string(6, "1.0.0")
+                }
+            }
+        } else if msg.has(2) {
+            reply.message(2) { $0.int(1, activeFeatures) }
+            markConnected()
+        } else if let ping = msg.message(8) {
+            reply.message(9) { $0.int(1, ping.int(1) ?? 0) }
+        } else if msg.has(40) {
+            markConnected()
+            return
+        } else if msg.has(20) {
+            // RemoteImeKeyInject (foreground-app report): nothing to reply.
+            return
+        } else if let edit = msg.message(21) {
+            imeCounter = edit.int(1) ?? imeCounter
+            imeFieldCounter = edit.int(2) ?? imeFieldCounter
+            return
+        } else {
+            return
+        }
+        remote?.send(reply)
+    }
+
+    private func markConnected() {
+        guard state != .connected else { return }
+        state = .connected
+        let queued = pendingKeys
+        pendingKeys = []
+        queued.forEach(send)
+    }
+
+    // MARK: Pairing
+
+    func pair() {
+        disconnect()
+        state = .connecting
+        openPairingChannel()
+    }
+
+    /// Opens the pairing socket without touching `state`, so a retry can keep the code prompt on screen.
+    private func openPairingChannel() {
+        let identity: ClientIdentity.Material
+        do { identity = try ClientIdentity.loadOrCreate() } catch {
+            state = .failed(error.localizedDescription)
+            return
+        }
+        let channel = TLSChannel(host: host, port: 6467, identity: identity.identity)
+        channel.onReady = { [weak self] in
+            self?.sendPairing { m in
+                m.message(10) { r in
+                    r.string(1, "atvremote")
+                    r.string(2, Self.clientName(for: identity.certificate))
+                }
+            }
+        }
+        channel.onMessage = { [weak self] in self?.handlePairing($0) }
+        channel.onClose = { [weak self] error, _ in
+            guard let self, self.pairing != nil else { return }
+            self.pairing = nil
+            if !self.isPaired {
+                self.state = .failed("Pairing was interrupted. \(Self.describe(error))")
+            }
+        }
+        pairing = channel
+        channel.start()
+    }
+
+    private func sendPairing(_ build: (inout ProtoWriter) -> Void) {
+        var m = ProtoWriter()
+        m.uint(1, 2)   // protocol_version
+        m.uint(2, 200) // STATUS_OK
+        build(&m)
+        pairing?.send(m)
+    }
+
+    private func handlePairing(_ msg: ProtoMessage) {
+        let status = msg.uint(2) ?? 0
+        guard status == 200 else {
+            pairing?.onClose = nil
+            pairing?.cancel()
+            pairing = nil
+            if status == 402 {
+                // The TV discards a code after one failed attempt; ask for a fresh one,
+                // keeping the prompt up so the sheet doesn't close and reopen.
+                let message = "That code didn't work. Your TV is showing a new one."
+                nextPairingError = message
+                state = .pairing(.enterCode(length: 6, error: message))
+                openPairingChannel()
+                return
+            }
+            state = .failed("The TV declined pairing (status \(status)).")
+            return
+        }
+        // Hexadecimal code, 6 symbols, we are the input side.
+        let encoding: (inout ProtoWriter) -> Void = { e in
+            e.uint(1, 3)
+            e.uint(2, 6)
+        }
+        if msg.has(11) {
+            sendPairing { m in
+                m.message(20) { o in
+                    o.message(1, encoding)
+                    o.uint(3, 1)
+                }
+            }
+        } else if msg.has(20) {
+            sendPairing { m in
+                m.message(30) { c in
+                    c.message(1, encoding)
+                    c.uint(2, 1)
+                }
+            }
+        } else if msg.has(31) {
+            state = .pairing(.enterCode(length: 6, error: nextPairingError))
+            nextPairingError = nil
+        } else if msg.has(41) {
+            isPaired = true
+            let channel = pairing
+            pairing = nil
+            channel?.cancel()
+            openRemote()
+        }
+    }
+
+    func submitPairingCode(_ raw: String) {
+        let code = raw.uppercased().filter { !$0.isWhitespace }
+        guard code.count == 6, code.allSatisfy(\.isHexDigit) else {
+            state = .pairing(.enterCode(length: 6, error: "Codes are 6 characters: 0–9 and A–F."))
+            return
+        }
+        guard let serverCert = pairing?.peerCertificate,
+              let identity = try? ClientIdentity.loadOrCreate(),
+              let secret = Self.pairingSecret(code: code, clientCertificate: identity.certificate,
+                                              serverCertificate: serverCert) else {
+            state = .failed("Lost the pairing connection. Start pairing again.")
+            return
+        }
+        let codeBytes = stride(from: 0, to: 6, by: 2).map { i -> UInt8 in
+            let start = code.index(code.startIndex, offsetBy: i)
+            return UInt8(code[start..<code.index(start, offsetBy: 2)], radix: 16)!
+        }
+        // The first byte of the code is a checksum: catches typos without a round trip.
+        guard secret[0] == codeBytes[0] else {
+            state = .pairing(.enterCode(length: 6, error: "That code doesn't match. Check the TV and try again."))
+            return
+        }
+        state = .pairing(.verifying)
+        sendPairing { m in m.message(40) { $0.data(1, secret) } }
+    }
+
+    /// The pairing secret: SHA-256 over the minimal big-endian bytes of
+    /// client modulus, client exponent, server modulus, server exponent,
+    /// then the code's last 4 hex chars (bytes 2–3) as bytes. Returns nil
+    /// when the code isn't 6 hex chars or the certificates' RSA keys
+    /// can't be read. The first-byte checksum is NOT checked here — the
+    /// caller checks it (submitPairingCode re-prompts on a mismatch;
+    /// the adapter's DER-based wrapper returns nil on a mismatch).
+    nonisolated static func pairingSecret(code: String, clientCertificate: SecCertificate,
+                                          serverCertificate: SecCertificate) -> Data? {
+        guard code.count == 6, code.allSatisfy(\.isHexDigit),
+              let client = ClientIdentity.rsaComponents(of: clientCertificate),
+              let server = ClientIdentity.rsaComponents(of: serverCertificate) else { return nil }
+        let codeBytes = stride(from: 0, to: 6, by: 2).map { i -> UInt8 in
+            let start = code.index(code.startIndex, offsetBy: i)
+            return UInt8(code[start..<code.index(start, offsetBy: 2)], radix: 16)!
+        }
+        var hash = SHA256()
+        hash.update(data: client.modulus)
+        hash.update(data: client.exponent)
+        hash.update(data: server.modulus)
+        hash.update(data: server.exponent)
+        hash.update(data: Array(codeBytes.dropFirst()))
+        return Data(hash.finalize())
+    }
+
+    // MARK: Commands
+
+    func send(_ key: AndroidTVKey) {
+        guard let code = Self.keyCode(key) else { return }
+        guard state == .connected, let remote else {
+            if isPaired {
+                if pendingKeys.count < 10 { pendingKeys.append(key) }
+                openRemote()
+            }
+            return
+        }
+        var m = ProtoWriter()
+        m.message(10) { k in
+            k.uint(1, UInt64(code))
+            k.uint(2, 3) // SHORT press
+        }
+        remote.send(m)
+    }
+
+    func sendText(_ text: String) {
+        guard !text.isEmpty, state == .connected else { return }
+        let cursor = text.count - 1
+        var m = ProtoWriter()
+        m.message(21) { b in
+            b.int(1, imeCounter)
+            b.int(2, imeFieldCounter)
+            b.message(3) { e in
+                e.int(1, 1)
+                e.message(2) { o in
+                    o.int(1, cursor)
+                    o.int(2, cursor)
+                    o.string(3, text)
+                }
+            }
+        }
+        remote?.send(m)
+    }
+
+    // MARK: - Voice (port 6466 remote session; ours — the fork has no voice)
 
     /// Voice messages (remotemessage.proto, verified against
     /// tronikos/androidtvremote2 main 387de891):
@@ -334,31 +806,38 @@ actor AndroidTVRemote {
     /// RemoteVoiceEnd = field 32 { session_id field 1 }.
     /// One session id per utterance (incrementing), consistent across
     /// begin/payload/end. Sent on the same TLS remote session as key
-    /// events — so on a TV whose handshake fails (-9808) voice cannot
-    /// start either. No feature bit is requested for voice: the
-    /// reference sends these messages on the established session.
+    /// events. No feature bit is requested for voice: the reference
+    /// sends these messages on the established session.
     static let maxVoicePayloadBytes = 20 * 1024
 
     /// RemoteVoiceBegin for `sessionId` (no package_name — not required
-    /// when sending audio).
-    static func voiceBeginMessage(sessionId: Int) -> Data {
-        Protobuf.messageField(30, Protobuf.varintField(1, UInt64(sessionId)))
+    /// when sending audio). Unframed bytes; the channel frames on send.
+    nonisolated static func voiceBeginMessage(sessionId: Int) -> Data {
+        var m = ProtoWriter()
+        m.message(30) { $0.uint(1, UInt64(sessionId)) }
+        return Data(m.bytes)
     }
 
-    /// RemoteVoicePayload carrying `samples` for `sessionId`.
-    static func voicePayloadMessage(sessionId: Int, samples: Data) -> Data {
-        Protobuf.messageField(31, Protobuf.varintField(1, UInt64(sessionId))
-            + Protobuf.bytesField(2, samples))
+    /// RemoteVoicePayload carrying `samples` for `sessionId`. Unframed.
+    nonisolated static func voicePayloadMessage(sessionId: Int, samples: Data) -> Data {
+        var m = ProtoWriter()
+        m.message(31) { b in
+            b.uint(1, UInt64(sessionId))
+            b.data(2, Array(samples))
+        }
+        return Data(m.bytes)
     }
 
-    /// RemoteVoiceEnd for `sessionId`.
-    static func voiceEndMessage(sessionId: Int) -> Data {
-        Protobuf.messageField(32, Protobuf.varintField(1, UInt64(sessionId)))
+    /// RemoteVoiceEnd for `sessionId`. Unframed.
+    nonisolated static func voiceEndMessage(sessionId: Int) -> Data {
+        var m = ProtoWriter()
+        m.message(32) { $0.uint(1, UInt64(sessionId)) }
+        return Data(m.bytes)
     }
 
     /// Split PCM samples into ≤20 KB payloads (the reference's message
     /// size). Empty input yields no chunks.
-    static func voicePayloadChunks(samples: Data) -> [Data] {
+    nonisolated static func voicePayloadChunks(samples: Data) -> [Data] {
         guard !samples.isEmpty else { return [] }
         var chunks: [Data] = []
         var offset = 0
@@ -370,853 +849,95 @@ actor AndroidTVRemote {
         return chunks
     }
 
-    private var voiceSessionId = 0
-
-    /// Begin a voice utterance: sends RemoteVoiceBegin and returns the
-    /// session id to use for its payloads and end. Throws notConnected
-    /// when the remote session is not up.
-    func beginVoice() async throws -> Int {
-        guard remoteConnection != nil else { throw AndroidTVError.notConnected }
-        voiceSessionId += 1
-        let id = voiceSessionId
-        sendRemoteMessage(Self.voiceBeginMessage(sessionId: id))
-        return id
+    func sendVoiceBegin(sessionId: Int) {
+        guard state == .connected, let remote else { return }
+        var m = ProtoWriter()
+        m.message(30) { $0.uint(1, UInt64(sessionId)) }
+        remote.send(m)
     }
 
-    /// Stream one chunk of 8 kHz mono Int16 PCM for the utterance
-    /// `sessionId`, split into ≤20 KB payload messages.
-    func sendVoiceSamples(_ samples: Data, sessionId: Int) async throws {
-        guard remoteConnection != nil else { throw AndroidTVError.notConnected }
+    func sendVoiceSamples(_ samples: Data, sessionId: Int) {
+        guard state == .connected, let remote else { return }
         for chunk in Self.voicePayloadChunks(samples: samples) {
-            sendRemoteMessage(Self.voicePayloadMessage(sessionId: sessionId, samples: chunk))
-        }
-    }
-
-    /// End a voice utterance.
-    func endVoice(sessionId: Int) async throws {
-        guard remoteConnection != nil else { throw AndroidTVError.notConnected }
-        sendRemoteMessage(Self.voiceEndMessage(sessionId: sessionId))
-    }
-
-    // MARK: - Remote session (port 6466)
-
-    private func openRemoteSession(host: String, timeout: TimeInterval) async throws {
-        let identity: AndroidTVIdentity.Loaded
-        do {
-            identity = try AndroidTVIdentity.loadOrCreate()
-        } catch {
-            throw AndroidTVError.identityUnavailable(detail: error.localizedDescription)
-        }
-        guard let connection = TLSConnection(host: host, port: 6466, identity: identity.identity,
-                                             expectedServerCertificateDER: AndroidTVPinStore.pinnedCertificateDER(for: host)) else {
-            throw AndroidTVError.identityUnavailable(detail: "sec_identity_create returned nil")
-        }
-        remoteConnection = connection
-        remoteHost = host
-        remoteServerCertificateDER = nil
-        connection.onServerCertificate = { [weak self] der in
-            Task { await self?.setRemoteServerCertificate(der) }
-        }
-        connection.onMessage = { [weak self] data in
-            Task { await self?.handleRemoteMessage(data) }
-        }
-        connection.onFailure = { [weak self] error in
-            Task { await self?.remoteFailed(error) }
-        }
-        connection.start()
-        do {
-            try await withThrowingTaskGroup(of: Void.self) { group in
-                group.addTask { try await self.waitForReady() }
-                group.addTask {
-                    try await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
-                    throw AndroidTVError.remoteSessionTimeout
-                }
-                try await group.next()
-                group.cancelAll()
+            var m = ProtoWriter()
+            m.message(31) { b in
+                b.uint(1, UInt64(sessionId))
+                b.data(2, Array(chunk))
             }
-            // Trust on first use: if no pin is stored for this TV yet,
-            // pin the certificate this session just verified. This
-            // covers the probe first-connection and TVs paired before
-            // pinning existed. A stored pin is never overwritten here —
-            // the session only succeeded because the presented
-            // certificate matched it.
-            if AndroidTVPinStore.pinnedCertificateDER(for: host) == nil,
-               let der = remoteServerCertificateDER {
-                AndroidTVPinStore.set(der, for: host)
-            }
-            // The TV silently drops keys sent immediately after
-            // remote_start; give it a beat before reporting ready.
-            try await Task.sleep(nanoseconds: 400_000_000)
-        } catch {
-            disconnect()
-            throw error
+            remote.send(m)
         }
     }
 
-    private func waitForReady() async throws {
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                readyContinuation = continuation
-            }
-        } onCancel: {
-            Task { [weak self] in await self?.cancelPendingWait() }
-        }
+    func sendVoiceEnd(sessionId: Int) {
+        guard state == .connected, let remote else { return }
+        var m = ProtoWriter()
+        m.message(32) { $0.uint(1, UInt64(sessionId)) }
+        remote.send(m)
     }
 
-    /// Resume whichever wait continuation is pending (only one ever is).
-    /// `withCheckedThrowingContinuation` does not resume on cancellation,
-    /// so without this a task-group timeout cancelling the wait would
-    /// leave it suspended forever and the group would never return.
-    private func cancelPendingWait() {
-        readyContinuation?.resume(throwing: CancellationError())
-        readyContinuation = nil
-        tlsReadyContinuation?.resume(throwing: CancellationError())
-        tlsReadyContinuation = nil
-        pairingCodeContinuation?.resume(throwing: CancellationError())
-        pairingCodeContinuation = nil
-        secretContinuation?.resume(throwing: CancellationError())
-        secretContinuation = nil
-    }
+    // MARK: Helpers
 
-    /// The error is passed in by the onFailure handler instead of being
-    /// re-read from the connection: the handler's error is the one that
-    /// killed the connection, and re-reading `lastFailure` loses it when
-    /// the receive error beats the state update (the v1.0.4 race).
-    private func remoteFailed(_ error: Error) {
-        // A pin mismatch is a distinct, user-actionable failure: the
-        // TV's certificate changed since pairing (e.g. the TV was
-        // reset). Surface it as such — never silently fall back to
-        // re-pairing.
-        if remoteConnection?.pinMismatch == true {
-            readyContinuation?.resume(throwing: AndroidTVError.certificateChanged)
-            readyContinuation = nil
-            remoteConnection = nil
-            remoteHost = nil
-            return
-        }
-        let detail = failureDetail(from: remoteConnection, error: error)
-        readyContinuation?.resume(throwing: AndroidTVError.remoteSessionFailed(detail: detail))
-        readyContinuation = nil
-        remoteConnection = nil
-        remoteHost = nil
-    }
-
-    private func setRemoteServerCertificate(_ der: Data) {
-        remoteServerCertificateDER = der
-    }
-
-    /// One-line diagnosis for a dead TLS connection: the underlying
-    /// NWError, plus whether the TV even presented its certificate.
-    /// Server-cert-seen + handshake failure points at our client
-    /// certificate being rejected; no cert seen means the handshake died
-    /// before the TV's certificate arrived (TCP/TLS-level failure).
-    /// The error passed in by the onFailure handler wins; `lastFailure`
-    /// is only a fallback for paths that have no error to pass.
-    private func failureDetail(from connection: TLSConnection?, error: Error?) -> String {
-        var parts: [String] = []
-        if let error = error ?? connection?.lastFailure {
-            parts.append(Self.describeError(error))
-        }
-        if let connection {
-            parts.append(connection.serverCertificateSeen
-                ? "TV presented its certificate"
-                : "no certificate received from the TV")
-        }
-        return parts.isEmpty ? "connection closed" : parts.joined(separator: "; ")
-    }
-
-    /// Readable text for an NWError: POSIX/DNS/TLS codes with their
-    /// plain-language meaning, instead of the generic NSError string.
-    private static func describeError(_ error: Error) -> String {
-        guard let nw = error as? NWError else { return error.localizedDescription }
-        switch nw {
-        case .posix(let code):
-            return "POSIX \(code.rawValue) (\(POSIXError(code).localizedDescription))"
-        case .dns(let code):
-            return "DNS error \(code)"
-        case .tls(let status):
-            // The OSStatus number identifies the failure (e.g. -9806 is
-            // a handshake aborted by the peer); kept as a number on
-            // purpose — SecCopyErrorMessageString is not used, to keep
-            // the API surface minimal.
-            return "TLS error \(status)"
-        @unknown default:
-            return String(describing: nw)
-        }
-    }
-
-    // MARK: - Diagnostics
-
-    /// Plain-TCP reachability via Network.framework, diagnostic only.
-    /// Opens a non-TLS NWConnection to the pairing port and reports the
-    /// outcome as a one-line note. Runs on its own serial queue so it
-    /// never blocks the actor; the continuation is resumed exactly once.
-    private static func plainTCPCheck(host: String, port: UInt16,
-                                      timeout: TimeInterval = 3) async -> String {
-        await withCheckedContinuation { (continuation: CheckedContinuation<String, Never>) in
-            let connection = NWConnection(host: NWEndpoint.Host(host),
-                                          port: NWEndpoint.Port(rawValue: port)!,
-                                          using: .tcp)
-            let queue = DispatchQueue(label: "com.nicolassolley.universaltvremote.tcpcheck")
-            var finished = false
-            let finish: (String) -> Void = { note in
-                guard !finished else { return }
-                finished = true
-                connection.cancel()
-                continuation.resume(returning: note)
-            }
-            connection.stateUpdateHandler = { state in
-                switch state {
-                case .ready:
-                    finish("NW TCP to \(port): connected")
-                case .failed(let error):
-                    finish("NW TCP to \(port) failed: \(describeError(error))")
-                case .cancelled:
-                    finish("NW TCP to \(port): cancelled")
-                default:
-                    break
-                }
-            }
-            connection.start(queue: queue)
-            queue.asyncAfter(deadline: .now() + timeout) {
-                finish("NW TCP to \(port): no answer in \(Int(timeout))s")
-            }
-        }
-    }
-
-    /// TLS handshake to the pairing port WITHOUT a client identity,
-    /// diagnostic only. Same TLS options and verify block as the real
-    /// path, but no local identity is set, so SecureTransport has
-    /// nothing of ours to reject. Reports whether the TV presents its
-    /// certificate when we offer no identity at all — the decisive
-    /// discriminator for errSSLBadCert (-9808): cert arrives here while
-    /// mutual TLS dies => our client identity is the problem; identical
-    /// failure here => the TV's certificate or the ClientHello itself.
-    /// No pairing bytes are sent and the connection is torn down after
-    /// the handshake outcome (or a timeout). Runs on its own serial
-    /// queue; the continuation is resumed exactly once.
-    private static func noIdentityTLSProbe(host: String, port: UInt16,
-                                           timeout: TimeInterval = 5) async -> String {
-        await withCheckedContinuation { (continuation: CheckedContinuation<String, Never>) in
-            let connection = TLSConnection(host: host, port: port)
-            let queue = DispatchQueue(label: "com.nicolassolley.universaltvremote.noidprobe")
-            var finished = false
-            let finish: (String) -> Void = { note in
-                guard !finished else { return }
-                finished = true
-                connection.stop()
-                continuation.resume(returning: note)
-            }
-            // The verify block fires during the handshake, before .ready:
-            // if it fires, the TV presented its certificate.
-            connection.onServerCertificate = { _ in
-                finish("TLS without client cert: TV presented its certificate")
-            }
-            connection.onReady = {
-                finish("TLS without client cert: handshake completed, no certificate seen")
-            }
-            connection.onFailure = { error in
-                finish("TLS without client cert: still failed before certificate (\(describeError(error)))")
-            }
-            connection.start()
-            queue.asyncAfter(deadline: .now() + timeout) {
-                finish("TLS without client cert: no answer in \(Int(timeout))s")
-            }
-        }
-    }
-
-    private func handleRemoteMessage(_ data: Data) {
-        var reader = Protobuf.Reader(data: data)
-        while let (field, wireType) = reader.readTag() {
-            switch (field, wireType) {
-            case (1, 2): // remote_configure
-                guard let payload = reader.readBytes() else { return }
-                replyToConfigure(payload)
-            case (2, 2): // remote_set_active
-                sendRemoteMessage(Protobuf.messageField(2, Protobuf.varintField(1, UInt64(activeFeatures))))
-                // The reference marks the session connected on set_active
-                // as well as remote_start; some TVs send only one of
-                // them. The second resume is a no-op (continuation nilled).
-                readyContinuation?.resume()
-                readyContinuation = nil
-            case (8, 2): // remote_ping_request
-                guard let payload = reader.readBytes() else { return }
-                replyToPing(payload)
-            case (40, 2): // remote_start
-                readyContinuation?.resume()
-                readyContinuation = nil
-            default:
-                _ = reader.skipField(wireType: wireType)
-            }
-        }
-    }
-
-    private func replyToConfigure(_ payload: Data) {
-        var reader = Protobuf.Reader(data: payload)
-        var deviceFeatures = 0
-        while let (field, wireType) = reader.readTag() {
-            if field == 1, wireType == 0, let value = reader.readVarint() {
-                deviceFeatures = Int(value)
-            } else {
-                _ = reader.skipField(wireType: wireType)
-            }
-        }
-        activeFeatures = Self.requestedFeatures & deviceFeatures
-        // Reply with our features + device info.
-        let deviceInfo = Protobuf.varintField(3, 1) // unknown1 = 1
-            + Protobuf.stringField(4, "1") // unknown2 = "1"
-            + Protobuf.stringField(5, "atvremote") // package_name
-            + Protobuf.stringField(6, "1.0.0") // app_version
-        let configure = Protobuf.varintField(1, UInt64(activeFeatures))
-            + Protobuf.messageField(2, deviceInfo)
-        sendRemoteMessage(Protobuf.messageField(1, configure))
-    }
-
-    private func replyToPing(_ payload: Data) {
-        var reader = Protobuf.Reader(data: payload)
-        var val1: UInt64 = 0
-        while let (field, wireType) = reader.readTag() {
-            if field == 1, wireType == 0, let value = reader.readVarint() {
-                val1 = value
-            } else {
-                _ = reader.skipField(wireType: wireType)
-            }
-        }
-        let response = Protobuf.varintField(1, val1)
-        sendRemoteMessage(Protobuf.messageField(9, response))
-    }
-
-    private func sendRemoteMessage(_ message: Data) {
-        remoteConnection?.send(Protobuf.varint(UInt64(message.count)) + message)
-    }
-
-    // MARK: - Pairing (port 6467)
-
-    private func pair(host: String,
-                      codeProvider: @escaping @MainActor () async throws -> String) async throws {
-        let identity: AndroidTVIdentity.Loaded
-        do {
-            identity = try AndroidTVIdentity.loadOrCreate()
-        } catch {
-            throw AndroidTVError.identityUnavailable(detail: error.localizedDescription)
-        }
-        guard let connection = TLSConnection(host: host, port: 6467, identity: identity.identity) else {
-            throw AndroidTVError.identityUnavailable(detail: "sec_identity_create returned nil")
-        }
-        pairingConnection = connection
-        pairingServerCertificateDER = nil
-        tlsReady = false
-        connection.onServerCertificate = { [weak self] der in
-            Task { await self?.setPairingServerCertificate(der) }
-        }
-        connection.onMessage = { [weak self] data in
-            Task { await self?.handlePairingMessage(data) }
-        }
-        connection.onFailure = { [weak self] error in
-            Task { await self?.pairingFailed(error) }
-        }
-        connection.onReady = { [weak self] in
-            Task { await self?.tlsReadyFired() }
-        }
-        connection.start()
-
-        // Wait for the TLS handshake to finish before sending anything:
-        // the reference sends the pairing request only after the
-        // handshake completes, and app data sent pre-handshake may never
-        // reach the TV.
-        do {
-            try await withThrowingTaskGroup(of: Void.self) { group in
-                group.addTask { try await self.waitForTLSReady() }
-                group.addTask {
-                    try await Task.sleep(nanoseconds: 10_000_000_000)
-                    throw AndroidTVError.pairingTLSFailed(detail: "secure handshake didn't finish in 10s")
-                }
-                try await group.next()
-                group.cancelAll()
-            }
-        } catch {
-            disconnect()
-            throw error
-        }
-
-        // 1. Pairing request.
-        let request = Protobuf.stringField(1, "atvremote") // service_name
-            + Protobuf.stringField(2, Self.clientName(for: identity.certificateDER)) // client_name
-        try await sendPairingMessage(outerMessage(Protobuf.messageField(10, request)))
-
-        // 2. Wait until the TV shows the code (configuration_ack received).
-        do {
-            try await withThrowingTaskGroup(of: Void.self) { group in
-                group.addTask { try await self.waitForPairingCode() }
-                group.addTask {
-                    try await Task.sleep(nanoseconds: 60_000_000_000)
-                    throw AndroidTVError.pairingTimeout
-                }
-                try await group.next()
-                group.cancelAll()
-            }
-        } catch {
-            disconnect()
-            throw error
-        }
-
-        // 3. Ask the user for the code, then prove it with the secret hash.
-        // No timeout: the user exits via Cancel, and disconnect() cancels
-        // the wait. (A timeout that cancelled the provider task would
-        // leave its continuation suspended forever.)
-        let code: String
-        do {
-            code = try await codeProvider()
-        } catch {
-            disconnect()
-            throw error
-        }
-        let cleanCode = code.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard cleanCode.count == 6, Int(cleanCode, radix: 16) != nil else {
-            disconnect()
-            throw AndroidTVError.invalidCode
-        }
-        guard let secret = computeSecret(code: cleanCode, clientCertificateDER: identity.certificateDER) else {
-            disconnect()
-            throw AndroidTVError.pairingDenied
-        }
-        let secretMessage = Protobuf.bytesField(1, secret)
-        try await sendPairingMessage(outerMessage(Protobuf.messageField(40, secretMessage)))
-
-        // 4. Wait for secret_ack.
-        do {
-            try await withThrowingTaskGroup(of: Void.self) { group in
-                group.addTask { try await self.waitForSecretAck() }
-                group.addTask {
-                    try await Task.sleep(nanoseconds: 30_000_000_000)
-                    throw AndroidTVError.secretRejected
-                }
-                try await group.next()
-                group.cancelAll()
-            }
-        } catch {
-            disconnect()
-            throw error
-        }
-
-        // Pairing succeeded: trust on first use — persist the TV's
-        // certificate as the pin for this host, so later connections
-        // enforce it. A re-pair (e.g. after the TV was reset) replaces
-        // a stale pin with the TV's new certificate.
-        if let der = pairingServerCertificateDER {
-            AndroidTVPinStore.set(der, for: host)
-        }
-
-        pairingConnection?.stop()
-        pairingConnection = nil
-    }
-
-    private func setPairingServerCertificate(_ der: Data) {
-        pairingServerCertificateDER = der
-    }
-
-    private func tlsReadyFired() {
-        tlsReady = true
-        tlsReadyContinuation?.resume()
-        tlsReadyContinuation = nil
-    }
-
-    private func waitForTLSReady() async throws {
-        if tlsReady { return }
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                tlsReadyContinuation = continuation
-            }
-        } onCancel: {
-            Task { [weak self] in await self?.cancelPendingWait() }
-        }
-    }
-
-    private func waitForPairingCode() async throws {
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                pairingCodeContinuation = continuation
-            }
-        } onCancel: {
-            Task { [weak self] in await self?.cancelPendingWait() }
-        }
-    }
-
-    private func waitForSecretAck() async throws {
-        try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-                secretContinuation = continuation
-            }
-        } onCancel: {
-            Task { [weak self] in await self?.cancelPendingWait() }
-        }
-    }
-
-    private func pairingFailed(_ error: Error) {
-        let detail = failureDetail(from: pairingConnection, error: error)
-        let error = AndroidTVError.pairingTLSFailed(detail: detail)
-        tlsReadyContinuation?.resume(throwing: error)
-        tlsReadyContinuation = nil
-        pairingCodeContinuation?.resume(throwing: error)
-        pairingCodeContinuation = nil
-        secretContinuation?.resume(throwing: error)
-        secretContinuation = nil
-        // Tear down the dead pairing connection so a later send fails fast
-        // (notConnected) instead of waiting out the secret_ack timeout.
-        pairingConnection?.stop()
-        pairingConnection = nil
-    }
-
-    private func sendPairingMessage(_ message: Data) async throws {
-        guard let connection = pairingConnection else { throw AndroidTVError.notConnected }
-        connection.send(Protobuf.varint(UInt64(message.count)) + message)
-    }
-
-    private func outerMessage(_ inner: Data) -> Data {
-        // protocol_version = 2, status = STATUS_OK (200).
-        Protobuf.varintField(1, 2) + Protobuf.varintField(2, 200) + inner
-    }
-
-    private func handlePairingMessage(_ data: Data) {
-        var reader = Protobuf.Reader(data: data)
-        var status = 200
-        var presentField: Int?
-        while let (field, wireType) = reader.readTag() {
-            if field == 2, wireType == 0, let value = reader.readVarint() {
-                status = Int(value)
-            } else if wireType == 2, let payload = reader.readBytes() {
-                // Remember which top-level field arrived; payload parsed by caller.
-                if [11, 20, 31, 41].contains(field) {
-                    presentField = field
-                }
-                _ = payload
-            } else {
-                _ = reader.skipField(wireType: wireType)
-            }
-        }
-        guard status == 200 else {
-            // Non-OK status: which step it kills depends on what we were
-            // waiting for. Only one continuation is ever pending, so only
-            // one of these resumes.
-            pairingCodeContinuation?.resume(throwing: AndroidTVError.pairingDenied)
-            pairingCodeContinuation = nil
-            secretContinuation?.resume(throwing: AndroidTVError.secretRejected)
-            secretContinuation = nil
-            return
-        }
-        switch presentField {
-        case 11: // pairing_request_ack → send options
-            let encoding = Protobuf.varintField(1, 3) // HEXADECIMAL
-                + Protobuf.varintField(2, 6) // symbol_length
-            let options = Protobuf.messageField(1, encoding)
-                + Protobuf.varintField(3, 1) // preferred_role INPUT
-            Task { try? await self.sendPairingMessage(self.outerMessage(Protobuf.messageField(20, options))) }
-        case 20: // options → send configuration
-            let encoding = Protobuf.varintField(1, 3) + Protobuf.varintField(2, 6)
-            let configuration = Protobuf.messageField(1, encoding)
-                + Protobuf.varintField(2, 1) // client_role INPUT
-            Task { try? await self.sendPairingMessage(self.outerMessage(Protobuf.messageField(30, configuration))) }
-        case 31: // configuration_ack → TV is showing the code
-            pairingCodeContinuation?.resume()
-            pairingCodeContinuation = nil
-        case 41: // secret_ack → paired
-            secretContinuation?.resume()
-            secretContinuation = nil
-        default:
-            break
-        }
-    }
-
-    /// The pairing secret: SHA-256 over the minimal big-endian bytes of
-    /// client modulus, client exponent, server modulus, server exponent,
-    /// then the last 4 hex chars of the code as bytes. The first byte of
-    /// the hash must equal the code's first byte (checked by the TV too).
-    /// Static (and nonisolated) so unit tests can verify it against a
-    /// known vector without a TV.
-    static func pairingSecret(code: String, clientCertificateDER: Data,
-                              serverCertificateDER: Data) -> Data? {
-        guard let clientKeys = X509.rsaModulusExponent(certificateDER: clientCertificateDER),
-              let serverKeys = X509.rsaModulusExponent(certificateDER: serverCertificateDER),
-              let codeSuffix = Data(hexString: String(code.dropFirst(2))) else {
-            return nil
-        }
-        var hasher = SHA256()
-        hasher.update(data: clientKeys.modulus)
-        hasher.update(data: clientKeys.exponent)
-        hasher.update(data: serverKeys.modulus)
-        hasher.update(data: serverKeys.exponent)
-        hasher.update(data: codeSuffix)
-        let digest = Data(hasher.finalize())
-        guard digest.first == UInt8(code.prefix(2), radix: 16) else { return nil }
-        return digest
-    }
-
-    private func computeSecret(code: String, clientCertificateDER: Data) -> Data? {
-        guard let serverDER = pairingServerCertificateDER else { return nil }
-        return Self.pairingSecret(code: code, clientCertificateDER: clientCertificateDER,
-                                  serverCertificateDER: serverDER)
-    }
-}
-
-// MARK: - TLS connection helper
-
-/// Mutable state shared with the TLS verify block. The block must be
-/// installed on the TLS options in `init`, before the NWConnection is
-/// created: Network.framework snapshots the options at connection
-/// creation, so a block set later (in `start()`, as v1.0.7–v1.0.12
-/// did) silently never fires and default trust evaluation rejects the
-/// TV's self-signed certificate with -9808 before the certificate
-/// ever reaches us. The block cannot capture `self` in `init` (the
-/// connection is not assigned yet), so it captures this box instead —
-/// the reference app's CertificateBox pattern.
-private final class TLSVerifyState: @unchecked Sendable {
-    let expectedServerCertificateDER: Data?
-    var serverCertificateSeen = false
-    var pinMismatch = false
-    var onServerCertificate: ((Data) -> Void)?
-
-    init(expectedServerCertificateDER: Data?) {
-        self.expectedServerCertificateDER = expectedServerCertificateDER
-    }
-}
-
-/// A mutual-TLS connection that delivers complete varint-framed protobuf
-/// messages via `onMessage`. Accepts any server certificate on first
-/// trust (TVs use self-signed ones) and reports the presented
-/// certificate DER so pairing can hash it — but once a pin is set for
-/// the host (`expectedServerCertificateDER`), only that exact
-/// certificate is accepted. A mismatch fails the handshake and is
-/// flagged via `pinMismatch` so the caller can surface it distinctly
-/// instead of as a generic TLS failure.
-final class TLSConnection {
-    var onMessage: ((Data) -> Void)?
-    var onReady: (() -> Void)?
-    var onFailure: ((Error) -> Void)?
-    /// Backed by the verify state (set by the actor after init; read
-    /// by the verify block during the handshake).
-    var onServerCertificate: ((Data) -> Void)? {
-        get { verifyState.onServerCertificate }
-        set { verifyState.onServerCertificate = newValue }
-    }
-
-    private let connection: NWConnection
-    /// State shared with the verify block; the block writes the
-    /// presented certificate, the pin verdict, and the seen flag here.
-    private let verifyState: TLSVerifyState
-    private var buffer = Data()
-    private var stopped = false
-    /// True once the TV presented its certificate during the handshake.
-    var serverCertificateSeen: Bool { verifyState.serverCertificateSeen }
-    /// The error the connection failed with, if any.
-    var lastFailure: Error?
-    /// The pinned server-certificate DER for this host, if one is
-    /// stored. Nil means trust on first use (pairing / first connect).
-    var expectedServerCertificateDER: Data? { verifyState.expectedServerCertificateDER }
-    /// True when the handshake failed because the TV presented a
-    /// certificate different from the pin (or none at all while a pin
-    /// is set). Read by the actor to surface a distinct error.
-    var pinMismatch: Bool { verifyState.pinMismatch }
-
-    /// Whether the presented server certificate satisfies the pin: any
-    /// certificate is accepted when no pin is set (trust on first use);
-    /// with a pin set, only the exact pinned DER is accepted.
-    static func certificateMatchesPin(presentedDER: Data, expectedDER: Data?) -> Bool {
+    /// The pin predicate: with no pin stored, any certificate is accepted
+    /// (trust on first use); with a pin, only the exact pinned DER.
+    /// openRemote applies it after the handshake; tested directly.
+    nonisolated static func certificateMatchesPin(presentedDER: Data, expectedDER: Data?) -> Bool {
         guard let expectedDER else { return true }
         return presentedDER == expectedDER
     }
 
-    /// TLS options shared by both paths: bare defaults, exactly like
-    /// the working reference app — no min/max TLS version is set, so
-    /// the handshake negotiates the highest version the TV offers
-    /// (TLS 1.3 included). v1.0.5 pinned min+max to TLS 1.2 and v1.0.9
-    /// set min TLS 1.2; both failed identically on the QM7 (-9808),
-    /// while the reference app pairs it with bare defaults, so the
-    /// explicit version setting was itself a difference to remove.
-    /// The client identity, verify block, and trust-on-first-use
-    /// pinning are unchanged; nothing here disables TLS security.
-    private static func baseTLSOptions() -> NWProtocolTLS.Options {
-        NWProtocolTLS.Options()
+    /// Shown on the TV while pairing. Tagged with the certificate's fingerprint so people can tell
+    /// their devices apart. (What keeps pairings separate is the certificate; see ClientIdentity.)
+    static func clientName(for certificate: SecCertificate) -> String {
+        #if os(macOS)
+        let kind = "Mac"
+        #else
+        let kind = UIDevice.current.userInterfaceIdiom == .pad ? "iPad" : "iPhone"
+        #endif
+        return "Universal Remote (\(kind) \(ClientIdentity.shortID(of: certificate)))"
     }
 
-    /// Failable: if `sec_identity_create` returns nil there is no client
-    /// identity to present, and mutual TLS cannot succeed — the caller
-    /// must surface identityUnavailable instead of connecting without
-    /// one (the TV would kill the handshake and the failure would look
-    /// like a generic connection error).
-    init?(host: String, port: UInt16, identity: SecIdentity,
-          expectedServerCertificateDER: Data? = nil) {
-        let tlsOptions = Self.baseTLSOptions()
-        guard let secIdentity = sec_identity_create(identity) else { return nil }
-        // This API takes only the identity — there is no queue parameter
-        // (older examples show a three-argument form that no longer exists).
-        sec_protocol_options_set_local_identity(
-            tlsOptions.securityProtocolOptions, secIdentity)
-        // The verify block is installed HERE, before the NWConnection
-        // is created: Network.framework snapshots the TLS options at
-        // connection creation, so a block set later in start() silently
-        // never fires and default trust evaluation rejects the TV's
-        // self-signed certificate with -9808. The block writes into
-        // the shared verify state (it cannot capture self — the
-        // connection is not assigned yet). The trust is read the
-        // reference app's way (sec_trust_copy_ref +
-        // SecTrustCopyCertificateChain, leaf first), on the main queue,
-        // like the reference app. It reports the presented certificate
-        // DER so pairing can hash it, and enforces the pin when one is
-        // set: with no pin (trust on first use) any certificate is
-        // accepted; with a pin, only the exact pinned DER is accepted,
-        // and a mismatch fails the handshake and is flagged via
-        // `pinMismatch` — never silently accepted.
-        let verifyState = TLSVerifyState(expectedServerCertificateDER: expectedServerCertificateDER)
-        sec_protocol_options_set_verify_block(
-            tlsOptions.securityProtocolOptions, { _, trust, complete in
-                let secTrust = sec_trust_copy_ref(trust).takeRetainedValue()
-                if let chain = SecTrustCopyCertificateChain(secTrust) as? [SecCertificate],
-                   let certificate = chain.first {
-                    let der = SecCertificateCopyData(certificate) as Data
-                    verifyState.serverCertificateSeen = true
-                    verifyState.onServerCertificate?(der)
-                    if !TLSConnection.certificateMatchesPin(presentedDER: der,
-                                                            expectedDER: verifyState.expectedServerCertificateDER) {
-                        verifyState.pinMismatch = true
-                        complete(false)
-                        return
-                    }
-                } else if verifyState.expectedServerCertificateDER != nil {
-                    // A pin is set but the TV presented no certificate at
-                    // all: fail closed rather than accepting a
-                    // certificate-less handshake.
-                    verifyState.pinMismatch = true
-                    complete(false)
-                    return
-                }
-                complete(true)
-            }, .main)
-        self.verifyState = verifyState
-        // TCP options mirror the reference app: a 6s connect timeout and
-        // noDelay. No service class is set (the reference sets none).
-        let tcpOptions = NWProtocolTCP.Options()
-        tcpOptions.connectionTimeout = 6
-        tcpOptions.noDelay = true
-        let parameters = NWParameters(tls: tlsOptions, tcp: tcpOptions)
-        connection = NWConnection(host: NWEndpoint.Host(host),
-                                  port: NWEndpoint.Port(rawValue: port)!,
-                                  using: parameters)
-    }
-
-    /// No-identity TLS connection (diagnostic probe only): same TLS
-    /// options as the mutual-TLS path, but no client certificate is
-    /// presented and no verify block is installed, so SecureTransport
-    /// has nothing of ours to reject and default trust applies. Never
-    /// used for pairing or control.
-    init(host: String, port: UInt16) {
-        let tlsOptions = Self.baseTLSOptions()
-        // No verify block here (unchanged): this probe intentionally
-        // presents no client certificate and uses default trust, so a
-        // failure identical to the mutual-TLS path shows the failure
-        // is not about our client identity.
-        self.verifyState = TLSVerifyState(expectedServerCertificateDER: nil)
-        let tcpOptions = NWProtocolTCP.Options()
-        tcpOptions.connectionTimeout = 6
-        tcpOptions.noDelay = true
-        let parameters = NWParameters(tls: tlsOptions, tcp: tcpOptions)
-        connection = NWConnection(host: NWEndpoint.Host(host),
-                                  port: NWEndpoint.Port(rawValue: port)!,
-                                  using: parameters)
-    }
-
-    func start() {
-        // The verify block is installed in init, before the NWConnection
-        // is created — setting it here would silently never fire.
-        connection.stateUpdateHandler = { [weak self] state in
-            guard let self, !self.stopped else { return }
-            switch state {
-            case .ready:
-                // Start receiving only once the handshake has completed,
-                // like the reference app — receiving before .ready races
-                // the handshake.
-                self.receiveLoop()
-                self.onReady?()
-            case .failed(let error):
-                self.lastFailure = error
-                self.onFailure?(error)
-            case .waiting(let error):
-                // Unreachable host or refused connection: don't hang
-                // around for the caller's timeout — fail fast, like the
-                // reference app.
-                self.lastFailure = error
-                self.onFailure?(error)
-            case .cancelled:
-                self.lastFailure = nil
-                self.onFailure?(NSError(domain: "TLSConnection", code: 0,
-                    userInfo: [NSLocalizedDescriptionKey: "The TV closed the connection."]))
-            default:
-                break
-            }
-        }
-        connection.start(queue: .main)
-    }
-
-    func send(_ data: Data) {
-        connection.send(content: data, completion: .contentProcessed { _ in })
-    }
-
-    func stop() {
-        stopped = true
-        connection.cancel()
-    }
-
-    private func receiveLoop() {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
-            guard let self, !self.stopped else { return }
-            if let data, !data.isEmpty {
-                self.buffer.append(data)
-                self.drainMessages()
-            }
-            if let error {
-                // Record the failure here too: the stateUpdateHandler's
-                // .failed branch is a separate, racy delivery, and if
-                // this receive error wins the race the actor would
-                // otherwise read lastFailure == nil and lose the real
-                // NWError text entirely (exactly what v1.0.4 showed).
-                self.lastFailure = error
-                self.onFailure?(error)
-                return
-            }
-            if isComplete {
-                // The TV closed the connection cleanly: stop receiving
-                // and surface the close instead of looping on a dead
-                // socket (the reference app cancels + finishes here).
-                self.lastFailure = nil
-                self.onFailure?(NSError(domain: "TLSConnection", code: 0,
-                    userInfo: [NSLocalizedDescriptionKey: "The TV closed the connection."]))
-                return
-            }
-            self.receiveLoop()
+    private static func describe(_ error: NWError?) -> String {
+        guard let error else { return "The TV closed the connection." }
+        switch error {
+        case .posix(let code) where code == .ECONNREFUSED: return "The TV refused the connection."
+        case .posix(let code) where code == .ETIMEDOUT || code == .EHOSTUNREACH || code == .EHOSTDOWN:
+            return "Couldn't reach the TV. Is it on and on the same Wi-Fi?"
+        default: return "Couldn't connect to the TV."
         }
     }
 
-    private func drainMessages() {
-        while let (length, prefix) = Protobuf.readLengthPrefix(buffer) {
-            guard length >= 0, buffer.count >= prefix + length else { return }
-            let message = Data(buffer[prefix..<(prefix + length)])
-            buffer.removeFirst(prefix + length)
-            onMessage?(message)
+    /// Android KeyEvent codes. (The fork's table, plus .play 126,
+    /// .pause 127 and .stop 86 — our RemoteCommand has distinct
+    /// play/pause/stop; .exit is 4, like .back.)
+    private static func keyCode(_ key: AndroidTVKey) -> Int? {
+        switch key {
+        case .power: 26
+        case .powerOff: nil
+        case .up: 19
+        case .down: 20
+        case .left: 21
+        case .right: 22
+        case .select: 23
+        case .back, .exit: 4
+        case .home: 3
+        case .menu: 82
+        case .info: 165
+        case .input: 178
+        case .search: 84
+        case .volumeUp: 24
+        case .volumeDown: 25
+        case .mute: 164
+        case .channelUp: 166
+        case .channelDown: 167
+        case .playPause: 85
+        case .play: 126
+        case .pause: 127
+        case .stop: 86
+        case .rewind: 89
+        case .fastForward: 90
+        case .backspace: 67
+        case .enter: 66
+        case .digit(let n): (0...9).contains(n) ? 7 + n : nil
         }
-    }
-}
-
-private extension Data {
-    /// Hex string (even length, case-insensitive) → bytes. Nil on bad input.
-    init?(hexString: String) {
-        guard hexString.count % 2 == 0 else { return nil }
-        var data = Data()
-        var index = hexString.startIndex
-        while index < hexString.endIndex {
-            let next = hexString.index(index, offsetBy: 2)
-            guard let byte = UInt8(hexString[index..<next], radix: 16) else { return nil }
-            data.append(byte)
-            index = next
-        }
-        self = data
     }
 }

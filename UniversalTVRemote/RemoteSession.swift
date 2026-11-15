@@ -219,31 +219,10 @@ final class RemoteSession: ObservableObject {
                 status = "Pairing cancelled."
             } catch let error as AndroidTVRemote.AndroidTVError {
                 isConnected = false
-                var text = error.localizedDescription
-                // The 6466 probe is non-fatal, but if pairing then fails
-                // too, what the probe saw is the first diagnostic clue.
-                if let note = await androidTV.lastProbeNote {
-                    text += " \(note)"
-                }
-                // Same for the plain-TCP Network.framework check: it says
-                // whether the guest's NWConnection path itself reaches
-                // the TV, as opposed to the TLS handshake failing.
-                if let check = await androidTV.lastTCPCheck {
-                    text += " \(check)"
-                }
-                // And the no-identity TLS probe: it says whether the TV
-                // presents its certificate when we offer no client
-                // identity at all — the discriminator for errSSLBadCert.
-                if let probe = await androidTV.lastNoIdentityProbe {
-                    text += " \(probe)"
-                }
-                // And the handshake recorder: what the TV actually sends
-                // back during a raw TLS handshake — the evidence for
-                // why the mutual-TLS handshake dies with -9808.
-                if let record = await androidTV.lastHandshakeRecord {
-                    text += " \(record)"
-                }
-                status = text
+                // v1.0.15: the fork's driver reports a plain-language
+                // failure reason; the diagnostic probes (and their
+                // notes) are gone, so the reason is the whole status.
+                status = error.localizedDescription
             } catch {
                 isConnected = false
                 status = "Couldn't connect to the TV. Make sure it's on and on the same Wi-Fi network."
@@ -533,7 +512,7 @@ final class RemoteSession: ObservableObject {
             if let key = AndroidTVRemote.Key.digit(n) {
                 try await androidTV.sendKey(key, to: host)
             }
-        case .text: break // Not implemented; the UI hides the keyboard.
+        case .text(let text): try await androidTV.sendText(text, to: host)
         }
     }
 

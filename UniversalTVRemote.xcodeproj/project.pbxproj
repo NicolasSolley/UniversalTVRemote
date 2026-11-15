@@ -24,6 +24,9 @@
 		B14983B2B4B94BACBCDD8925 /* X509.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8477BEAB10E2447A9FCAB9A8 /* X509.swift */; };
 		3B20C4BB31B041A783B1A4A1 /* TLSHandshakeRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75B0B754E2BE4B589AA2EDD8 /* TLSHandshakeRecorder.swift */; };
 		872AF0FE11C84D3FB903AF66 /* VoiceInput.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAE10D5E61874C9C975930A1 /* VoiceInput.swift */; };
+		75A414E9689F4CBC9432185A /* TLSChannel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A055354F469A4F6490EDA8B4 /* TLSChannel.swift */; };
+		5AF9BD0811EC404DA4C61FEC /* ClientIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = 348C9CB233854A5582BFB152 /* ClientIdentity.swift */; };
+		BED832E1F6B84808AF16169E /* DER.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DAE2FF6AF9A4DFE94D42706 /* DER.swift */; };
 		041547DB8A35806CE609C942 /* UniversalTVRemoteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E337D5391F45CC9E22AA4BE /* UniversalTVRemoteTests.swift */; };
 		EBD11B9EC1324CF79C2D0EE2 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 9AF4BF83DEBB406CBEFB6EF6 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
@@ -46,6 +49,9 @@
 		8477BEAB10E2447A9FCAB9A8 /* X509.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = X509.swift; sourceTree = "<group>"; };
 		75B0B754E2BE4B589AA2EDD8 /* TLSHandshakeRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TLSHandshakeRecorder.swift; sourceTree = "<group>"; };
 		AAE10D5E61874C9C975930A1 /* VoiceInput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VoiceInput.swift; sourceTree = "<group>"; };
+		A055354F469A4F6490EDA8B4 /* TLSChannel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TLSChannel.swift; sourceTree = "<group>"; };
+		348C9CB233854A5582BFB152 /* ClientIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ClientIdentity.swift; sourceTree = "<group>"; };
+		0DAE2FF6AF9A4DFE94D42706 /* DER.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DER.swift; sourceTree = "<group>"; };
 		972A40E4CA0C442CA69E7D7B /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		9AF4BF83DEBB406CBEFB6EF6 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A369EC5675FA4FD78AF1EFA3 /* UniversalTVRemote.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = UniversalTVRemote.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -88,7 +94,9 @@
 				5D1B0F2782A94A12BB916715 /* AndroidTVIdentity.swift */,
 				009A73233DCD4D90A1D004C1 /* AndroidTVPinStore.swift */,
 				FA837C023A9640309F31A7C5 /* AndroidTVRemote.swift */,
+				348C9CB233854A5582BFB152 /* ClientIdentity.swift */,
 				85F898AE3B6944ED8139DDFA /* ContentView.swift */,
+				0DAE2FF6AF9A4DFE94D42706 /* DER.swift */,
 				80CD84BBFED2406491377B8F /* DiscoveryManager.swift */,
 				4CD2FD67F407485CAB55E035 /* LGRemote.swift */,
 				CA9B5E5F4CA24427A2F337B8 /* Protobuf.swift */,
@@ -97,6 +105,7 @@
 				0D65539DD7E44C289EB6C23A /* SSDPDiscovery.swift */,
 				3D9FA26B157E48029FE78890 /* SamsungRemote.swift */,
 				5A2A7AE1F572DF83190FC71D /* SubnetSweep.swift */,
+				A055354F469A4F6490EDA8B4 /* TLSChannel.swift */,
 				D7774389067A4C1C9F6ACCF6 /* TVDevice.swift */,
 				5CBEB188AB8744F7B202E1AD /* UniversalTVRemoteApp.swift */,
 				8477BEAB10E2447A9FCAB9A8 /* X509.swift */,
@@ -259,6 +268,9 @@
 				B14983B2B4B94BACBCDD8925 /* X509.swift in Sources */,
 				3B20C4BB31B041A783B1A4A1 /* TLSHandshakeRecorder.swift in Sources */,
 				872AF0FE11C84D3FB903AF66 /* VoiceInput.swift in Sources */,
+				75A414E9689F4CBC9432185A /* TLSChannel.swift in Sources */,
+				5AF9BD0811EC404DA4C61FEC /* ClientIdentity.swift in Sources */,
+				BED832E1F6B84808AF16169E /* DER.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
