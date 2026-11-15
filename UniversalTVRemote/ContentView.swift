@@ -349,7 +349,7 @@ private struct RemoteView: View {
 
     @State private var keyboardText = ""
     @State private var showKeyboard = false
-    @FocusState private var keyboardFocused = false
+    @FocusState private var keyboardFocused: Bool
 
     var body: some View {
         // No ScrollView on the remote (v1.0.15): everything fits on one
@@ -708,8 +708,8 @@ private struct RepeatButton<Label: View>: View {
     @State private var holdTask: Task<Void, Never>?
     @State private var repeated = false
 
-    private static let onset: UInt64 = 300_000_000
-    private static let interval: UInt64 = 120_000_000
+    private let onset: UInt64 = 300_000_000
+    private let interval: UInt64 = 120_000_000
 
     var body: some View {
         label()
@@ -718,7 +718,7 @@ private struct RepeatButton<Label: View>: View {
                 if pressing {
                     repeated = false
                     holdTask = Task {
-                        try? await Task.sleep(nanoseconds: Self.onset)
+                        try? await Task.sleep(nanoseconds: onset)
                         guard !Task.isCancelled else { return }
                         while !Task.isCancelled {
                             await MainActor.run {
@@ -726,7 +726,7 @@ private struct RepeatButton<Label: View>: View {
                                 repeated = true
                                 action()
                             }
-                            try? await Task.sleep(nanoseconds: Self.interval)
+                            try? await Task.sleep(nanoseconds: interval)
                         }
                     }
                 } else {
