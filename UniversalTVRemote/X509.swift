@@ -353,7 +353,11 @@ enum X509 {
         let tbsFields = children(of: certFields[0].content)
         guard tbsFields.count >= 2, tbsFields[1].tag == 0x02 else { return nil }
         let minimal = minimalIntegerBytes(tbsFields[1].content)
-        return "0x" + minimal.map { String(format: "%02X", $0) }.joined()
+        // Minimal hex: drop the leading zero nibble ("03E8" -> "3E8"),
+        // so serial 1000 reads "0x3E8" as documented above.
+        let hex = minimal.map { String(format: "%02X", $0) }.joined()
+        let stripped = hex.drop(while: { $0 == "0" })
+        return "0x" + (stripped.isEmpty ? "0" : String(stripped))
     }
 
     /// Signature algorithm of the certificate (tbsCertificate.signature
