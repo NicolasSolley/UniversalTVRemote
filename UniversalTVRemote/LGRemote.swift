@@ -323,15 +323,6 @@ actor LGRemote {
         do { try await sendButton("VOLUMEDOWN") } catch { try await sendCommand(uri: "ssap://audio/volumeDown") }
     }
 
-    /// The TV's real volume level (0–100) for the HUD slider
-    /// (v1.0.30). webOS getVolume returns {"volume": Int, "muted":
-    /// Bool, ...}. Nil when the request fails — the caller keeps
-    /// the tracked level. No other brand in this app reports its
-    /// level: Samsung, Roku and Android TV only take up/down keys.
-    func getVolume() async -> Int? {
-        guard let state = try? await request(uri: "ssap://audio/getVolume") else { return nil }
-        return state["volume"] as? Int
-    }
     func channelUp() async throws {
         do { try await sendButton("CHANNELUP") } catch { try await sendCommand(uri: "ssap://tv/channelUp") }
     }
