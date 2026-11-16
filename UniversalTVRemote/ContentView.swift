@@ -1205,7 +1205,7 @@ private struct PadHelpSheet: View {
                 .font(.caption2)
                 .foregroundStyle(.white.opacity(0.35))
             }
-            .frame(height: 190)
+            .frame(height: 220)
             // Pill row: Back / Home / Exit.
             HStack(spacing: 6) {
                 ForEach(["arrow.left", "house", "rectangle.portrait.and.arrow.right"], id: \.self) { name in
