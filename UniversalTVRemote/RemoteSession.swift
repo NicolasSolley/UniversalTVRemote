@@ -216,14 +216,18 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
             status = "Checking the TV…"
             RokuRemote.resetQueue()
             if let info = await RokuRemote.deviceInfo(on: host) {
-                // Update the stored device name: a user-renamed Roku
-                // reports its own name in device-info (fork's connect()).
-                if let name = info.name, !name.isEmpty, name != device.name {
-                    device.name = name
+                await rokuConnected(info: info, host: host)
+            } else if device.isSleeping {
+                // The TV was listed as sleeping — try waking it
+                // (v1.0.47): magic packet, then device-info again.
+                status = "Waking the TV…"
+                if await RokuRemote.wakeAndCheck(host: host),
+                   let info = await RokuRemote.deviceInfo(on: host) {
+                    await rokuConnected(info: info, host: host)
+                } else {
+                    isConnected = false
+                    status = "Couldn't reach the TV. Make sure it's on and on the same Wi-Fi network."
                 }
-                isConnected = true
-                status = "Connected to \(info.model ?? device.name)."
-                await loadRokuApps()
             } else {
                 isConnected = false
                 status = "Couldn't reach the TV. Make sure it's on and on the same Wi-Fi network."
@@ -234,15 +238,24 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
             defer { awaitingTVPrompt = false }
             do {
                 try await samsung.connect(to: host)
-                isConnected = true
-                status = "Connected to \(device.name)."
-                await loadSamsungApps()
-            } catch let error as SamsungRemote.SamsungError {
-                isConnected = false
-                status = error.localizedDescription
+                await samsungConnected(host: host)
             } catch {
-                isConnected = false
-                status = "Couldn't connect to the TV. Make sure it's on and on the same Wi-Fi network."
+                let message = (error as? SamsungRemote.SamsungError)?.localizedDescription
+                    ?? "Couldn't connect to the TV. Make sure it's on and on the same Wi-Fi network."
+                if device.isSleeping {
+                    // The TV was listed as sleeping — try waking it
+                    // (v1.0.47) instead of reporting the failure.
+                    status = "Waking the TV…"
+                    if await samsung.wakeIfNeededAndConnect(to: host) {
+                        await samsungConnected(host: host)
+                    } else {
+                        isConnected = false
+                        status = message
+                    }
+                } else {
+                    isConnected = false
+                    status = message
+                }
             }
         case .lg:
             status = "Connecting… accept the prompt on your TV if one appears."
@@ -259,6 +272,8 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
                 }
                 isConnected = true
                 status = "Connected to \(device.name)."
+                RememberedTVStore.record(device)
+                NotificationCenter.default.post(name: .tvDidConnect, userInfo: ["host": host])
                 await loadLGApps()
             } catch let error as LGError {
                 isConnected = false
@@ -328,6 +343,10 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
             awaitingTVPrompt = false
             pairingError = nil
             status = "Connected to \(device.name)."
+            RememberedTVStore.record(device)
+            if let host = device.host {
+                NotificationCenter.default.post(name: .tvDidConnect, userInfo: ["host": host])
+            }
         case .failed(let reason):
             isConnected = false
             isBusy = false
@@ -716,6 +735,39 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
     }
 
     // MARK: - Apps
+
+    /// A Roku answered device-info: name, connected state, apps,
+    /// MAC + remembered record (v1.0.47).
+    private func rokuConnected(info: RokuRemote.RokuDeviceInfo, host: String) async {
+        // Update the stored device name: a user-renamed Roku
+        // reports its own name in device-info (fork's connect()).
+        if let name = info.name, !name.isEmpty, name != device.name {
+            device.name = name
+        }
+        isConnected = true
+        status = "Connected to \(info.model ?? device.name)."
+        if let mac = info.mac {
+            RokuRemote.storeMAC(mac, for: host)
+            RememberedTVStore.updateMAC(host: host, mac: mac)
+        }
+        device.macAddress = info.mac ?? RokuRemote.macAddress(for: host)
+        RememberedTVStore.record(device)
+        NotificationCenter.default.post(name: .tvDidConnect, userInfo: ["host": host])
+        await loadRokuApps()
+    }
+
+    /// A Samsung connected: state, apps, MAC + remembered record
+    /// (v1.0.47). The MAC itself is learned in the background by
+    /// the driver after connect; the stored value (if any) goes on
+    /// the record now, and fetchAndStoreMAC updates it when it lands.
+    private func samsungConnected(host: String) async {
+        isConnected = true
+        status = "Connected to \(device.name)."
+        device.macAddress = SamsungRemote.macAddress(for: host)
+        RememberedTVStore.record(device)
+        NotificationCenter.default.post(name: .tvDidConnect, userInfo: ["host": host])
+        await loadSamsungApps()
+    }
 
     func loadRokuApps() async {
         guard device.brand == .roku, let host = device.host else { return }

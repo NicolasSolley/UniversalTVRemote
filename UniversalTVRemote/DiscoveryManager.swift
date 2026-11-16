@@ -29,6 +29,9 @@ final class DiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
     private var ssdpDone = false
     private var sweepDone = false
     private var bonjourDone = false
+    /// Kept for the .tvDidConnect observer (v1.0.47); dropping the
+    /// token ends the observation.
+    private var connectObserver: NSObjectProtocol?
 
     /// Bonjour service types browsed as a secondary path.
     private let types = [
@@ -56,11 +59,34 @@ final class DiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
         sweep.onFinished = { [weak self] in
             Task { @MainActor in self?.sweepFinished() }
         }
+        // Remembered TVs (v1.0.47) seed the list as sleeping, so a
+        // TV that is off stays listed and tappable from launch.
+        devices = RememberedTVStore.load().map { $0.asSleepingDevice() }
+        sortDevices()
+        // A session that connects marks its TV awake even though no
+        // scan ran (a woken TV must not keep saying "Sleeping").
+        connectObserver = NotificationCenter.default.addObserver(
+            forName: .tvDidConnect, object: nil, queue: .main) { [weak self] note in
+                guard let host = note.userInfo?["host"] as? String else { return }
+                Task { @MainActor in self?.markAwake(host: host) }
+            }
+    }
+
+    /// A session just connected to this TV — it is awake even if
+    /// the last scan did not find it (v1.0.47).
+    func markAwake(host: String) {
+        if let i = devices.firstIndex(where: { $0.host == host }) {
+            devices[i].isSleeping = false
+        }
     }
 
     func scan() {
         stop()
-        devices.removeAll()
+        // Remembered TVs stay listed as sleeping; live results
+        // revive them in place (v1.0.47). A fresh scan never drops
+        // a TV the app has connected to before.
+        devices = RememberedTVStore.load().map { $0.asSleepingDevice() }
+        sortDevices()
         services.removeAll()
         ssdpDone = false
         sweepDone = false
@@ -112,6 +138,7 @@ final class DiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
             existing.manufacturer = found.manufacturer ?? existing.manufacturer
             existing.source = .ssdp
             existing.port = found.port
+            existing.isSleeping = false
             devices[index] = existing
             return
         }
@@ -150,6 +177,7 @@ final class DiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
                 existing.model = found.model ?? existing.model
                 existing.manufacturer = found.manufacturer ?? existing.manufacturer
             }
+            existing.isSleeping = false
             devices[index] = existing
             return
         }
@@ -217,9 +245,14 @@ final class DiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
             ?? sender.hostName?.trimmingCharacters(in: CharacterSet(charactersIn: "."))
         let id = "bonjour:\(sender.name)|\(sender.type)"
         guard let index = devices.firstIndex(where: { $0.id == id }) else { return }
-        // If an SSDP or sweep entry already covers this host, drop the Bonjour duplicate.
-        if let host, let ssdpIndex = devices.firstIndex(where: { $0.host == host && ($0.source == .ssdp || $0.source == .sweep) }) {
-            if ssdpIndex != index { devices.remove(at: index) }
+        // If an SSDP, sweep, or remembered entry already covers this
+        // host, drop the Bonjour duplicate and mark the kept entry
+        // awake (v1.0.47: a remembered entry revives when found).
+        if let host, let ssdpIndex = devices.firstIndex(where: { $0.host == host && ($0.source == .ssdp || $0.source == .sweep || $0.source == .remembered) }) {
+            if ssdpIndex != index {
+                devices[ssdpIndex].isSleeping = false
+                devices.remove(at: index)
+            }
             return
         }
         // Update in place — same stable id, so selection and list identity survive.

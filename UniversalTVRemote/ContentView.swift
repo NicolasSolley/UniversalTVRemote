@@ -303,7 +303,10 @@ private struct DiscoveryListView: View {
                     Text(device.name)
                         .font(.headline)
                         .foregroundStyle(.primary)
-                    Text(device.addressLine)
+                    // A remembered TV the scan didn't find is asleep,
+                    // not gone (v1.0.47): tapping it wakes it when the
+                    // app knows its MAC, else it just tries to connect.
+                    Text(device.isSleeping ? (device.canWake ? "Sleeping — tap to wake" : "Sleeping") : device.addressLine)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -325,6 +328,9 @@ private struct DiscoveryListView: View {
             // and did nothing. The rectangle makes the badge, the text,
             // the spacer and the padding all tappable.
             .contentShape(Rectangle())
+            // Sleeping rows sit back a little — the TV isn't here
+            // right now (v1.0.47).
+            .opacity(device.isSleeping ? 0.65 : 1)
         }
         .disabled(!device.brand.supportsControl)
         .buttonStyle(.plain)

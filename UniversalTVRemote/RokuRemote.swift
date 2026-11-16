@@ -144,10 +144,12 @@ enum RokuRemote {
 
     /// Device name + model from /query/device-info. The name is
     /// `user-device-name` when the user renamed the Roku, else
-    /// `friendly-device-name` (fork's connect()).
+    /// `friendly-device-name` (fork's connect()). `mac` is the
+    /// Wi-Fi (else Ethernet) MAC for Wake-on-LAN (v1.0.47).
     struct RokuDeviceInfo {
         let name: String?
         let model: String?
+        let mac: String?
     }
 
     static func deviceInfo(on host: String, port: Int = defaultPort) async -> RokuDeviceInfo? {
@@ -161,10 +163,36 @@ enum RokuRemote {
             }
             let fields = RokuDeviceInfoParser.fields(from: data)
             return RokuDeviceInfo(name: fields["user-device-name"] ?? fields["friendly-device-name"],
-                                  model: fields["model-name"])
+                                  model: fields["model-name"],
+                                  mac: fields["wifi-mac"] ?? fields["ethernet-mac"])
         } catch {
             return nil
         }
+    }
+
+    /// Wake-on-LAN for Roku (v1.0.47): the MAC comes from
+    /// /query/device-info and is stored per host like Samsung's, so
+    /// a sleeping Roku can be woken on tap. Untested — no Roku here
+    /// to try it on; if device-info has no MAC field, wake stays off.
+    private static func macKey(for host: String) -> String { "roku.mac.\(host)" }
+    static func macAddress(for host: String) -> String? {
+        UserDefaults.standard.string(forKey: macKey(for: host))
+    }
+    static func storeMAC(_ mac: String, for host: String) {
+        UserDefaults.standard.set(mac, forKey: macKey(for: host))
+    }
+
+    /// Send the magic packet and retry device-info until the TV
+    /// answers (up to 5 attempts, 3 s apart — the Samsung wake
+    /// cadence). True when the TV is back.
+    static func wakeAndCheck(host: String) async -> Bool {
+        guard let mac = macAddress(for: host) else { return false }
+        for _ in 1...5 {
+            WakeOnLAN.sendMagicPacket(mac: mac, host: host)
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            if await deviceInfo(on: host) != nil { return true }
+        }
+        return false
     }
 
     /// Friendly model name from /query/device-info, e.g. "TCL Model 55S405".
@@ -241,7 +269,8 @@ private enum RokuDeviceInfoParser {
         func parser(_ parser: XMLParser, didStartElement elementName: String,
                     namespaceURI: String?, qualifiedName qName: String?,
                     attributes attributeDict: [String: String] = [:]) {
-            currentElement = ["user-device-name", "friendly-device-name", "model-name"].contains(elementName)
+            currentElement = ["user-device-name", "friendly-device-name", "model-name",
+                              "wifi-mac", "ethernet-mac"].contains(elementName)
                 ? elementName : nil
             currentText = ""
         }

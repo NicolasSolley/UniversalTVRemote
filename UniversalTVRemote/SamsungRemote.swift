@@ -402,6 +402,19 @@ actor SamsungRemote {
         try await wakeAndReconnect(mac: mac, host: host)
     }
 
+    /// Wake the TV if it is asleep (needs a stored MAC) and connect.
+    /// If the TV is awake this just connects — no power key is sent,
+    /// so a tap on a sleeping TV wakes it instead of toggling it
+    /// (v1.0.47). Used by the session when the tapped device was
+    /// listed as sleeping and the plain connect failed.
+    func wakeIfNeededAndConnect(to host: String) async -> Bool {
+        if await isAwake(host: host) {
+            return (try? await connect(to: host)) != nil
+        }
+        guard let mac = storedMAC(for: host) else { return false }
+        return (try? await wakeAndReconnect(mac: mac, host: host)) != nil
+    }
+
     /// Wake the TV and reconnect, re-sending the wake packet + a
     /// connect attempt every 3 s, up to 5 attempts (fork's wake /
     /// retryAfterWake). Returns with the TV on and connected — the
@@ -409,7 +422,7 @@ actor SamsungRemote {
     private func wakeAndReconnect(mac: String, host: String) async throws {
         var lastError: Error = SamsungError.notConnected
         for _ in 1...5 {
-            Self.sendMagicPacket(mac: mac, host: host)
+            WakeOnLAN.sendMagicPacket(mac: mac, host: host)
             try? await Task.sleep(nanoseconds: 3_000_000_000)
             do {
                 try await connect(to: host)
@@ -554,12 +567,21 @@ actor SamsungRemote {
         UserDefaults.standard.string(forKey: macKey(for: host))
     }
 
+    /// The stored MAC for Wake-on-LAN, if the TV has reported it
+    /// (v1.0.47): the session reads it when recording a remembered TV.
+    static func macAddress(for host: String) -> String? {
+        UserDefaults.standard.string(forKey: "samsung.mac.\(host)")
+    }
+
     /// GET http://<host>:8001/api/v2/ returns device.wifiMac for Wake-on-LAN.
     private func fetchAndStoreMAC(for host: String) async {
         if storedMAC(for: host) != nil { return }
         guard let info = await deviceInfo(host: host),
               let mac = info["wifiMac"] as? String, !mac.isEmpty else { return }
         UserDefaults.standard.set(mac, forKey: macKey(for: host))
+        // The MAC was learned after connect — attach it to the
+        // remembered record so the TV can be woken next time.
+        RememberedTVStore.updateMAC(host: host, mac: mac)
     }
 
     /// The TV's `device` object from GET http://<host>:8001/api/v2/,
@@ -584,51 +606,6 @@ actor SamsungRemote {
         guard let info = await deviceInfo(host: host, timeout: 1.5) else { return false }
         let power = info["PowerState"] as? String
         return power == nil || power == "on"
-    }
-
-    /// Wake-on-LAN magic packet, sent to the TV's last-known address
-    /// AND broadcast, on ports 9 and 7 (fork's WakeOnLAN). iOS blocks
-    /// broadcast without the multicast entitlement, so the unicast copy
-    /// is what usually works in LiveContainer.
-    private static func sendMagicPacket(mac: String, host: String) {
-        guard let bytes = macBytes(mac) else { return }
-        var packet = [UInt8](repeating: 0xFF, count: 6)
-        for _ in 0..<16 { packet.append(contentsOf: bytes) }
-        for target in [host, "255.255.255.255"] {
-            for port: UInt16 in [9, 7] {
-                sendUDPPacket(packet, to: target, port: port)
-            }
-        }
-    }
-
-    /// Parses "aa:bb:cc:dd:ee:ff" or "aa-bb-cc-dd-ee-ff".
-    private static func macBytes(_ mac: String) -> [UInt8]? {
-        let parts = mac.split(whereSeparator: { $0 == ":" || $0 == "-" })
-        guard parts.count == 6 else { return nil }
-        let bytes = parts.compactMap { UInt8($0, radix: 16) }
-        return bytes.count == 6 ? bytes : nil
-    }
-
-    private static func sendUDPPacket(_ packet: [UInt8], to host: String, port: UInt16) {
-        let fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
-        guard fd >= 0 else { return }
-        defer { close(fd) }
-        var broadcast: Int32 = 1
-        setsockopt(fd, SOL_SOCKET, SO_BROADCAST, &broadcast,
-                   socklen_t(MemoryLayout<Int32>.size))
-        var addr = sockaddr_in()
-        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
-        addr.sin_family = sa_family_t(AF_INET)
-        addr.sin_port = port.bigEndian
-        guard inet_pton(AF_INET, host, &addr.sin_addr) == 1 else { return }
-        packet.withUnsafeBytes { raw in
-            withUnsafePointer(to: &addr) {
-                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { ptr in
-                    _ = sendto(fd, raw.baseAddress, packet.count, 0, ptr,
-                               socklen_t(MemoryLayout<sockaddr_in>.size))
-                }
-            }
-        }
     }
 }
 
