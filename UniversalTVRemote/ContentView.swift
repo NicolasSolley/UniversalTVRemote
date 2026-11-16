@@ -453,7 +453,7 @@ private struct RemoteView: View {
             // Navigation: the swipe pad is the one and only
             // navigation control — no D-pad, no toggle. It sizes
             // from the layout so the page fits without scrolling.
-            SwipePadView(height: layout.padSize, onRepeatCommand: { sendRepeat($0, haptic: $1) }, onCancelRepeats: { session.cancelRepeats() }) { send($0, haptic: $1) }
+            SwipePadView(height: layout.padSize, onCommand: { send($0, haptic: $1) }, onRepeatCommand: { sendRepeat($0, haptic: $1) }, onCancelRepeats: { session.cancelRepeats() })
                 .padding(.horizontal)
 
             // Back / Home / Exit pill row — icons only, no labels.
