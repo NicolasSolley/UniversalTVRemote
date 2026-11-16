@@ -1107,24 +1107,24 @@ struct SwipePadGesture {
     }
 }
 
-/// Pad controls reminder (v1.0.35, diagram in v1.0.36): a small
-/// picture of the remote with a line from each part to a short
-/// label saying what it does. The text list was hard to read, so
-/// the sheet shows the UI itself instead. The diagram and the
-/// labels share the same row heights, so each line points at the
-/// part it labels.
+/// Pad controls reminder (v1.0.35, diagram in v1.0.36, rebuilt
+/// in v1.0.37): the v1.0.36 two-column diagram with leader lines
+/// looked terrible — the lines pointed at nothing, the mute zone
+/// read as a broken gray panel, and the whole thing sat lopsided.
+/// Now: a centered picture of the remote up top, and a clean
+/// gesture list below it. Pad gestures only — the other buttons
+/// explain themselves.
 private struct PadHelpSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationView {
             ScrollView {
-                HStack(alignment: .top, spacing: 12) {
+                VStack(spacing: 20) {
                     remoteDiagram
-                    labelsColumn
+                    gestureList
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding()
             }
             .navigationTitle("Pad controls")
             .navigationBarTitleDisplayMode(.inline)
@@ -1137,9 +1137,10 @@ private struct PadHelpSheet: View {
         .preferredColorScheme(.dark)
     }
 
-    /// The remote, shrunk: top bar, connection pill, pad, pill row,
-    /// bottom row. Fixed heights — the labels column uses the same
-    /// heights, so the lines line up.
+    /// A small picture of the remote, centered: top bar, connection
+    /// pill, pad (tap dot with faint swipe chevrons in the middle,
+    /// mute zone marked only by a divider and a mute icon on the
+    /// right), pill row, keyboard.
     private var remoteDiagram: some View {
         VStack(spacing: 8) {
             // Top bar: Devices pill, Help, Power.
@@ -1162,8 +1163,7 @@ private struct PadHelpSheet: View {
                     .frame(width: 24, height: 24)
                     .background(Color.white.opacity(0.08), in: Circle())
             }
-            .frame(height: 26)
-            // Connection pill: status, not a control — no label.
+            // Connection pill.
             HStack(spacing: 4) {
                 Circle()
                     .fill(Color.green)
@@ -1175,29 +1175,37 @@ private struct PadHelpSheet: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 4)
             .background(Color.white.opacity(0.08), in: Capsule())
-            .frame(height: 20)
-            // Pad: tap dot in the middle, mute zone shaded on the
-            // right third with a mute mark.
+            // Pad.
             ZStack {
-                RoundedRectangle(cornerRadius: 16)
+                RoundedRectangle(cornerRadius: 20)
                     .fill(Color.white.opacity(0.07))
+                // Mute zone: a divider and a mute mark, no slab.
                 HStack(spacing: 0) {
                     Spacer()
                     Rectangle()
-                        .fill(Color.white.opacity(0.05))
-                        .frame(width: 46)
-                        .overlay(
-                            Image(systemName: "speaker.slash")
-                                .font(.caption2)
-                                .foregroundStyle(.white.opacity(0.6))
-                        )
+                        .fill(Color.white.opacity(0.10))
+                        .frame(width: 1)
+                    Image(systemName: "speaker.slash")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.5))
+                        .frame(width: 79)
                 }
-                Circle()
-                    .fill(Color.white.opacity(0.25))
-                    .frame(width: 10, height: 10)
+                // Tap point with faint swipe chevrons.
+                VStack(spacing: 6) {
+                    Image(systemName: "chevron.up")
+                    HStack(spacing: 28) {
+                        Image(systemName: "chevron.left")
+                        Circle()
+                            .fill(Color.white.opacity(0.3))
+                            .frame(width: 10, height: 10)
+                        Image(systemName: "chevron.right")
+                    }
+                    Image(systemName: "chevron.down")
+                }
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.35))
             }
-            .clipShape(RoundedRectangle(cornerRadius: 16))
-            .frame(height: 170)
+            .frame(height: 190)
             // Pill row: Back / Home / Exit.
             HStack(spacing: 6) {
                 ForEach(["arrow.left", "house", "rectangle.portrait.and.arrow.right"], id: \.self) { name in
@@ -1209,70 +1217,49 @@ private struct PadHelpSheet: View {
                         .background(Color.white.opacity(0.08), in: Capsule())
                 }
             }
-            .frame(height: 26)
             // Bottom row: keyboard.
             Image(systemName: "keyboard")
                 .font(.caption)
                 .foregroundStyle(.white)
                 .frame(width: 28, height: 28)
                 .background(Color.white.opacity(0.10), in: Circle())
-                .frame(maxWidth: .infinity)
-                .frame(height: 28)
         }
-        .frame(width: 140)
+        .frame(width: 240)
     }
 
-    /// Labels for the diagram, one row per part, same heights as
-    /// the diagram so the lines line up. The pad gets one line per
-    /// gesture, spread down its height.
-    private var labelsColumn: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            labelRow(height: 26, text: "Devices · Help · Power")
-            Color.clear.frame(height: 20)
-            VStack(alignment: .leading, spacing: 0) {
-                padLabel("Tap — Select / OK")
-                padLabel("Double-tap — Select twice")
-                padLabel("Tap + hold — Hold OK down")
-                padLabel("Double-tap + hold — Repeat OK")
-                padLabel("Swipe — Move that way")
-                padLabel("Swipe + hold — Keep moving")
-                padLabel("Double-tap right side — Mute")
+    /// The pad gestures, one clean row each: gesture on the left,
+    /// what it does on the right.
+    private var gestureList: some View {
+        VStack(spacing: 0) {
+            gestureRow("Tap", "Select / OK")
+            gestureRow("Double-tap", "Select twice")
+            gestureRow("Tap + hold", "Hold OK down")
+            gestureRow("Double-tap + hold", "Repeat OK")
+            gestureRow("Swipe", "Move that way")
+            gestureRow("Swipe + hold", "Keep moving")
+            gestureRow("Double-tap right side", "Mute", last: true)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 4)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
+    }
+
+    private func gestureRow(_ gesture: String, _ action: String, last: Bool = false) -> some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(gesture)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                Spacer()
+                Text(action)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
             }
-            .frame(height: 170)
-            labelRow(height: 26, text: "Back · Home · Exit")
-            labelRow(height: 28, text: "Keyboard")
+            .padding(.vertical, 10)
+            if !last {
+                Divider().background(Color.white.opacity(0.08))
+            }
         }
-    }
-
-    /// One annotation: a short line from the diagram to the label.
-    private func labelRow(height: CGFloat, text: String) -> some View {
-        HStack(spacing: 6) {
-            Rectangle()
-                .fill(Color.white.opacity(0.35))
-                .frame(width: 14, height: 1)
-            Text(text)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.85)
-        }
-        .frame(height: height)
-    }
-
-    /// One pad-gesture annotation: same line, spread evenly down
-    /// the pad's height.
-    private func padLabel(_ text: String) -> some View {
-        HStack(spacing: 6) {
-            Rectangle()
-                .fill(Color.white.opacity(0.35))
-                .frame(width: 14, height: 1)
-            Text(text)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.85)
-        }
-        .frame(height: 170 / 7)
     }
 }
 
