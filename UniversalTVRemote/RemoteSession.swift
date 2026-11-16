@@ -144,6 +144,19 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
     /// stops the instant the finger lifts and never blocks other
     /// keys behind a throttle backlog. Wired in init.
     private let volumePump = VolumePump()
+    /// The TV's volume level for the HUD slider (v1.0.30): LG
+    /// reports the real level on connect; every other brand tracks
+    /// from the steps we send, starting at 50. The pump reports
+    /// each sent step back here, so the level only moves for steps
+    /// that actually went out — never for steps the pump coalesced
+    /// away. The slider shows this level, never the phone's.
+    @Published var tvVolume = TVVolumeLevel()
+    /// Increments on every volume step actually sent to the TV
+    /// (v1.0.30). The remote view watches it to show the volume
+    /// HUD. A plain counter, not the level itself, so an LG resync
+    /// on connect (which changes the level without a step) never
+    /// pops the HUD up.
+    @Published private(set) var volumeActivityTick = 0
     /// Audio chunks flow capture -> continuation -> pump -> TV, in
     /// order: the AsyncStream preserves chunk order, so speech cannot
     /// arrive scrambled.
@@ -157,9 +170,12 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
         // The pump's send is one volume step through the normal
         // send path (per-brand throttle included). Weak capture:
         // the pump is owned by the session, so a strong capture
-        // would be a retain cycle.
+        // would be a retain cycle. Each sent step is reported back
+        // to the level tracker (v1.0.30) so the HUD slider only
+        // moves for steps that actually went out.
         volumePump.send = { [weak self] up in
             _ = await self?.send(up ? .volumeUp : .volumeDown)
+            self?.noteVolumeStepSent(up: up)
         }
     }
 
@@ -220,6 +236,7 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
                 try await lg.connect()
                 isConnected = true
                 status = "Connected to \(device.name)."
+                await refreshTVVolume()
                 await loadLGApps()
             } catch let error as LGError {
                 isConnected = false
@@ -283,22 +300,27 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
         switch state {
         case .connected:
             isConnected = true
+            isBusy = false
             awaitingTVPrompt = false
             pairingError = nil
             status = "Connected to \(device.name)."
         case .failed(let reason):
             isConnected = false
+            isBusy = false
             awaitingPairingCode = false
             awaitingTVPrompt = false
             pairingError = nil
             status = reason
         case .pairing(.enterCode(_, let error)):
+            isBusy = true
             awaitingPairingCode = true
             pairingError = error
             status = error ?? "A 6-character code is showing on your TV — type it below."
         case .pairing(.verifying):
+            isBusy = true
             status = "Checking the code…"
         case .pairing(.acceptOnTV):
+            isBusy = true
             awaitingTVPrompt = true
             status = "Accept the prompt on your TV."
         case .unpaired:
@@ -307,12 +329,15 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
             // failure, not a retry loop.
             if !pairingAttempted {
                 pairingAttempted = true
+                isBusy = true
                 androidTVDriver?.pair()
             } else {
                 isConnected = false
+                isBusy = false
                 status = "The TV isn't paired. Try connecting again."
             }
         case .connecting, .idle:
+            isBusy = true
             status = "Connecting…"
         }
     }
@@ -459,6 +484,40 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
     /// Non-volume commands use `send(_:)` and never touch the pump.
     func sendVolume(up: Bool) {
         volumePump.enqueue(up: up)
+    }
+
+    /// Drag the HUD slider to a level (v1.0.30): retarget the pump
+    /// toward it. The pump cancels any drive toward the old target
+    /// and heads for the new one; the level advances one step per
+    /// send, so the slider thumb chases the finger as the TV
+    /// catches up. No brand here takes an absolute set-volume
+    /// command — every one only accepts up/down steps — so a drag
+    /// is always a counted run of steps through the pump, with the
+    /// same instant-stop behavior as a hold.
+    func setTVVolume(to target: Int) {
+        let (count, up) = tvVolume.steps(to: target)
+        volumePump.drive(steps: count, up: up)
+    }
+
+    /// One volume step actually sent to the TV (called from the
+    /// pump's send closure): advance the tracked level and tell the
+    /// view to show the HUD. The level only moves here — never on
+    /// enqueue, where the pump may still coalesce the step away.
+    private func noteVolumeStepSent(up: Bool) {
+        tvVolume.noteStep(up: up)
+        volumeActivityTick += 1
+    }
+
+    /// Seed the HUD slider with the TV's real volume (v1.0.30).
+    /// Only LG reports it; other brands keep tracking from steps.
+    /// Called on connect and whenever the slider appears, so a
+    /// volume change from the TV's own remote resyncs. Best effort
+    /// — a failure leaves the tracked value.
+    func refreshTVVolume() async {
+        guard device.brand == .lg else { return }
+        if let level = await lg.getVolume() {
+            tvVolume.setReported(level)
+        }
     }
 
     func send(_ command: RemoteCommand) async {

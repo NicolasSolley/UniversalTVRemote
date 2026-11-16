@@ -967,3 +967,166 @@ final class VolumePumpTests: XCTestCase {
         XCTAssertEqual(sent, [true, false])
     }
 }
+
+final class TVVolumeLevelTests: XCTestCase {
+    func testStartsAtUnknownMidpoint() {
+        let level = TVVolumeLevel()
+        XCTAssertEqual(level.level, 50)
+        XCTAssertFalse(level.isReported)
+    }
+
+    func testStepUpAndDown() {
+        var level = TVVolumeLevel(level: 50)
+        level.noteStep(up: true)
+        XCTAssertEqual(level.level, 51)
+        level.noteStep(up: false)
+        XCTAssertEqual(level.level, 50)
+    }
+
+    func testClampsAtZeroAndHundred() {
+        var level = TVVolumeLevel(level: 0)
+        level.noteStep(up: false)
+        XCTAssertEqual(level.level, 0)
+        level = TVVolumeLevel(level: 100)
+        level.noteStep(up: true)
+        XCTAssertEqual(level.level, 100)
+    }
+
+    func testSetReportedAdoptsLevel() {
+        var level = TVVolumeLevel()
+        level.setReported(23)
+        XCTAssertEqual(level.level, 23)
+        XCTAssertTrue(level.isReported)
+    }
+
+    func testSetReportedClamps() {
+        var level = TVVolumeLevel()
+        level.setReported(150)
+        XCTAssertEqual(level.level, 100)
+        level.setReported(-10)
+        XCTAssertEqual(level.level, 0)
+    }
+
+    func testStepsToTargetUp() {
+        let level = TVVolumeLevel(level: 50)
+        let (count, up) = level.steps(to: 55)
+        XCTAssertEqual(count, 5)
+        XCTAssertTrue(up)
+    }
+
+    func testStepsToTargetDown() {
+        let level = TVVolumeLevel(level: 50)
+        let (count, up) = level.steps(to: 30)
+        XCTAssertEqual(count, 20)
+        XCTAssertFalse(up)
+    }
+
+    func testStepsToSameLevelIsZero() {
+        let level = TVVolumeLevel(level: 50)
+        let (count, _) = level.steps(to: 50)
+        XCTAssertEqual(count, 0)
+    }
+
+    func testStepsToTargetClamps() {
+        let level = TVVolumeLevel(level: 50)
+        let (upCount, up) = level.steps(to: 200)
+        XCTAssertEqual(upCount, 50)
+        XCTAssertTrue(up)
+        let (downCount, down) = level.steps(to: -10)
+        XCTAssertEqual(downCount, 50)
+        XCTAssertFalse(down)
+    }
+}
+
+final class VolumePumpDriveTests: XCTestCase {
+    /// Polls until `condition` is true or the timeout elapses.
+    private func waitUntil(_ condition: @escaping () -> Bool, timeout: TimeInterval = 2.0) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            guard Date() < deadline else { return }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+
+    func testDriveSendsExactStepCount() async {
+        let pump = VolumePump()
+        var sent: [Bool] = []
+        pump.send = { up in sent.append(up) }
+        pump.drive(steps: 3, up: true)
+        await waitUntil { sent.count == 3 }
+        XCTAssertEqual(sent, [true, true, true])
+        XCTAssertFalse(pump.isPumping)
+    }
+
+    func testDriveDownSendsDownSteps() async {
+        let pump = VolumePump()
+        var sent: [Bool] = []
+        pump.send = { up in sent.append(up) }
+        pump.drive(steps: 2, up: false)
+        await waitUntil { sent.count == 2 }
+        XCTAssertEqual(sent, [false, false])
+    }
+
+    func testDriveZeroSendsNothing() async {
+        let pump = VolumePump()
+        var sent: [Bool] = []
+        pump.send = { up in sent.append(up) }
+        pump.drive(steps: 0, up: true)
+        try? await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertEqual(sent, [])
+        XCTAssertFalse(pump.isPumping)
+    }
+
+    func testDriveRetargetReplacesRemaining() async {
+        // Dragging to a new target mid-drive: the steps toward the
+        // old target die and the pump heads for the new one.
+        let pump = VolumePump()
+        var sent: [Bool] = []
+        pump.send = { up in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            sent.append(up)
+        }
+        pump.drive(steps: 5, up: true)
+        // First send is in flight; retarget down 2 before it lands.
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        pump.drive(steps: 2, up: false)
+        await waitUntil { sent.count == 3 }
+        XCTAssertEqual(sent, [true, false, false])
+        XCTAssertFalse(pump.isPumping)
+    }
+
+    func testHardwareStepCancelsDrive() async {
+        // A button press during a slider drive kills the drive and
+        // sends exactly one step in the pressed direction.
+        let pump = VolumePump()
+        var sent: [Bool] = []
+        pump.send = { up in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            sent.append(up)
+        }
+        pump.drive(steps: 5, up: true)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        pump.enqueue(up: false)
+        await waitUntil { sent.count == 2 }
+        XCTAssertEqual(sent, [true, false])
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertEqual(sent, [true, false])
+        XCTAssertFalse(pump.isPumping)
+    }
+
+    func testCancelDropsDrive() async {
+        let pump = VolumePump()
+        var sent: [Bool] = []
+        pump.send = { up in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            sent.append(up)
+        }
+        pump.drive(steps: 5, up: true)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        pump.cancel()
+        await waitUntil { sent.count == 1 }
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertEqual(sent, [true])
+        XCTAssertFalse(pump.isPumping)
+    }
+}

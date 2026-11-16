@@ -376,6 +376,23 @@ private struct RemoteView: View {
     @StateObject private var hardwareVolume = HardwareVolumeController()
     @Environment(\.scenePhase) private var scenePhase
 
+    /// Apple-style volume HUD (v1.0.30): a floating pill with a
+    /// speaker icon and a draggable slider, like the iPhone's own
+    /// volume indicator. It appears whenever a volume step lands
+    /// and fades 3 s after the last activity; it never takes layout
+    /// space (an overlay at the top) and never covers the pad —
+    /// touches outside the pill pass straight through to the
+    /// controls below. The slider shows the TV's volume, never the
+    /// phone's: the phone's anchor/reset behavior is untouched.
+    @State private var showVolumeHUD = false
+    @State private var volumeHUDDismissTask: Task<Void, Never>?
+    /// True while the finger is on the slider: the thumb follows
+    /// the finger (volumeSliderDragValue), not the level, which
+    /// chases it as steps land. False once released, when the
+    /// slider binds back to the real level.
+    @State private var volumeSliderEditing = false
+    @State private var volumeSliderDragValue: Double = 50
+
     var body: some View {
         // No ScrollView on the remote (v1.0.15): everything fits on one
         // page. The layout sizes itself from the available height — the
@@ -579,6 +596,22 @@ private struct RemoteView: View {
                 .frame(width: 200, height: 44)
                 .opacity(0.01)
             )
+            // The volume HUD (v1.0.30): an overlay, so it never
+            // takes layout space or pushes the pad — it floats just
+            // below the top bar and fades on its own. A volume step
+            // landing is the trigger (the session's tick), so an LG
+            // resync on connect never pops it up.
+            .overlay(alignment: .top) {
+                if showVolumeHUD {
+                    volumeHUD
+                        .padding(.top, layout.topPadding + layout.topBarButton + 12)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+            }
+            .animation(.easeInOut(duration: 0.2), value: showVolumeHUD)
+            .onChange(of: session.volumeActivityTick) { _ in
+                noteVolumeActivity()
+            }
         }
         .task { await session.connect() }
         .onAppear {
@@ -602,9 +635,82 @@ private struct RemoteView: View {
             }
         }
         .onDisappear {
+            volumeHUDDismissTask?.cancel()
             hardwareVolume.stop()
             session.disconnect()
         }
+    }
+
+    /// A volume step just landed on the TV: show the HUD and
+    /// restart the 3 s fade timer. Called on every step, so a hold
+    /// keeps the HUD up until 3 s after release.
+    private func noteVolumeActivity() {
+        showVolumeHUD = true
+        volumeHUDDismissTask?.cancel()
+        volumeHUDDismissTask = Task {
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard !Task.isCancelled else { return }
+            // Still dragging: don't hide under the finger — the
+            // drag-end handler restarts the timer instead.
+            if !volumeSliderEditing {
+                showVolumeHUD = false
+            }
+        }
+    }
+
+    /// The slider drag started / ended. Starting cancels the fade
+    /// timer (the HUD stays while dragging); ending restarts it,
+    /// so the HUD fades 3 s after the drag, not mid-drag.
+    private func volumeSliderEditingChanged(_ editing: Bool) {
+        volumeSliderEditing = editing
+        if editing {
+            volumeSliderDragValue = Double(session.tvVolume.level)
+            volumeHUDDismissTask?.cancel()
+        } else {
+            noteVolumeActivity()
+        }
+    }
+
+    /// The slider's value: the finger's position while dragging,
+    /// the TV's real level otherwise. Every drag movement retargets
+    /// the pump toward the new value (v1.0.30).
+    private var volumeSliderBinding: Binding<Double> {
+        Binding(
+            get: { volumeSliderEditing ? volumeSliderDragValue : Double(session.tvVolume.level) },
+            set: { newValue in
+                volumeSliderDragValue = newValue
+                session.setTVVolume(to: Int(newValue))
+            }
+        )
+    }
+
+    private func speakerIconName(for level: Int) -> String {
+        if level <= 0 { return "speaker.slash.fill" }
+        if level < 34 { return "speaker.wave.1.fill" }
+        if level < 67 { return "speaker.wave.2.fill" }
+        return "speaker.wave.3.fill"
+    }
+
+    /// The volume HUD itself (v1.0.30): speaker icon + draggable
+    /// slider in a floating dark pill, like the iPhone's own volume
+    /// indicator. Appearing resyncs LG's real level, so a volume
+    /// change from the TV's own remote shows up correctly.
+    private var volumeHUD: some View {
+        HStack(spacing: 12) {
+            Image(systemName: speakerIconName(for: session.tvVolume.level))
+                .font(.title3)
+                .foregroundStyle(.white)
+                .frame(width: 30)
+            Slider(value: volumeSliderBinding, in: 0...100, step: 1, onEditingChanged: volumeSliderEditingChanged)
+                .tint(.white)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18))
+        .overlay(RoundedRectangle(cornerRadius: 18).stroke(Color.white.opacity(0.15), lineWidth: 1))
+        .shadow(color: .black.opacity(0.4), radius: 12, y: 4)
+        .padding(.horizontal, 24)
+        .onAppear { Task { await session.refreshTVVolume() } }
     }
 
     /// Top bar: Devices pill (back to the list), TV name centered,
@@ -687,11 +793,16 @@ private struct RemoteView: View {
         return "Not connected"
     }
 
-    /// True while the session is actively connecting — busy, but
-    /// not waiting on the TV's own allow prompt (that state shows
-    /// "Check your TV" and needs the user, not a spinner).
+    /// True while the session is actively connecting — busy in any
+    /// form, including waiting on the TV's own allow prompt. The
+    /// prompt wait is the long part (Samsung/LG sit in it for the
+    /// whole handshake), and a static pill there looks frozen:
+    /// v1.0.31, Nick never saw the spinner because it was
+    /// suppressed exactly while "Check your TV" showed. The label
+    /// already says what to do ("Check your TV" vs "Connecting…");
+    /// the spinner just shows something is happening.
     private var isConnecting: Bool {
-        session.supportsControl && session.isBusy && !session.awaitingTVPrompt
+        session.supportsControl && session.isBusy
     }
 
     /// `haptic` defaults to true — every tap buzzes once. (The

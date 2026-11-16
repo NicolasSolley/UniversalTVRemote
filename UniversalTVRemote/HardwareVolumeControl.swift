@@ -274,6 +274,54 @@ struct VolumeStepTracker {
     }
 }
 
+/// The TV's volume level for the HUD slider (v1.0.30). Pure and
+/// unit-testable: no AVFoundation, no network.
+/// - LG reports the real level (getVolume); every other brand
+///   tracks from the steps we send, starting at 50 (unknown) and
+///   clamping 0–100. Every brand steps 1 level per volume key
+///   (Samsung KEY_VOLUP/VOLDOWN, LG VOLUMEUP/DOWN, Roku
+///   VolumeUp/Down, Android TV key 24/25) on a 0–100 scale, so
+///   one tracked step is one level.
+/// - `isReported` says the level came from the TV itself. A
+///   tracked level can drift if the volume moves another way
+///   (the TV's own remote, another app) — LG resyncs whenever
+///   the slider appears, so its drift never lasts long.
+struct TVVolumeLevel {
+    private(set) var level: Int
+    private(set) var isReported: Bool
+
+    static let minLevel = 0
+    static let maxLevel = 100
+    /// Starting level when the TV never reported one: a neutral
+    /// midpoint. The first real step or LG report replaces it.
+    static let unknownLevel = 50
+
+    init(level: Int = unknownLevel, isReported: Bool = false) {
+        self.level = min(max(level, Self.minLevel), Self.maxLevel)
+        self.isReported = isReported
+    }
+
+    /// One volume step actually sent to the TV.
+    mutating func noteStep(up: Bool) {
+        level = min(max(level + (up ? 1 : -1), Self.minLevel), Self.maxLevel)
+    }
+
+    /// The TV reported its real level: adopt it wholesale.
+    mutating func setReported(_ newLevel: Int) {
+        level = min(max(newLevel, Self.minLevel), Self.maxLevel)
+        isReported = true
+    }
+
+    /// Steps from here to `target` (clamped 0–100): how many, and
+    /// in which direction. (0, _) when already there — the
+    /// direction is meaningless at zero steps.
+    func steps(to target: Int) -> (count: Int, up: Bool) {
+        let clamped = min(max(target, Self.minLevel), Self.maxLevel)
+        let delta = clamped - level
+        return (abs(delta), delta > 0)
+    }
+}
+
 /// Coalescing volume pump (v1.0.28): hardware volume steps funnel
 /// through ONE pump instead of spawning one Task per step. The
 /// v1.0.23–v1.0.27 bug: every step spawned its own
@@ -302,6 +350,12 @@ final class VolumePump {
     var send: ((Bool) async -> Void)?
 
     private var pendingDirection: Bool?
+    /// Drive mode (v1.0.30): remaining steps toward a dragged
+    /// slider target, in `driveDirection`. A later drive call
+    /// replaces the count (retarget); a hardware step cancels the
+    /// drive outright (see enqueue). Zero means no drive.
+    private var pendingSteps = 0
+    private var driveDirection = true
     private var pumping = false
 
     /// True while a pump run is in progress (a send is in flight,
@@ -311,26 +365,55 @@ final class VolumePump {
     /// One hardware step: remember the latest direction and make
     /// sure the pump is running. Steps arriving while a send is in
     /// flight just overwrite the single pending slot — they never
-    /// spawn a task, never reserve a throttle slot.
+    /// spawn a task, never reserve a throttle slot. Cancels any
+    /// slider drive in progress: the finger on the button is the
+    /// authority, and the drive's target is already stale.
     func enqueue(up: Bool) {
+        pendingSteps = 0
         pendingDirection = up
         guard !pumping else { return }
         pumping = true
         Task { await run() }
     }
 
-    /// Drop the pending step, if any. The in-flight send (if one)
-    /// still finishes — it is already on the wire — but nothing
-    /// further goes out. Called on disconnect, so no volume step
-    /// fires after the remote is gone.
+    /// Drive toward a dragged slider target: send up to `count`
+    /// steps in `direction`, one per pump cycle. A later drive call
+    /// replaces the remaining count (retarget — dragging to a new
+    /// target cancels the steps toward the old one); drive(steps: 0)
+    /// stops the drive. A queued (not yet sent) hardware step is
+    /// dropped — the drag's absolute target supersedes it — but a
+    /// send already on the wire still lands, so the final level can
+    /// sit at most one step past the target.
+    func drive(steps count: Int, up: Bool) {
+        pendingSteps = count
+        driveDirection = up
+        pendingDirection = nil
+        guard count > 0 else { return }
+        guard !pumping else { return }
+        pumping = true
+        Task { await run() }
+    }
+
+    /// Drop the pending step and any drive, if any. The in-flight
+    /// send (if one) still finishes — it is already on the wire —
+    /// but nothing further goes out. Called on disconnect, so no
+    /// volume step fires after the remote is gone.
     func cancel() {
         pendingDirection = nil
+        pendingSteps = 0
     }
 
     private func run() async {
-        while let direction = pendingDirection {
-            pendingDirection = nil
-            await send?(direction)
+        while true {
+            if let direction = pendingDirection {
+                pendingDirection = nil
+                await send?(direction)
+            } else if pendingSteps > 0 {
+                pendingSteps -= 1
+                await send?(driveDirection)
+            } else {
+                break
+            }
         }
         pumping = false
     }
