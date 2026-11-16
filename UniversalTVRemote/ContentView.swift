@@ -381,145 +381,15 @@ private struct RemoteView: View {
         // page. The layout sizes itself from the available height — the
         // swipe pad absorbs the slack, and on short screens the
         // bottom row, buttons and spacing shrink too. Nothing is dropped.
+        // The content lives in remoteContent(layout:) — the body got
+        // too big for the compiler to type-check as one expression.
         GeometryReader { geo in
             let layout = RemoteLayout.make(
                 height: geo.size.height,
                 pairingShown: session.awaitingPairingCode,
                 keyboardShown: showKeyboard && session.capabilities.supportsTextInput,
                 isLG: session.device.brand == .lg)
-            VStack(spacing: layout.gap) {
-                topBar(layout)
-
-                // Pairing code (Android TV): the TV shows a code.
-                // Restyled in v1.0.21 to match the remote's dark UI —
-                // the old teal card clashed with everything else.
-                if session.awaitingPairingCode {
-                    VStack(spacing: layout.pairingCardSpacing) {
-                        Text("Enter the code shown on your TV")
-                            .font(.headline)
-                            .foregroundStyle(.white)
-                        TextField("Code", text: $session.pairingCode)
-                            .font(.system(.title3, design: .monospaced))
-                            .multilineTextAlignment(.center)
-                            .autocorrectionDisabled(true)
-                            .textInputAutocapitalization(.characters)
-                            .keyboardType(.asciiCapable)
-                            .focused($pairingCodeFocused)
-                            // Auto-pair the moment the 6th character
-                            // lands (v1.0.22): the code is exactly 6
-                            // characters, so there is nothing to wait
-                            // for. There is no Pair button anymore
-                            // (v1.0.23) — a paste longer than the code
-                            // is trimmed to 6 first, so it still
-                            // pairs, and a failed attempt clears the
-                            // field, so retyping the 6th character
-                            // fires a fresh attempt.
-                            .onChange(of: session.pairingCode) { code in
-                                if code.count > 6 {
-                                    session.pairingCode = String(code.prefix(6))
-                                } else if code.count == 6 {
-                                    session.submitPairingCode()
-                                }
-                            }
-                            .padding(.vertical, 10)
-                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-                            .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.08), lineWidth: 1))
-                        // A failed attempt (wrong code, or the TV
-                        // discarding the code and showing a new one)
-                        // shows its error here on the card — the
-                        // diagnostic line is hidden while the card
-                        // is up, so this is the only place it shows.
-                        if let pairingError = session.pairingError {
-                            Text(pairingError)
-                                .font(.footnote)
-                                .foregroundStyle(.red)
-                                .multilineTextAlignment(.center)
-                        }
-                    }
-                    .padding(layout.pairingCardPadding)
-                    .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
-                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.08), lineWidth: 1))
-                    .padding(.horizontal)
-                    .onAppear { pairingCodeFocused = true }
-                }
-
-                // Keyboard / text input, revealed by the keyboard
-                // button in the bottom row — or on its own when the
-                // TV announces a focused text field (v1.0.34 auto
-                // keyboard). Extracted (see keyboardInputRow): the
-                // body got too big for the compiler to type-check
-                // as one expression.
-                keyboardInputRow
-
-                connectionPill
-
-                // LG power note — hidden on the shortest screens (it
-                // also lives in Settings); the layout budgets for it
-                // only when shown.
-                if layout.showLGNote {
-                    Text("Power turns the TV off. Turn it back on with the TV's own remote.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                }
-
-                // Navigation: the swipe pad is the one and only
-                // navigation control — no D-pad, no toggle. It sizes
-                // from the layout so the page fits without scrolling.
-                SwipePadView(height: layout.padSize, onRepeatCommand: { sendRepeat($0, haptic: $1) }, onCancelRepeats: { session.cancelRepeats() }) { send($0, haptic: $1) }
-                    .padding(.horizontal)
-
-                // Back / Home / Exit pill row — icons only, no labels.
-                HStack(spacing: 16) {
-                    pillButton(systemImage: "arrow.left", label: "Back", height: layout.pillsButtonHeight) { send(.back) }
-                    pillButton(systemImage: "house", label: "Home", height: layout.pillsButtonHeight) { send(.home) }
-                    pillButton(systemImage: "rectangle.portrait.and.arrow.right", label: "Exit", height: layout.pillsButtonHeight) { send(.exit) }
-                }
-                .padding(.horizontal)
-
-                // Bottom row (v1.0.34): just the keyboard button,
-                // centered — the mute button is gone, mute lives on
-                // the pad's middle-right double-tap now. Extracted
-                // (see bottomRow(layout:)): the body got too big
-                // for the compiler to type-check as one expression.
-                bottomRow(layout: layout)
-
-                // Diagnostic status — capped to a few lines so the page
-                // fits; the full text lives in Settings. Hidden while
-                // the pairing card or keyboard is up (they show the
-                // status themselves). When connected (v1.0.32) the pill
-                // already says so, so the "Connected to …" line is
-                // dropped — only a volume-capture problem still shows
-                // down here. A volume-capture problem (audio session
-                // failed, slider missing — v1.0.26) appends one line
-                // here so a failed field test can say why.
-                if layout.showDiagnostic, let diagnosticText {
-                    Text(diagnosticText)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.center)
-                        .lineLimit(layout.diagnosticLines)
-                        .padding(.horizontal)
-                }
-            }
-            .padding(.top, layout.topPadding)
-            .frame(maxWidth: .infinity)
-            // The hidden MPVolumeView must sit in the hierarchy to
-            // suppress the system volume HUD while the remote is up.
-            // Real-sized (200×44, v1.0.26) — MPVolumeView only
-            // creates its slider when laid out at a real size, and
-            // the view reports when it is in the hierarchy so the
-            // anchor can be applied for real. Still near-invisible
-            // and touch-disabled, in the background so it takes no
-            // layout space and can never swallow pad input.
-            .background(
-                HiddenVolumeView(volumeView: hardwareVolume.volumeView) {
-                    hardwareVolume.volumeViewDidAppear()
-                }
-                .frame(width: 200, height: 44)
-                .opacity(0.01)
-            )
+            remoteContent(layout: layout)
         }
         .task { await session.connect() }
         .onChange(of: session.tvTextFieldFocused) { focused in
@@ -552,6 +422,141 @@ private struct RemoteView: View {
         .onDisappear {
             hardwareVolume.stop()
             session.disconnect()
+        }
+    }
+
+    /// The remote page itself: the VStack of sections, split out
+    /// of `body` (v1.0.34) so the compiler type-checks each piece
+    /// on its own instead of one giant expression.
+    @ViewBuilder
+    private func remoteContent(layout: RemoteLayout) -> some View {
+        VStack(spacing: layout.gap) {
+            topBar(layout)
+
+            pairingCard(layout: layout)
+
+            keyboardInputRow
+
+            connectionPill
+
+            // LG power note — hidden on the shortest screens (it
+            // also lives in Settings); the layout budgets for it
+            // only when shown.
+            if layout.showLGNote {
+                Text("Power turns the TV off. Turn it back on with the TV's own remote.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+            }
+
+            // Navigation: the swipe pad is the one and only
+            // navigation control — no D-pad, no toggle. It sizes
+            // from the layout so the page fits without scrolling.
+            SwipePadView(height: layout.padSize, onRepeatCommand: { sendRepeat($0, haptic: $1) }, onCancelRepeats: { session.cancelRepeats() }) { send($0, haptic: $1) }
+                .padding(.horizontal)
+
+            // Back / Home / Exit pill row — icons only, no labels.
+            HStack(spacing: 16) {
+                pillButton(systemImage: "arrow.left", label: "Back", height: layout.pillsButtonHeight) { send(.back) }
+                pillButton(systemImage: "house", label: "Home", height: layout.pillsButtonHeight) { send(.home) }
+                pillButton(systemImage: "rectangle.portrait.and.arrow.right", label: "Exit", height: layout.pillsButtonHeight) { send(.exit) }
+            }
+            .padding(.horizontal)
+
+            bottomRow(layout: layout)
+
+            // Diagnostic status — capped to a few lines so the page
+            // fits; the full text lives in Settings. Hidden while
+            // the pairing card or keyboard is up (they show the
+            // status themselves). When connected (v1.0.32) the pill
+            // already says so, so the "Connected to …" line is
+            // dropped — only a volume-capture problem still shows
+            // down here. A volume-capture problem (audio session
+            // failed, slider missing — v1.0.26) appends one line
+            // here so a failed field test can say why.
+            if layout.showDiagnostic, let diagnosticText {
+                Text(diagnosticText)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(layout.diagnosticLines)
+                    .padding(.horizontal)
+            }
+        }
+        .padding(.top, layout.topPadding)
+        .frame(maxWidth: .infinity)
+        // The hidden MPVolumeView must sit in the hierarchy to
+        // suppress the system volume HUD while the remote is up.
+        // Real-sized (200×44, v1.0.26) — MPVolumeView only
+        // creates its slider when laid out at a real size, and
+        // the view reports when it is in the hierarchy so the
+        // anchor can be applied for real. Still near-invisible
+        // and touch-disabled, in the background so it takes no
+        // layout space and can never swallow pad input.
+        .background(
+            HiddenVolumeView(volumeView: hardwareVolume.volumeView) {
+                hardwareVolume.volumeViewDidAppear()
+            }
+            .frame(width: 200, height: 44)
+            .opacity(0.01)
+        )
+    }
+
+    /// Pairing code card (Android TV): the TV shows a code.
+    /// Restyled in v1.0.21 to match the remote's dark UI — the old
+    /// teal card clashed with everything else. A separate view so
+    /// the body stays small enough for the compiler to type-check.
+    @ViewBuilder
+    private func pairingCard(layout: RemoteLayout) -> some View {
+        if session.awaitingPairingCode {
+            VStack(spacing: layout.pairingCardSpacing) {
+                Text("Enter the code shown on your TV")
+                    .font(.headline)
+                    .foregroundStyle(.white)
+                TextField("Code", text: $session.pairingCode)
+                    .font(.system(.title3, design: .monospaced))
+                    .multilineTextAlignment(.center)
+                    .autocorrectionDisabled(true)
+                    .textInputAutocapitalization(.characters)
+                    .keyboardType(.asciiCapable)
+                    .focused($pairingCodeFocused)
+                    // Auto-pair the moment the 6th character
+                    // lands (v1.0.22): the code is exactly 6
+                    // characters, so there is nothing to wait
+                    // for. There is no Pair button anymore
+                    // (v1.0.23) — a paste longer than the code
+                    // is trimmed to 6 first, so it still
+                    // pairs, and a failed attempt clears the
+                    // field, so retyping the 6th character
+                    // fires a fresh attempt.
+                    .onChange(of: session.pairingCode) { code in
+                        if code.count > 6 {
+                            session.pairingCode = String(code.prefix(6))
+                        } else if code.count == 6 {
+                            session.submitPairingCode()
+                        }
+                    }
+                    .padding(.vertical, 10)
+                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.08), lineWidth: 1))
+                // A failed attempt (wrong code, or the TV
+                // discarding the code and showing a new one)
+                // shows its error here on the card — the
+                // diagnostic line is hidden while the card
+                // is up, so this is the only place it shows.
+                if let pairingError = session.pairingError {
+                    Text(pairingError)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
+                        .multilineTextAlignment(.center)
+                }
+            }
+            .padding(layout.pairingCardPadding)
+            .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.08), lineWidth: 1))
+            .padding(.horizontal)
+            .onAppear { pairingCodeFocused = true }
         }
     }
 
