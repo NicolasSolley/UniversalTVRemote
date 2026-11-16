@@ -1108,23 +1108,19 @@ struct SwipePadGesture {
 }
 
 /// Pad controls reminder (v1.0.35, diagram in v1.0.36, rebuilt
-/// in v1.0.37): the v1.0.36 two-column diagram with leader lines
-/// looked terrible — the lines pointed at nothing, the mute zone
-/// read as a broken gray panel, and the whole thing sat lopsided.
-/// Now: a centered picture of the remote up top, and a clean
-/// gesture list below it. Pad gestures only — the other buttons
-/// explain themselves.
+/// in v1.0.37, picture dropped in v1.0.39): just the instructions
+/// for the controls — no picture of the remote at all. The v1.0.36
+/// leader-line diagram looked terrible and the v1.0.37 picture was
+/// still more than the sheet needed. One clean row per gesture:
+/// gesture on the left, what it does on the right.
 private struct PadHelpSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationView {
             ScrollView {
-                VStack(spacing: 20) {
-                    remoteDiagram
-                    gestureList
-                }
-                .padding()
+                gestureList
+                    .padding()
             }
             .navigationTitle("Pad controls")
             .navigationBarTitleDisplayMode(.inline)
@@ -1135,96 +1131,6 @@ private struct PadHelpSheet: View {
             }
         }
         .preferredColorScheme(.dark)
-    }
-
-    /// A small picture of the remote, centered: top bar, connection
-    /// pill, pad (tap dot with faint swipe chevrons in the middle,
-    /// mute zone marked only by a divider and a mute icon on the
-    /// right), pill row, keyboard.
-    private var remoteDiagram: some View {
-        VStack(spacing: 8) {
-            // Top bar: Devices pill, Help, Power.
-            HStack(spacing: 6) {
-                Image(systemName: "tv")
-                    .font(.caption2.bold())
-                    .foregroundStyle(remoteAccent)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .background(Color.white.opacity(0.08), in: Capsule())
-                Spacer()
-                Image(systemName: "questionmark")
-                    .font(.caption2.bold())
-                    .foregroundStyle(.white)
-                    .frame(width: 24, height: 24)
-                    .background(Color.white.opacity(0.10), in: Circle())
-                Image(systemName: "power")
-                    .font(.caption2.bold())
-                    .foregroundStyle(.red)
-                    .frame(width: 24, height: 24)
-                    .background(Color.white.opacity(0.08), in: Circle())
-            }
-            // Connection pill.
-            HStack(spacing: 4) {
-                Circle()
-                    .fill(Color.green)
-                    .frame(width: 6, height: 6)
-                Text("Connected")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.white)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 4)
-            .background(Color.white.opacity(0.08), in: Capsule())
-            // Pad.
-            ZStack {
-                RoundedRectangle(cornerRadius: 20)
-                    .fill(Color.white.opacity(0.07))
-                // Mute zone: a divider and a mute mark, no slab.
-                HStack(spacing: 0) {
-                    Spacer()
-                    Rectangle()
-                        .fill(Color.white.opacity(0.10))
-                        .frame(width: 1)
-                    Image(systemName: "speaker.slash")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.5))
-                        .frame(width: 79)
-                }
-                // Tap point with faint swipe chevrons.
-                VStack(spacing: 6) {
-                    Image(systemName: "chevron.up")
-                    HStack(spacing: 28) {
-                        Image(systemName: "chevron.left")
-                        Circle()
-                            .fill(Color.white.opacity(0.3))
-                            .frame(width: 10, height: 10)
-                        Image(systemName: "chevron.right")
-                    }
-                    Image(systemName: "chevron.down")
-                }
-                .font(.caption2)
-                .foregroundStyle(.white.opacity(0.35))
-            }
-            .frame(height: 220)
-            // Pill row: Back / Home / Exit.
-            HStack(spacing: 6) {
-                ForEach(["arrow.left", "house", "rectangle.portrait.and.arrow.right"], id: \.self) { name in
-                    Image(systemName: name)
-                        .font(.caption2)
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 6)
-                        .background(Color.white.opacity(0.08), in: Capsule())
-                }
-            }
-            // Bottom row: keyboard.
-            Image(systemName: "keyboard")
-                .font(.caption)
-                .foregroundStyle(.white)
-                .frame(width: 28, height: 28)
-                .background(Color.white.opacity(0.10), in: Circle())
-        }
-        .frame(width: 240)
     }
 
     /// The pad gestures, one clean row each: gesture on the left,
