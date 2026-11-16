@@ -340,6 +340,70 @@ final class VolumePump {
     }
 }
 
+/// Coalescing pump for pad repeat streams (v1.0.34): double-tap-hold
+/// spam and swipe-and-hold repeats funnel through ONE pump instead
+/// of spawning one Task per press. The bug it fixes: the repeat loop
+/// fires a press every 0.12s, but each send takes longer than that
+/// to land (Samsung reserves a 200 ms throttle slot per key, Roku
+/// runs a serial press chain), so presses piled up in flight and
+/// kept arriving for seconds after the finger lifted. The pump
+/// keeps exactly one pending press (the latest wins) plus one
+/// in-flight send, and `cancel()` drops the pending press — so the
+/// moment the finger lifts, at most the one send already on the
+/// wire still lands, and nothing else follows. Discrete presses
+/// (a quick tap, a quick swipe, key down/up) never touch the pump,
+/// so they always land exactly once.
+///
+/// Pure enough to unit-test: the actual send is injected
+/// (RemoteSession wires it to `send(_:)`).
+@MainActor
+final class RepeatPump {
+    /// The actual send: one repeat press to the TV. Nil until
+    /// RemoteSession wires it (tests set a fake).
+    var send: ((RemoteCommand) async -> Void)?
+
+    private var pending: RemoteCommand?
+    private var pumping = false
+
+    /// True while a pump run is in progress (a send is in flight,
+    /// or a pending press is waiting on it).
+    var isPumping: Bool { pumping }
+
+    /// One repeat press: remember the latest command and make sure
+    /// the pump is running. Presses arriving while a send is in
+    /// flight just overwrite the single pending slot — they never
+    /// spawn a task, never reserve a throttle slot. Intermediate
+    /// repeats are dropped by design: the TV cannot consume them
+    /// faster than its own pace, and what matters is that the
+    /// stream stops dead on release.
+    func enqueue(_ command: RemoteCommand) {
+        pending = command
+        guard !pumping else { return }
+        pumping = true
+        Task { await run() }
+    }
+
+    /// Drop the pending press, if any. The in-flight send (if one)
+    /// still finishes — it is already on the wire — but nothing
+    /// further goes out. Called on finger lift, so no repeat press
+    /// fires after the remote is gone or the hold is over.
+    func cancel() {
+        pending = nil
+    }
+
+    private func run() async {
+        while true {
+            if let command = pending {
+                pending = nil
+                await send?(command)
+            } else {
+                break
+            }
+        }
+        pumping = false
+    }
+}
+
 /// Embeds the controller's hidden MPVolumeView so it sits in the view
 /// hierarchy and suppresses the system volume HUD while the remote is
 /// up. Real-sized (200×44, v1.0.26) — MPVolumeView only creates its

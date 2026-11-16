@@ -55,6 +55,16 @@ protocol TVDriverDelegate: AnyObject {
     func driver(_ driver: TVDriver, didChangeState state: ConnectionState)
     /// Called when the driver learns something worth persisting (tokens, names, pairing).
     func driver(_ driver: TVDriver, didUpdateDevice device: AndroidTVDevice)
+    /// Called when the TV announces a text field gaining or losing
+    /// focus (v1.0.34) — Android TV's field-22 show request /
+    /// field-20 counter clear. The session surfaces it so the
+    /// keyboard can pop up on its own.
+    func driver(_ driver: TVDriver, didChangeTextFieldFocus focused: Bool)
+}
+
+extension TVDriverDelegate {
+    /// Default: ignore focus changes. RemoteSession overrides it.
+    func driver(_ driver: TVDriver, didChangeTextFieldFocus focused: Bool) {}
 }
 
 @MainActor

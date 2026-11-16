@@ -4,7 +4,8 @@ import Combine
 /// The canonical set of remote commands the UI can issue. Each brand
 /// controller maps these onto its own protocol; commands a brand cannot
 /// perform are hidden from the UI via `RemoteCapabilities`.
-enum RemoteCommand {
+/// Equatable so tests can assert the exact commands a pump or gesture sent.
+enum RemoteCommand: Equatable {
     case power
     /// Hold-power / full power-off where the brand supports it
     /// (Samsung hold, LG turnOff). Roku has no separate power-off key.
@@ -55,6 +56,14 @@ struct RemoteCapabilities {
     let needsTVPrompt: Bool
     /// Pairing needs a code shown on the TV typed into the app (Android TV).
     let needsPairingCode: Bool
+    /// The TV tells the app when a text field gains focus, so the
+    /// keyboard can pop up on its own and the keyboard button can
+    /// hide (v1.0.34). Android TV: the remote protocol's field-22
+    /// show request announces the focused field. LG: the IME
+    /// registerRemoteKeyboard subscription reports currentWidget
+    /// focus. Samsung and Roku send no such signal, so the button
+    /// stays there.
+    let supportsAutoKeyboard: Bool
 
     static func forBrand(_ brand: TVDevice.Brand) -> RemoteCapabilities {
         switch brand {
@@ -62,17 +71,20 @@ struct RemoteCapabilities {
             return RemoteCapabilities(
                 supportsDigits: false, supportsTextInput: true, supportsApps: true,
                 supportsSeparatePause: false, supportsPlayback: true,
-                supportsVoice: false, needsTVPrompt: false, needsPairingCode: false)
+                supportsVoice: false, needsTVPrompt: false, needsPairingCode: false,
+                supportsAutoKeyboard: false)
         case .samsung:
             return RemoteCapabilities(
                 supportsDigits: true, supportsTextInput: true, supportsApps: true,
                 supportsSeparatePause: true, supportsPlayback: true,
-                supportsVoice: false, needsTVPrompt: true, needsPairingCode: false)
+                supportsVoice: false, needsTVPrompt: true, needsPairingCode: false,
+                supportsAutoKeyboard: false)
         case .lg:
             return RemoteCapabilities(
                 supportsDigits: true, supportsTextInput: true, supportsApps: true,
                 supportsSeparatePause: true, supportsPlayback: true,
-                supportsVoice: false, needsTVPrompt: true, needsPairingCode: false)
+                supportsVoice: false, needsTVPrompt: true, needsPairingCode: false,
+                supportsAutoKeyboard: true)
         case .androidTV:
             // Text input IS implemented: AndroidTVDriver.sendText builds
             // the field-21 IME batch edit and the incoming-message
@@ -86,12 +98,14 @@ struct RemoteCapabilities {
             return RemoteCapabilities(
                 supportsDigits: true, supportsTextInput: true, supportsApps: false,
                 supportsSeparatePause: true, supportsPlayback: true,
-                supportsVoice: true, needsTVPrompt: false, needsPairingCode: true)
+                supportsVoice: true, needsTVPrompt: false, needsPairingCode: true,
+                supportsAutoKeyboard: true)
         case .airPlay, .other:
             return RemoteCapabilities(
                 supportsDigits: false, supportsTextInput: false, supportsApps: false,
                 supportsSeparatePause: false, supportsPlayback: false,
-                supportsVoice: false, needsTVPrompt: false, needsPairingCode: false)
+                supportsVoice: false, needsTVPrompt: false, needsPairingCode: false,
+                supportsAutoKeyboard: false)
         }
     }
 }
@@ -124,6 +138,12 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
     @Published var rokuApps: [RokuRemote.RokuApp] = []
     @Published var samsungApps: [SamsungRemote.SamsungApp] = []
     @Published var lgApps: [LGApp] = []
+    /// True while the TV has a text field focused (v1.0.34 auto
+    /// keyboard): Android TV reports it from the field-22 show
+    /// request, LG from the registerRemoteKeyboard subscription.
+    /// The view shows the keyboard on true and hides it on false.
+    /// Always false on Samsung/Roku — those TVs send no signal.
+    @Published var tvTextFieldFocused = false
     /// True while the mic is capturing for a voice utterance.
     @Published var isRecordingVoice = false
 
@@ -144,6 +164,12 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
     /// stops the instant the finger lifts and never blocks other
     /// keys behind a throttle backlog. Wired in init.
     private let volumePump = VolumePump()
+    /// Pad repeat streams (double-tap-hold spam, swipe-and-hold)
+    /// funnel through one coalescing pump (v1.0.34) instead of
+    /// spawning one Task per press — otherwise presses pile up in
+    /// flight and keep arriving after the finger lifts. Wired in
+    /// init, alongside the volume pump.
+    private let repeatPump = RepeatPump()
     /// Audio chunks flow capture -> continuation -> pump -> TV, in
     /// order: the AsyncStream preserves chunk order, so speech cannot
     /// arrive scrambled.
@@ -160,6 +186,12 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
         // would be a retain cycle.
         volumePump.send = { [weak self] up in
             _ = await self?.send(up ? .volumeUp : .volumeDown)
+        }
+        // The pad repeat pump's send is one repeat press through the
+        // normal send path (per-brand throttle included). Same weak
+        // capture: the pump is owned by the session.
+        repeatPump.send = { [weak self] command in
+            _ = await self?.send(command)
         }
     }
 
@@ -218,6 +250,13 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
             defer { awaitingTVPrompt = false }
             do {
                 try await lg.connect()
+                // The IME subscription reports focus changes from
+                // here on (v1.0.34 auto keyboard). The callback hops
+                // to the main actor: the subscription fires from the
+                // LG actor's receive loop.
+                await lg.setKeyboardFocusHandler { [weak self] focused in
+                    Task { @MainActor in self?.tvTextFieldFocused = focused }
+                }
                 isConnected = true
                 status = "Connected to \(device.name)."
                 await loadLGApps()
@@ -243,6 +282,8 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
     func disconnect() {
         stopVoiceCapture()
         volumePump.cancel()
+        repeatPump.cancel()
+        tvTextFieldFocused = false
         awaitingPairingCode = false
         pairingError = nil
         RokuRemote.resetQueue()
@@ -334,6 +375,14 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
         // driver's model learning is internal; our UI doesn't
         // display it.
         AndroidTVPersistence.setPaired(host: host, paired: device.isPaired)
+    }
+
+    /// The TV announced a text field gaining or losing focus
+    /// (v1.0.34 auto keyboard). The view shows the keyboard while
+    /// a field is focused and hides it when focus leaves.
+    func driver(_ driver: TVDriver, didChangeTextFieldFocus focused: Bool) {
+        guard device.brand == .androidTV else { return }
+        tvTextFieldFocused = focused
     }
 
     /// Starts a voice utterance (Android TV only): opens a voice session
@@ -467,6 +516,23 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
     /// Non-volume commands use `send(_:)` and never touch the pump.
     func sendVolume(up: Bool) {
         volumePump.enqueue(up: up)
+    }
+
+    /// One pad repeat press (v1.0.34): double-tap-hold spam and
+    /// swipe-and-hold repeats enqueue on the coalescing pump, not
+    /// sent directly. Rapid repeats overwrite the single pending
+    /// slot, so a hold sends at the TV's pace and stops the instant
+    /// the finger lifts — and a discrete press never waits behind
+    /// a repeat backlog. Discrete presses use `send(_:)` and never
+    /// touch the pump.
+    func sendRepeat(_ command: RemoteCommand) {
+        repeatPump.enqueue(command)
+    }
+
+    /// Drop the pending repeat press, if any. Called on finger lift
+    /// (and on disconnect), so no repeat fires after the hold ends.
+    func cancelRepeats() {
+        repeatPump.cancel()
     }
 
     func send(_ command: RemoteCommand) async {

@@ -853,6 +853,90 @@ final class SwipePadGestureTests: XCTestCase {
         XCTAssertEqual(g.moved(translation: CGSize(width: 5, height: -5), slop: slop), [])
         XCTAssertEqual(g.touchUp(translation: CGSize(width: 5, height: -5), slop: slop), [.enter(haptic: true)])
     }
+
+    // MARK: Mute zone (v1.0.34)
+
+    func testZoneTapHeldBackUntilWindowExpires() {
+        var g = SwipePadGesture()
+        // A zone tap starts no hold timer and sends nothing yet.
+        let down = g.touchDown(inMuteZone: true)
+        XCTAssertEqual(down.outputs, [])
+        XCTAssertFalse(down.startHold)
+        XCTAssertEqual(g.touchUp(translation: still, slop: slop), [])
+        XCTAssertTrue(g.isAwaitingSecondTapZone)
+        // No second tap: the held-back enter stands alone.
+        XCTAssertEqual(g.secondTapWindowExpired(), [.enter(haptic: true)])
+        XCTAssertFalse(g.isAwaitingSecondTapZone)
+    }
+
+    func testZoneDoubleTapMutesAndSendsNoEnter() {
+        var g = SwipePadGesture()
+        let first = g.touchDown(inMuteZone: true)
+        XCTAssertEqual(first.outputs, [])
+        XCTAssertEqual(g.touchUp(translation: still, slop: slop), [])
+        XCTAssertTrue(g.isAwaitingSecondTapZone)
+        let second = g.touchDown(inMuteZone: true)
+        XCTAssertEqual(second.outputs, [])
+        XCTAssertFalse(second.startHold)
+        XCTAssertEqual(g.touchUp(translation: still, slop: slop), [.mute(haptic: true)])
+        XCTAssertFalse(g.isAwaitingSecondTapZone)
+    }
+
+    func testZoneTapThenMiddleTapSendsTwoEnters() {
+        var g = SwipePadGesture()
+        XCTAssertEqual(g.touchDown(inMuteZone: true).outputs, [])
+        XCTAssertEqual(g.touchUp(translation: still, slop: slop), [])
+        // Second tap outside the zone: not a mute — the held-back
+        // enter stands, and this tap is a fresh single.
+        let second = g.touchDown(inMuteZone: false)
+        XCTAssertEqual(second.outputs, [.enter(haptic: true)])
+        XCTAssertTrue(second.startHold)
+        XCTAssertEqual(g.touchUp(translation: still, slop: slop), [.enter(haptic: true)])
+    }
+
+    func testMiddleTapThenZoneTapIsNormalDoubleTap() {
+        var g = SwipePadGesture()
+        XCTAssertTrue(g.touchDown())
+        XCTAssertEqual(g.touchUp(translation: still, slop: slop), [.enter(haptic: true)])
+        // First tap was in the middle: a zone tap now is just the
+        // second tap of a normal double-tap. Muting needs both
+        // taps in the zone.
+        let second = g.touchDown(inMuteZone: true)
+        XCTAssertEqual(second.outputs, [])
+        XCTAssertTrue(second.startHold)
+        XCTAssertEqual(g.touchUp(translation: still, slop: slop), [.enter(haptic: true)])
+        XCTAssertFalse(g.isAwaitingSecondTapZone)
+    }
+
+    func testZoneTapHeldStartsNoHold() {
+        var g = SwipePadGesture()
+        let down = g.touchDown(inMuteZone: true)
+        XCTAssertFalse(down.startHold)
+        // Even at onset, a zone tap never holds the key down.
+        XCTAssertEqual(g.onsetTimerFired(), [])
+        XCTAssertFalse(g.isKeyHeldDown)
+        XCTAssertEqual(g.touchUp(translation: still, slop: slop), [])
+        XCTAssertTrue(g.isAwaitingSecondTapZone)
+    }
+
+    func testSwipeFromZoneStillSwipes() {
+        var g = SwipePadGesture()
+        XCTAssertEqual(g.touchDown(inMuteZone: true).outputs, [])
+        // A swipe starting in the zone is still a swipe.
+        XCTAssertEqual(g.moved(translation: swipeRight, slop: slop), [.right(haptic: true)])
+        XCTAssertTrue(g.isSwiping)
+        XCTAssertEqual(g.touchUp(translation: swipeRight, slop: slop), [])
+    }
+
+    func testZoneDoubleTapHeldStillMutesOnLift() {
+        var g = SwipePadGesture()
+        XCTAssertEqual(g.touchDown(inMuteZone: true).outputs, [])
+        XCTAssertEqual(g.touchUp(translation: still, slop: slop), [])
+        let second = g.touchDown(inMuteZone: true)
+        XCTAssertFalse(second.startHold)
+        XCTAssertEqual(g.onsetTimerFired(), [])
+        XCTAssertEqual(g.touchUp(translation: still, slop: slop), [.mute(haptic: true)])
+    }
 }
 
 /// The coalescing volume pump (v1.0.28): rapid steps collapse into
@@ -965,6 +1049,106 @@ final class VolumePumpTests: XCTestCase {
         pump.enqueue(up: false)
         await waitUntil { sent.count == 2 }
         XCTAssertEqual(sent, [true, false])
+    }
+}
+
+/// The coalescing repeat pump (v1.0.34): rapid repeat presses
+/// collapse into one pending slot plus one in-flight send, so a
+/// hold stops dead the instant the finger lifts.
+@MainActor
+final class RepeatPumpTests: XCTestCase {
+    /// Polls until `condition` is true or the timeout elapses.
+    private func waitUntil(_ condition: @escaping () -> Bool, timeout: TimeInterval = 2.0) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            guard Date() < deadline else { return }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+
+    func testSingleRepeatSendsOnce() async {
+        let pump = RepeatPump()
+        var sent: [RemoteCommand] = []
+        pump.send = { command in sent.append(command) }
+        pump.enqueue(.enter)
+        await waitUntil { sent.count == 1 }
+        XCTAssertEqual(sent, [.enter])
+        XCTAssertFalse(pump.isPumping)
+    }
+
+    func testRapidRepeatsCoalesceToOnePending() async {
+        let pump = RepeatPump()
+        var sent: [RemoteCommand] = []
+        // The first send is slow (throttle): three more repeats
+        // land while it is in flight and must collapse into ONE
+        // pending press — not three queued sends.
+        pump.send = { command in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            sent.append(command)
+        }
+        pump.enqueue(.enter)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        pump.enqueue(.enter)
+        pump.enqueue(.enter)
+        pump.enqueue(.enter)
+        await waitUntil { sent.count == 2 }
+        XCTAssertEqual(sent, [.enter, .enter])
+        XCTAssertFalse(pump.isPumping)
+    }
+
+    func testLatestCommandWins() async {
+        let pump = RepeatPump()
+        var sent: [RemoteCommand] = []
+        pump.send = { command in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            sent.append(command)
+        }
+        pump.enqueue(.enter)
+        // A direction arrives while the enter is in flight: the
+        // pending slot flips to it.
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        pump.enqueue(.up)
+        await waitUntil { sent.count == 2 }
+        XCTAssertEqual(sent, [.enter, .up])
+    }
+
+    func testCancelDropsPendingRepeat() async {
+        let pump = RepeatPump()
+        var sent: [RemoteCommand] = []
+        pump.send = { command in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            sent.append(command)
+        }
+        pump.enqueue(.enter)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        pump.enqueue(.enter) // pending, waiting on the first send
+        pump.cancel() // finger lifted mid-send: the pending dies
+        await waitUntil { sent.count == 1 }
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(sent, [.enter])
+        XCTAssertFalse(pump.isPumping)
+    }
+
+    func testNoRepeatsAfterPumpDrains() async {
+        // The v1.0.34 bug, as a test: hold, release, and the pump
+        // must go quiet — nothing fires after the drain.
+        let pump = RepeatPump()
+        var sent: [RemoteCommand] = []
+        pump.send = { command in
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            sent.append(command)
+        }
+        pump.enqueue(.enter)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        pump.enqueue(.enter)
+        pump.enqueue(.enter)
+        pump.enqueue(.enter)
+        await waitUntil { sent.count == 2 }
+        // Released: wait well past another send cycle and assert
+        // nothing more went out.
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertEqual(sent, [.enter, .enter])
+        XCTAssertFalse(pump.isPumping)
     }
 }
 

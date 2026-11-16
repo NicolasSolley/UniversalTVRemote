@@ -444,7 +444,13 @@ private struct RemoteView: View {
                 }
 
                 // Keyboard / text input, revealed by the keyboard
-                // button in the bottom row.
+                // button in the bottom row — or on its own when the
+                // TV announces a focused text field (v1.0.34 auto
+                // keyboard). Send closes it (v1.0.34): the text is
+                // on the TV, so there is nothing left to type. The
+                // × dismisses without sending — the only way to
+                // close it on a TV where the button hides, and the
+                // escape hatch everywhere else.
                 if showKeyboard, session.capabilities.supportsTextInput {
                     HStack {
                         TextField("Type on the TV…", text: $keyboardText)
@@ -456,10 +462,24 @@ private struct RemoteView: View {
                             let text = keyboardText
                             guard !text.isEmpty else { return }
                             keyboardText = ""
+                            showKeyboard = false
+                            keyboardFocused = false
                             Task { await session.send(.text(text)) }
                         }
                         .buttonStyle(.borderedProminent)
                         .disabled(keyboardText.isEmpty)
+                        Button {
+                            keyboardText = ""
+                            showKeyboard = false
+                            keyboardFocused = false
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.subheadline.bold())
+                                .foregroundStyle(.secondary)
+                                .frame(width: 28, height: 28)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Close keyboard")
                     }
                     .padding(.horizontal)
                     // Focus on appear so the iOS keyboard pops up at
@@ -483,7 +503,7 @@ private struct RemoteView: View {
                 // Navigation: the swipe pad is the one and only
                 // navigation control — no D-pad, no toggle. It sizes
                 // from the layout so the page fits without scrolling.
-                SwipePadView(height: layout.padSize) { send($0, haptic: $1) }
+                SwipePadView(height: layout.padSize, onRepeatCommand: { sendRepeat($0, haptic: $1) }, onCancelRepeats: { session.cancelRepeats() }) { send($0, haptic: $1) }
                     .padding(.horizontal)
 
                 // Back / Home / Exit pill row — icons only, no labels.
@@ -494,23 +514,24 @@ private struct RemoteView: View {
                 }
                 .padding(.horizontal)
 
-                // Bottom row: equal columns on one axis — the
-                // keyboard button and the Mute square. (The volume
-                // rocker is gone in v1.0.23: the iPhone's physical
-                // volume buttons drive the TV volume now. Mute stays
-                // — it's a distinct command the volume buttons can't
-                // do. v1.0.28 removed it for a both-buttons mute;
-                // v1.0.29 puts it back — pressing both buttons at
-                // once was awkward. The mic button is out for now;
-                // the voice code stays dormant behind it. The apps
-                // row is gone in v1.0.18 — its space went to this
-                // row instead.)
-                // Every control sits in a layout-sized cell so they
-                // share top and bottom edges. Icons only — the words
-                // underneath were removed in v1.0.19. Nothing here is
-                // ever a dead button.
-                HStack(alignment: .top, spacing: 16) {
-                    if session.capabilities.supportsTextInput {
+                // Bottom row (v1.0.34): just the keyboard button,
+                // centered — the mute button is gone, mute lives on
+                // the pad's middle-right double-tap now. The row
+                // only exists where the button is needed: on TVs
+                // that announce a focused text field (Android TV,
+                // LG) the keyboard pops up on its own and the
+                // button hides. (The volume rocker is gone in
+                // v1.0.23: the iPhone's physical volume buttons
+                // drive the TV volume now. The mic button is out
+                // for now; the voice code stays dormant behind it.
+                // The apps row is gone in v1.0.18 — its space went
+                // to this row instead.)
+                // The control sits in a layout-sized cell. Icons
+                // only — the words underneath were removed in
+                // v1.0.19. Nothing here is ever a dead button.
+                if session.capabilities.supportsTextInput && !session.capabilities.supportsAutoKeyboard {
+                    HStack(alignment: .top, spacing: 16) {
+                        Spacer()
                         Button { showKeyboard.toggle() } label: {
                             ZStack {
                                 Circle()
@@ -526,26 +547,10 @@ private struct RemoteView: View {
                         .buttonStyle(.plain)
                         .accessibilityLabel("Keyboard")
                         .frame(height: layout.bottomCell)
-                        .frame(maxWidth: .infinity)
+                        Spacer()
                     }
-                    Button { send(.mute) } label: {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 24)
-                                .fill(Color.white.opacity(0.10))
-                            RoundedRectangle(cornerRadius: 24)
-                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                            Image(systemName: "speaker.slash.fill")
-                                .font(.title)
-                                .foregroundStyle(.white)
-                        }
-                        .frame(width: layout.circleSize, height: layout.circleSize)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Mute")
-                    .frame(height: layout.bottomCell)
-                    .frame(maxWidth: .infinity)
+                    .padding(.top, layout.bottomRowTopPadding)
                 }
-                .padding(.top, layout.bottomRowTopPadding)
 
                 // Diagnostic status — capped to a few lines so the page
                 // fits; the full text lives in Settings. Hidden while
@@ -584,6 +589,13 @@ private struct RemoteView: View {
             )
         }
         .task { await session.connect() }
+        .onChange(of: session.tvTextFieldFocused) { focused in
+            // Auto keyboard (v1.0.34): the TV announced a focused
+            // text field, so the keyboard shows itself; focus
+            // leaving hides it again. On Samsung/Roku this never
+            // fires — the button stays the only way in.
+            showKeyboard = focused
+        }
         .onAppear {
             // Hardware volume buttons → TV volume, scoped strictly
             // to this view: start here, stop on disappear (and on
@@ -720,11 +732,19 @@ private struct RemoteView: View {
     /// v1.0.20; the rocker is gone in v1.0.23, so no caller
     /// overrides it now. The hardware volume buttons don't use
     /// this at all — steps go through session.sendVolume (the
-    /// pump). The mute button uses send(.mute) directly, with
-    /// the usual tap buzz.)
+    /// pump). Mute comes from the pad's middle-right double-tap
+    /// (v1.0.34), not a button anymore.)
     private func send(_ command: RemoteCommand, haptic: Bool = true) {
         if haptic { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
         Task { await session.send(command) }
+    }
+
+    /// A pad repeat press (v1.0.34): enqueues on the session's
+    /// coalescing pump instead of spawning a send Task, so repeats
+    /// stop dead on lift. Same buzz rule as send.
+    private func sendRepeat(_ command: RemoteCommand, haptic: Bool = true) {
+        if haptic { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+        session.sendRepeat(command)
     }
 
     /// Wide pill button with an icon only (Back / Home / Exit row).
@@ -771,6 +791,7 @@ struct SwipePadGesture {
         case enter(haptic: Bool)
         case enterDown
         case enterUp
+        case mute(haptic: Bool)
         case up(haptic: Bool), down(haptic: Bool), left(haptic: Bool), right(haptic: Bool)
     }
 
@@ -782,6 +803,14 @@ struct SwipePadGesture {
         case doubleDown
         case doubleSpam
         case swiping
+        /// First tap down inside the mute zone (v1.0.34): no hold
+        /// timer, no enter yet — the window decides.
+        case muteZoneDown
+        /// First tap in the mute zone lifted, waiting to see if a
+        /// second zone tap mutes or the window expires (one enter).
+        case awaitingSecondTapZone
+        /// Second tap down inside the mute zone: lift mutes.
+        case muteZoneDoubleDown
     }
 
     private var state: State = .idle
@@ -800,6 +829,9 @@ struct SwipePadGesture {
     /// True after a quick tap lifted, while a second tap still
     /// counts as a double-tap.
     var isAwaitingSecondTap: Bool { state == .awaitingSecondTap }
+    /// True after a quick tap in the mute zone lifted, while a
+    /// second tap in the zone still counts as a mute.
+    var isAwaitingSecondTapZone: Bool { state == .awaitingSecondTapZone }
     /// True while a swipe is being held down (repeats active).
     var isSwiping: Bool { state == .swiping }
 
@@ -807,15 +839,47 @@ struct SwipePadGesture {
     /// onset timer (a fresh single or double tap); false when this
     /// touch is already a swipe that wandered back inside the slop.
     mutating func touchDown() -> Bool {
+        touchDown(inMuteZone: false).startHold
+    }
+
+    /// Finger down, with the mute-zone flag (v1.0.34). Returns the
+    /// outputs to emit now and whether the view should start the
+    /// hold onset timer. A tap inside the mute zone never starts
+    /// the hold timer — a hold in the zone is not a key hold — and
+    /// its enter is held back until the double-tap window decides:
+    /// a second zone tap mutes, the window expiring leaves one
+    /// enter, and a second tap outside the zone turns the held-back
+    /// enter into half of a normal double-tap. Muting needs both
+    /// taps in the zone: a zone tap after a middle tap is just the
+    /// second tap of a normal double-tap.
+    mutating func touchDown(inMuteZone: Bool) -> (outputs: [Output], startHold: Bool) {
+        if inMuteZone {
+            switch state {
+            case .idle:
+                state = .muteZoneDown
+                return ([], false)
+            case .awaitingSecondTapZone:
+                state = .muteZoneDoubleDown
+                return ([], false)
+            case .awaitingSecondTap:
+                state = .doubleDown
+                return ([], true)
+            default:
+                return ([], false)
+            }
+        }
         switch state {
         case .idle:
             state = .singleDown
-            return true
+            return ([], true)
         case .awaitingSecondTap:
             state = .doubleDown
-            return true
+            return ([], true)
+        case .awaitingSecondTapZone:
+            state = .singleDown
+            return ([.enter(haptic: true)], true)
         default:
-            return false
+            return ([], false)
         }
     }
 
@@ -885,7 +949,10 @@ struct SwipePadGesture {
             let direction = direction(of: translation)
             swipeDirection = direction
             return [.enterUp, direction]
-        case .singleDown, .doubleDown, .doubleSpam:
+        case .singleDown, .doubleDown, .doubleSpam, .muteZoneDown, .muteZoneDoubleDown:
+            // A swipe starting in the mute zone is still a swipe:
+            // the zone only changes what a tap does, and no key
+            // was held down, so there is nothing to release first.
             state = .swiping
             let direction = direction(of: translation)
             swipeDirection = direction
@@ -926,20 +993,44 @@ struct SwipePadGesture {
         case .doubleSpam:
             state = .idle
             return isSwipe ? [direction(of: translation)] : []
+        case .muteZoneDown:
+            // First tap in the zone lifted: hold its enter until
+            // the window decides — a second zone tap mutes, the
+            // window expiring leaves one enter.
+            state = .awaitingSecondTapZone
+            return []
+        case .muteZoneDoubleDown:
+            if isSwipe {
+                state = .idle
+                return [direction(of: translation)]
+            }
+            state = .idle
+            return [.mute(haptic: true)]
         case .swiping:
             state = .idle
             swipeDirection = nil
             swipeRepeatFired = false
             return []
-        case .awaitingSecondTap, .idle:
+        case .awaitingSecondTap, .awaitingSecondTapZone, .idle:
             return []
         }
     }
 
-    /// The double-tap window expired with no second tap: the first
-    /// tap stands alone, and the next tap is a fresh single.
-    mutating func secondTapWindowExpired() {
-        if state == .awaitingSecondTap { state = .idle }
+    /// The double-tap window expired with no second tap. Returns
+    /// the outputs to emit: a zone-first tap's held-back enter
+    /// stands alone; a normal first tap already sent its enter.
+    /// The next tap is a fresh single either way.
+    mutating func secondTapWindowExpired() -> [Output] {
+        switch state {
+        case .awaitingSecondTapZone:
+            state = .idle
+            return [.enter(haptic: true)]
+        case .awaitingSecondTap:
+            state = .idle
+            return []
+        default:
+            return []
+        }
     }
 
     mutating func reset() {
@@ -972,7 +1063,10 @@ struct SwipePadGesture {
 /// 0.3s onset, repeats that same direction every 0.12s until lift;
 /// a quick swipe-and-lift is still exactly one press. Swiping out
 /// of a hold releases the key first, so a key is never left stuck
-/// down.
+/// down. v1.0.34 adds a mute zone: a double-tap on the middle-right
+/// of the pad mutes/unmutes, while the middle keeps its taps and
+/// holds exactly as before — the zone never starts a hold, and a
+/// swipe starting in it is still a swipe.
 /// The height comes from the layout so the pad fits the
 /// non-scrollable page on small phones.
 private struct SwipePadView: View {
@@ -984,10 +1078,29 @@ private struct SwipePadView: View {
     /// because buzzing at repeat rate is faster than the TV moves.
     /// A key release never buzzes.
     var onCommand: (RemoteCommand, Bool) -> Void
+    /// Repeat presses (double-tap-hold spam, swipe-and-hold ticks)
+    /// go through the session's coalescing pump (v1.0.34), not the
+    /// direct send: the pump keeps one pending press and drops it
+    /// on lift, so repeats stop dead the instant the finger lifts
+    /// instead of draining a backlog. Discrete presses never use
+    /// this path.
+    var onRepeatCommand: (RemoteCommand, Bool) -> Void
+    /// Called on finger lift (and when the pad goes away): drops
+    /// the pump's pending repeat press, if any.
+    var onCancelRepeats: () -> Void
 
     @State private var gesture = SwipePadGesture()
     @State private var holdTask: Task<Void, Never>?
     @State private var windowTask: Task<Void, Never>?
+    /// The pad's rendered size, for the mute zone (v1.0.34): the
+    /// zone is a fraction of the pad, so taps are located against
+    /// this, not against fixed points.
+    @State private var padSize: CGSize = .zero
+    /// Press feedback (v1.0.34): while a finger is down the pad
+    /// dips subtly toward it — a small scale plus a faint tilt —
+    /// and springs back on lift.
+    @State private var isPressed = false
+    @State private var pressLocation: CGPoint? = nil
 
     /// Same timing as the volume hold (v1.0.19/20): the hold engages
     /// 0.3s after touch down, then spam repeats one press every
@@ -1000,6 +1113,40 @@ private struct SwipePadView: View {
     /// Finger movement within this box counts as a tap/hold;
     /// beyond it, the gesture is a swipe.
     private static let tapSlop: CGFloat = 14
+    /// Mute zone (v1.0.34): the middle-right of the pad — the right
+    /// third horizontally, the middle half vertically. A double-tap
+    /// with both taps here mutes; the middle stays for taps/holds.
+    private static let muteZoneMinX: CGFloat = 0.67
+    private static let muteZoneMinY: CGFloat = 0.25
+    private static let muteZoneMaxY: CGFloat = 0.75
+
+    /// True when a tap location (in the pad's own coordinates)
+    /// falls inside the mute zone. False until the size is known.
+    private func isMuteZone(_ location: CGPoint) -> Bool {
+        guard padSize.width > 0, padSize.height > 0 else { return false }
+        let x = location.x / padSize.width
+        let y = location.y / padSize.height
+        return x >= Self.muteZoneMinX && y >= Self.muteZoneMinY && y <= Self.muteZoneMaxY
+    }
+
+    /// Tilt toward the finger while pressed (v1.0.34): at most 3°,
+    /// around the axis perpendicular to the offset from center, so
+    /// the pad feels like it dips under the thumb. A dead-center
+    /// press doesn't tilt at all — it only scales.
+    private var tiltAngle: Double {
+        guard isPressed, let loc = pressLocation,
+              padSize.width > 0, padSize.height > 0 else { return 0 }
+        let dx = loc.x / padSize.width - 0.5
+        let dy = loc.y / padSize.height - 0.5
+        return min(1, sqrt(dx * dx + dy * dy) * 2) * 3
+    }
+    private var tiltAxis: (x: CGFloat, y: CGFloat, z: CGFloat) {
+        guard let loc = pressLocation,
+              padSize.width > 0, padSize.height > 0 else { return (x: 0, y: 1, z: 0) }
+        let dx = loc.x / padSize.width - 0.5
+        let dy = loc.y / padSize.height - 0.5
+        return (x: -dy, y: dx, z: 0)
+    }
 
     var body: some View {
         RoundedRectangle(cornerRadius: 24)
@@ -1015,9 +1162,21 @@ private struct SwipePadView: View {
             )
             .frame(maxWidth: .infinity)
             .frame(height: height)
+            .scaleEffect(isPressed ? 0.98 : 1.0)
+            .rotation3DEffect(.degrees(tiltAngle), axis: tiltAxis)
+            .animation(.spring(response: 0.22, dampingFraction: 0.7), value: isPressed)
+            .background(
+                GeometryReader { geo in
+                    Color.clear
+                        .onAppear { padSize = geo.size }
+                        .onChange(of: geo.size) { padSize = geo.size }
+                }
+            )
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
+                        isPressed = true
+                        pressLocation = value.location
                         let t = value.translation
                         if abs(t.width) >= Self.tapSlop || abs(t.height) >= Self.tapSlop {
                             // It's a swipe — release a held key first,
@@ -1034,18 +1193,25 @@ private struct SwipePadView: View {
                             }
                         } else if holdTask == nil {
                             // Finger down and still — the gesture
-                            // decides single vs double-tap; start the
-                            // hold timer when it says this is a tap.
+                            // decides single vs double-tap (and, in
+                            // the mute zone, mute vs enter); start
+                            // the hold timer when it says this is
+                            // a tap that can be held.
                             cancelWindowTask()
-                            if gesture.touchDown() {
+                            let down = gesture.touchDown(inMuteZone: isMuteZone(value.location))
+                            emit(down.outputs)
+                            if down.startHold {
                                 startHoldTask()
                             }
                         }
                     }
                     .onEnded { value in
+                        isPressed = false
+                        pressLocation = nil
                         cancelHoldTask()
+                        onCancelRepeats()
                         emit(gesture.touchUp(translation: value.translation, slop: Self.tapSlop))
-                        if gesture.isAwaitingSecondTap {
+                        if gesture.isAwaitingSecondTap || gesture.isAwaitingSecondTapZone {
                             cancelWindowTask()
                             startWindowTask()
                         }
@@ -1057,7 +1223,10 @@ private struct SwipePadView: View {
                 if gesture.isKeyHeldDown {
                     onCommand(.enterUp, false)
                 }
+                isPressed = false
+                pressLocation = nil
                 cancelHoldTask()
+                onCancelRepeats()
                 cancelWindowTask()
                 gesture.reset()
             }
@@ -1071,10 +1240,31 @@ private struct SwipePadView: View {
             case .enter(let haptic): onCommand(.enter, haptic)
             case .enterDown: onCommand(.enterDown, true)
             case .enterUp: onCommand(.enterUp, false)
+            case .mute(let haptic): onCommand(.mute, haptic)
             case .up(let haptic): onCommand(.up, haptic)
             case .down(let haptic): onCommand(.down, haptic)
             case .left(let haptic): onCommand(.left, haptic)
             case .right(let haptic): onCommand(.right, haptic)
+            }
+        }
+    }
+
+    /// Sends repeat outputs through the pump path (v1.0.34): the
+    /// same outputs as emit, but they enqueue on the session's
+    /// coalescing pump instead of spawning one send Task each, so
+    /// the stream stops dead on lift. Only spam ticks and swipe
+    /// repeats use this — discrete presses always use emit.
+    private func emitRepeat(_ outputs: [SwipePadGesture.Output]) {
+        for output in outputs {
+            switch output {
+            case .enter(let haptic): onRepeatCommand(.enter, haptic)
+            case .enterDown: onRepeatCommand(.enterDown, true)
+            case .enterUp: onRepeatCommand(.enterUp, false)
+            case .mute(let haptic): onRepeatCommand(.mute, haptic)
+            case .up(let haptic): onRepeatCommand(.up, haptic)
+            case .down(let haptic): onRepeatCommand(.down, haptic)
+            case .left(let haptic): onRepeatCommand(.left, haptic)
+            case .right(let haptic): onRepeatCommand(.right, haptic)
             }
         }
     }
@@ -1089,11 +1279,19 @@ private struct SwipePadView: View {
         holdTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: Self.holdOnset)
             guard !Task.isCancelled else { return }
-            emit(gesture.onsetTimerFired())
+            // A held swipe's first repeat is a repeat, not a
+            // discrete press: it goes through the pump so the
+            // stream can be dropped on lift. A hold onset and the
+            // first spam press are discrete and go direct.
+            if gesture.isSwiping {
+                emitRepeat(gesture.onsetTimerFired())
+            } else {
+                emit(gesture.onsetTimerFired())
+            }
             while gesture.isSpamming || gesture.isSwiping, !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: Self.holdInterval)
                 guard !Task.isCancelled else { return }
-                emit(gesture.isSpamming ? gesture.spamTick() : gesture.swipeTick())
+                emitRepeat(gesture.isSpamming ? gesture.spamTick() : gesture.swipeTick())
             }
             holdTask = nil
         }
@@ -1102,25 +1300,27 @@ private struct SwipePadView: View {
     /// Repeat loop for a swipe that started after the hold onset
     /// already fired (swiped out of a key hold): the onset gate
     /// has passed, so repeats tick every interval from here — the
-    /// first one buzzes once, later ones are silent.
+    /// first one buzzes once, later ones are silent. Ticks go
+    /// through the pump (v1.0.34) so they stop dead on lift.
     private func startSwipeRepeatTask() {
         holdTask = Task { @MainActor in
             while gesture.isSwiping, !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: Self.holdInterval)
                 guard !Task.isCancelled else { return }
-                emit(gesture.swipeTick())
+                emitRepeat(gesture.swipeTick())
             }
             holdTask = nil
         }
     }
 
     /// Double-tap window timer: started on a quick tap's lift; if
-    /// no second tap lands, the tap stands alone.
+    /// no second tap lands, the tap stands alone. A zone-first tap
+    /// sends its held-back enter here when the window expires.
     private func startWindowTask() {
         windowTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: Self.doubleTapWindow)
             guard !Task.isCancelled else { return }
-            gesture.secondTapWindowExpired()
+            emit(gesture.secondTapWindowExpired())
         }
     }
 

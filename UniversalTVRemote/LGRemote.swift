@@ -226,6 +226,18 @@ actor LGRemote {
     private var requestId = 0
     /// In-flight ssap requests, keyed by id.
     private var pending: [String: CheckedContinuation<[String: Any], Error>] = [:]
+    /// Live ssap subscriptions, keyed by id (v1.0.34): unlike a
+    /// one-shot request, a subscription's id keeps receiving
+    /// updates, so its handler stays registered until disconnect.
+    private var subscriptions: [String: ([String: Any]) -> Void] = [:]
+    /// Last reported keyboard-focus state (v1.0.34): nil until the
+    /// first subscription payload, so connecting with a field
+    /// already focused still pops the keyboard.
+    private var lastKeyboardFocus: Bool?
+    /// Called when an LG text field gains or loses focus (v1.0.34),
+    /// via the registerRemoteKeyboard subscription. Set by
+    /// RemoteSession after connect.
+    private var onKeyboardFocusChange: ((Bool) -> Void)?
     /// Continuation waiting for the `registered` reply.
     private var registerContinuation: CheckedContinuation<Void, Error>?
     /// Whether the client-key was accepted this session.
@@ -267,6 +279,47 @@ actor LGRemote {
         }
         isRegistered = true
         startPing()
+        // Best effort: report when an LG text field gains or loses
+        // focus, so the keyboard can pop up on its own (v1.0.34).
+        // A failure here must not break the connection — the
+        // keyboard button stays as the fallback.
+        await subscribeToKeyboardFocus()
+    }
+
+    /// Reports when an LG text field gains or loses focus (v1.0.34),
+    /// via the registerRemoteKeyboard subscription. Set once per
+    /// connect by RemoteSession; the callback fires on focus
+    /// changes only.
+    func setKeyboardFocusHandler(_ handler: @escaping (Bool) -> Void) {
+        onKeyboardFocusChange = handler
+    }
+
+    /// Subscribes to the IME's remote-keyboard focus (v1.0.34):
+    /// `registerRemoteKeyboard` answers at once with
+    /// `currentWidget.focus` and pushes updates when focus changes.
+    /// Only LG's own text fields report focus — apps that ignore
+    /// LG's input method don't, the same limit as insertText.
+    private func subscribeToKeyboardFocus() async {
+        requestId += 1
+        let id = "\(requestId)"
+        subscriptions[id] = { [weak self] payload in
+            guard let self else { return }
+            Task { await self.handleKeyboardFocusPayload(payload) }
+        }
+        let message: [String: Any] = [
+            "id": id, "type": "request",
+            "uri": "ssap://com.webos.service.ime/registerRemoteKeyboard",
+            "payload": ["subscribe": true],
+        ]
+        try? await sendJSON(message)
+    }
+
+    /// One keyboard-focus payload: dedup and report transitions.
+    private func handleKeyboardFocusPayload(_ payload: [String: Any]) {
+        let focused = (payload["currentWidget"] as? [String: Any])?["focus"] as? Bool ?? false
+        guard focused != lastKeyboardFocus else { return }
+        lastKeyboardFocus = focused
+        onKeyboardFocusChange?(focused)
     }
 
     /// Disconnects the main and pointer sockets.
@@ -287,6 +340,8 @@ actor LGRemote {
             continuation.resume(throwing: LGError.notConnected)
         }
         pending.removeAll()
+        subscriptions.removeAll()
+        lastKeyboardFocus = nil
         registerContinuation?.resume(throwing: LGError.notConnected)
         registerContinuation = nil
         isRegistered = false
@@ -668,8 +723,15 @@ actor LGRemote {
             registerContinuation = nil
 
         case "response":
-            guard let id = object["id"] as? String,
-                  let continuation = pending.removeValue(forKey: id) else { return }
+            guard let id = object["id"] as? String else { return }
+            // A live subscription keeps its id: route the payload
+            // to its handler and leave the id registered for the
+            // next update (v1.0.34).
+            if let handler = subscriptions[id] {
+                handler(object["payload"] as? [String: Any] ?? [:])
+                return
+            }
+            guard let continuation = pending.removeValue(forKey: id) else { return }
             continuation.resume(returning: object["payload"] as? [String: Any] ?? [:])
 
         case "error":
@@ -677,6 +739,11 @@ actor LGRemote {
                let continuation = pending.removeValue(forKey: id) {
                 let message = object["error"] as? String ?? "The TV reported an error."
                 continuation.resume(throwing: LGError.remoteError(message))
+            } else if let id = object["id"] as? String, subscriptions[id] != nil {
+                // A subscription failed (e.g. the TV doesn't offer
+                // it): drop it quietly. This is not a registration
+                // failure, and the keyboard button stays as fallback.
+                subscriptions.removeValue(forKey: id)
             } else {
                 // An error with no in-flight request is a registration failure.
                 let message = object["error"] as? String ?? ""

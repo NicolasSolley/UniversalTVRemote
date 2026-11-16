@@ -56,6 +56,10 @@ struct ImeCounterTracker {
     private var hasImeCounter = false
     private var hasImeFieldCounter = false
 
+    /// True while the TV has told us a text field is focused
+    /// (nonzero counters) — the auto-keyboard signal (v1.0.34).
+    var hasFocusedField: Bool { hasImeCounter || hasImeFieldCounter }
+
     /// Field 20: the primary source. Assigns unconditionally (a 0
     /// clears a stale counter), and "has" is true only for nonzero —
     /// the reference's `bool(counter)` semantics.
@@ -105,6 +109,11 @@ final class AndroidTVDriver: TVDriver {
     /// ImeCounterTracker. Reset on disconnect: the reference creates
     /// a fresh protocol per connection.
     private var ime = ImeCounterTracker()
+    /// Whether the TV currently has a text field focused, as
+    /// reported by the field-22 show request / field-20 counter
+    /// clear (v1.0.34 auto keyboard). Transitions are reported to
+    /// the delegate; the flag itself is the dedup.
+    private var imeFocused = false
     /// Shown alongside the next code prompt (e.g. after a wrong code forces a fresh one).
     private var nextPairingError: String?
 
@@ -133,6 +142,7 @@ final class AndroidTVDriver: TVDriver {
         pendingKeys = []
         pendingLaunch = nil
         ime = ImeCounterTracker()
+        imeFocused = false
         voiceBeginContinuation?.resume(throwing: VoiceSessionError.notConnected)
         voiceBeginContinuation = nil
         voiceBuffer = Data()
@@ -207,11 +217,17 @@ final class AndroidTVDriver: TVDriver {
             // v1.0.21 only read the app package here and threw the
             // counters away, which is why text never arrived.
             ime.learnFromKeyInject(inject)
+            // A counter-0 inject means the field lost focus (or the
+            // app changed): the auto keyboard hides (v1.0.34).
+            setImeFocus(ime.hasFocusedField)
             return
         } else if let show = msg.message(22) {
             // The focused field announcing its counter when it gains
-            // focus — v1.0.21 had no handler for this at all.
+            // focus — v1.0.21 had no handler for this at all. The
+            // show request itself is the focus signal, whatever the
+            // parsed counters say: the keyboard pops up (v1.0.34).
             ime.learnFromShowRequest(show)
+            setImeFocus(true)
             return
         } else if let edit = msg.message(21) {
             // Fallback only: never overwrites counters learned from
@@ -228,6 +244,15 @@ final class AndroidTVDriver: TVDriver {
             return
         }
         remote?.send(reply)
+    }
+
+    /// Reports a text-field focus transition to the delegate
+    /// (v1.0.34 auto keyboard). Deduped: repeat announcements of
+    /// the same state never re-pop the keyboard.
+    private func setImeFocus(_ focused: Bool) {
+        guard focused != imeFocused else { return }
+        imeFocused = focused
+        delegate?.driver(self, didChangeTextFieldFocus: focused)
     }
 
     private func markConnected() {
