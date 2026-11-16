@@ -1424,13 +1424,16 @@ private struct TrailPoint {
 }
 
 /// The finger trail (v1.0.44, styles in v1.0.46), drawn in the
-/// pad's own coordinates. Glow is the original: a soft wide line
-/// with a bright core, plus a glowing dot under the finger. Line
-/// is a single thin line. Dots is a row of circles that shrink and
-/// fade with age. Off draws nothing. Fades as a whole after lift
-/// (see trailOpacity).
+/// pad's own coordinates. Each touch is its own stroke (v1.0.47):
+/// lifting and touching elsewhere starts a new streak instead of
+/// drawing a connector line across the pad. Glow is a soft wide
+/// line with a faint core, plus a soft dot under the finger. Line
+/// is a single thin faint line. Dots is a row of circles that
+/// shrink and fade with age. Off draws nothing. Fades as a whole
+/// after lift (see trailOpacity). Everything is very faint — just
+/// enough to know the touch registered.
 private struct PadTrailOverlay: View {
-    var points: [TrailPoint]
+    var strokes: [[TrailPoint]]
     var opacity: Double
     var style: TrailStyle
 
@@ -1440,31 +1443,38 @@ private struct PadTrailOverlay: View {
             case .off:
                 EmptyView()
             case .line:
-                if points.count > 1 {
-                    trailPath
-                        .stroke(Color.white.opacity(0.5), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+                ForEach(strokes.indices, id: \.self) { i in
+                    if strokes[i].count > 1 {
+                        trailPath(strokes[i])
+                            .stroke(Color.white.opacity(0.16), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+                    }
                 }
             case .glow:
-                if points.count > 1 {
-                    trailPath
-                        .stroke(Color.white.opacity(0.18), style: StrokeStyle(lineWidth: 12, lineCap: .round, lineJoin: .round))
-                    trailPath
-                        .stroke(Color.white.opacity(0.45), style: StrokeStyle(lineWidth: 3.5, lineCap: .round, lineJoin: .round))
+                ForEach(strokes.indices, id: \.self) { i in
+                    if strokes[i].count > 1 {
+                        trailPath(strokes[i])
+                            .stroke(Color.white.opacity(0.07), style: StrokeStyle(lineWidth: 12, lineCap: .round, lineJoin: .round))
+                        trailPath(strokes[i])
+                            .stroke(Color.white.opacity(0.16), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+                    }
                 }
-                if let last = points.last {
+                if let last = strokes.last?.last {
                     Circle()
-                        .fill(Color.white.opacity(0.9))
-                        .frame(width: 14, height: 14)
-                        .shadow(color: .white.opacity(0.7), radius: 10)
+                        .fill(Color.white.opacity(0.3))
+                        .frame(width: 12, height: 12)
+                        .shadow(color: .white.opacity(0.25), radius: 8)
                         .position(last.point)
                 }
             case .dots:
-                ForEach(points.indices, id: \.self) { i in
-                    let age = Date().timeIntervalSince(points[i].time)
-                    Circle()
-                        .fill(Color.white.opacity(max(0, 0.9 - age)))
-                        .frame(width: dotSize(age), height: dotSize(age))
-                        .position(points[i].point)
+                ForEach(strokes.indices, id: \.self) { i in
+                    ForEach(strokes[i].indices, id: \.self) { j in
+                        let point = strokes[i][j]
+                        let age = Date().timeIntervalSince(point.time)
+                        Circle()
+                            .fill(Color.white.opacity(max(0, 0.35 - age)))
+                            .frame(width: dotSize(age), height: dotSize(age))
+                            .position(point.point)
+                    }
                 }
             }
         }
@@ -1472,12 +1482,12 @@ private struct PadTrailOverlay: View {
         .allowsHitTesting(false)
     }
 
-    /// The path through the recorded points.
-    private var trailPath: Path {
+    /// The path through one stroke's points.
+    private func trailPath(_ stroke: [TrailPoint]) -> Path {
         var path = Path()
-        if let first = points.first {
+        if let first = stroke.first {
             path.move(to: first.point)
-            for point in points.dropFirst() { path.addLine(to: point.point) }
+            for point in stroke.dropFirst() { path.addLine(to: point.point) }
         }
         return path
     }
@@ -1515,17 +1525,20 @@ private struct SwipePadView: View {
     /// zone is a fraction of the pad, so taps are located against
     /// this, not against fixed points.
     @State private var padSize: CGSize = .zero
-    /// Press feedback (v1.0.34, made stronger in v1.0.44 — the
-    /// 3° tilt barely read): while a finger is down the pad dips
-    /// toward it — a small scale plus a tilt — and springs back
-    /// on lift.
+    /// Press feedback (v1.0.34, retuned in v1.0.47 — the tilt does
+    /// the talking now: 8° toward the finger, scale barely 0.99 —
+    /// so a tap reads as a tilt, not a press inward): while a finger
+    /// is down the pad dips toward it and springs back on lift.
     @State private var isPressed = false
     @State private var pressLocation: CGPoint? = nil
-    /// Finger trail (v1.0.44): a short glowing line that follows
-    /// the finger across the pad and fades shortly after lift, so
-    /// the pad feels alive to touch. Points older than 0.8s drop
-    /// off while dragging; on lift the whole trail fades out.
-    @State private var trail: [TrailPoint] = []
+    /// Finger trail (v1.0.44): a short faint line that follows the
+    /// finger across the pad and fades shortly after lift, so the
+    /// pad feels alive to touch. Points older than 0.8s drop off
+    /// while dragging; on lift the whole trail fades out. One
+    /// stroke per touch (v1.0.47): lifting and touching elsewhere
+    /// starts a new streak — the strokes never connect.
+    @State private var trail: [[TrailPoint]] = []
+    @State private var trailStrokeOpen = false
     @State private var trailOpacity: Double = 1
     @State private var trailFadeTask: Task<Void, Never>?
     /// Settings (v1.0.46), read live so the pad re-renders when
@@ -1565,16 +1578,17 @@ private struct SwipePadView: View {
     }
 
     /// Tilt toward the finger while pressed (v1.0.34, stronger in
-    /// v1.0.44): at most 5°, around the axis perpendicular to the
-    /// offset from center, so the pad feels like it dips under the
-    /// thumb. A dead-center press doesn't tilt at all — it only
-    /// scales.
+    /// v1.0.44, stronger again in v1.0.47): at most 8°, around the
+    /// axis perpendicular to the offset from center, so the pad
+    /// feels like a platform tipping toward the thumb — strongest
+    /// at the corners. A dead-center press doesn't tilt at all —
+    /// it only scales (barely, now).
     private var tiltAngle: Double {
         guard isPressed, let loc = pressLocation,
               padSize.width > 0, padSize.height > 0 else { return 0 }
         let dx = loc.x / padSize.width - 0.5
         let dy = loc.y / padSize.height - 0.5
-        return min(1, sqrt(dx * dx + dy * dy) * 2) * 5
+        return min(1, sqrt(dx * dx + dy * dy) * 2) * 8
     }
     private var tiltAxis: (x: CGFloat, y: CGFloat, z: CGFloat) {
         guard let loc = pressLocation,
@@ -1627,14 +1641,20 @@ private struct SwipePadView: View {
             // it tilts and scales with the pad. Clipped to the
             // rounded corners so it never spills outside the pad.
             .overlay(
-                PadTrailOverlay(points: trail, opacity: trailOpacity, style: trailStyle)
+                PadTrailOverlay(strokes: trail, opacity: trailOpacity, style: trailStyle)
                     .clipShape(RoundedRectangle(cornerRadius: 24))
             )
             .frame(maxWidth: .infinity)
             .frame(height: height)
-            .scaleEffect(isPressed ? 0.96 : 1.0)
+            // Press feedback (v1.0.47): the pad tips toward the
+            // finger like a platform — up to 8° at the corners —
+            // and barely shrinks (0.99), so a tap reads as a tilt,
+            // not a press inward. The tilt follows the finger as
+            // it moves, so the animation tracks the press location
+            // too, not just the press state.
+            .scaleEffect(isPressed ? 0.99 : 1.0)
             .rotation3DEffect(.degrees(tiltAngle), axis: tiltAxis)
-            .animation(.spring(response: 0.22, dampingFraction: 0.7), value: isPressed)
+            .animation(.spring(response: 0.2, dampingFraction: 0.75), value: (isPressed, pressLocation))
             .background(
                 GeometryReader { geo in
                     Color.clear.preference(key: PadSizePreferenceKey.self, value: geo.size)
@@ -1678,6 +1698,7 @@ private struct SwipePadView: View {
                     .onEnded { value in
                         isPressed = false
                         pressLocation = nil
+                        trailStrokeOpen = false
                         fadeTrail()
                         cancelHoldTask()
                         onCancelRepeats()
@@ -1696,6 +1717,7 @@ private struct SwipePadView: View {
                 }
                 isPressed = false
                 pressLocation = nil
+                trailStrokeOpen = false
                 trailFadeTask?.cancel()
                 trailFadeTask = nil
                 trail.removeAll()
@@ -1710,17 +1732,29 @@ private struct SwipePadView: View {
     /// Records one finger position for the trail (v1.0.44): points
     /// older than 0.8s drop off, so the tail shortens behind the
     /// finger, and points closer than 4pt to the last one are
-    /// skipped. A new touch cancels any fade in flight.
+    /// skipped. A new touch cancels any fade in flight. Each touch
+    /// is its own stroke (v1.0.47): lifting and touching elsewhere
+    /// starts a new streak — the strokes never connect.
     private func addTrailPoint(_ location: CGPoint) {
         trailFadeTask?.cancel()
         trailFadeTask = nil
         trailOpacity = 1
         let now = Date()
-        trail.removeAll { now.timeIntervalSince($0.time) > 0.8 }
-        if let last = trail.last,
+        // Drop points older than 0.8s, and strokes that emptied.
+        trail = trail.map { stroke in stroke.filter { now.timeIntervalSince($0.time) <= 0.8 } }
+            .filter { !$0.isEmpty }
+        // A new touch — or a stroke that aged out mid-touch —
+        // opens a fresh streak.
+        if !trailStrokeOpen || trail.isEmpty {
+            trail.append([])
+            trailStrokeOpen = true
+        }
+        guard var stroke = trail.last else { return }
+        if let last = stroke.last,
            hypot(location.x - last.point.x, location.y - last.point.y) < 4 { return }
-        trail.append(TrailPoint(point: location, time: now))
-        if trail.count > 60 { trail.removeFirst(trail.count - 60) }
+        stroke.append(TrailPoint(point: location, time: now))
+        if stroke.count > 60 { stroke.removeFirst(stroke.count - 60) }
+        trail[trail.count - 1] = stroke
     }
 
     /// Fades the trail out after lift (v1.0.44): it lingers a beat,
