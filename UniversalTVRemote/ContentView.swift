@@ -244,11 +244,6 @@ private struct DiscoveryListView: View {
 /// neutral.
 private let remoteAccent = Color(red: 0.15, green: 0.45, blue: 1.0)
 
-/// toggle segment, the mic ring, the Play/Pause button, the Devices
-/// pill text. One accent, used sparingly — the rest stays dark and
-/// neutral.
-private let remoteAccent = Color(red: 0.15, green: 0.45, blue: 1.0)
-
 /// Remote, redesigned in v1.0.12. The fork's remote screen is the
 /// design inspiration, not a template: a top bar (Devices pill, TV
 /// name, power), a Connected pill, then the navigation area, a
