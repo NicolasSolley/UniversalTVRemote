@@ -70,16 +70,38 @@ private struct DiscoveryListView: View {
     /// discovery code is untouched.
     @State private var hasCompletedScan = false
 
+    /// Pad-controls reminder sheet (v1.0.35), opened from the ?
+    /// button in the header.
+    @State private var showPadHelp = false
+
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
-                // Header: just the centered title. The X from the
-                // reference is gone (Nick's call, v1.0.9): the device
-                // list is the app's root, so there is no previous
-                // screen for it to return to. No ? button either.
-                Text("Select a TV Device")
-                    .font(.headline.bold())
-                    .foregroundStyle(.white)
+                // Header: centered title, with a ? button at top
+                // right (v1.0.35) that opens the pad-controls
+                // reminder. The X from the reference is gone
+                // (Nick's call, v1.0.9): the device list is the
+                // app's root, so there is no previous screen for
+                // it to return to. The title stays centered — the
+                // button overlays the header row instead of
+                // pushing the title off-center.
+                ZStack {
+                    Text("Select a TV Device")
+                        .font(.headline.bold())
+                        .foregroundStyle(.white)
+                    HStack {
+                        Spacer()
+                        Button { showPadHelp = true } label: {
+                            Image(systemName: "questionmark")
+                                .font(.subheadline.bold())
+                                .foregroundStyle(.white)
+                                .frame(width: 30, height: 30)
+                                .background(Color.white.opacity(0.10), in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Pad controls")
+                    }
+                }
 
                 // One dark card holding the whole TV list.
                 VStack(spacing: 0) {
@@ -119,6 +141,7 @@ private struct DiscoveryListView: View {
         .onChange(of: discovery.isScanning) { scanning in
             if !scanning { hasCompletedScan = true }
         }
+        .sheet(isPresented: $showPadHelp) { PadHelpSheet() }
     }
 
     /// The card's single row while no devices are listed: a looking
@@ -376,6 +399,10 @@ private struct RemoteView: View {
     @StateObject private var hardwareVolume = HardwareVolumeController()
     @Environment(\.scenePhase) private var scenePhase
 
+    /// Pad-controls reminder sheet (v1.0.35), opened from the ?
+    /// button in the top bar.
+    @State private var showPadHelp = false
+
     var body: some View {
         // No ScrollView on the remote (v1.0.15): everything fits on one
         // page. The layout sizes itself from the available height — the
@@ -423,6 +450,7 @@ private struct RemoteView: View {
             hardwareVolume.stop()
             session.disconnect()
         }
+        .sheet(isPresented: $showPadHelp) { PadHelpSheet() }
     }
 
     /// The remote page itself: the VStack of sections, split out
@@ -585,6 +613,15 @@ private struct RemoteView: View {
                 .foregroundStyle(.white)
                 .lineLimit(1)
             Spacer()
+            Button { showPadHelp = true } label: {
+                Image(systemName: "questionmark")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.white)
+                    .frame(width: layout.topBarButton, height: layout.topBarButton)
+                    .background(Color.white.opacity(0.08), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Pad controls")
             Button { send(.power) } label: {
                 Image(systemName: "power")
                     .font(.headline.bold())
@@ -1067,6 +1104,47 @@ struct SwipePadGesture {
             return translation.width > 0 ? .right(haptic: haptic) : .left(haptic: haptic)
         }
         return translation.height > 0 ? .down(haptic: haptic) : .up(haptic: haptic)
+    }
+}
+
+/// Pad controls reminder (v1.0.35): a cheat sheet of what the pad
+/// can do, opened from the ? button on the devices page and the
+/// remote's top bar. Pad gestures only — the other buttons
+/// (Back/Home/Exit, power, keyboard, volume) explain themselves.
+private struct PadHelpSheet: View {
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationView {
+            List {
+                helpRow(gesture: "Tap", action: "Select / OK")
+                helpRow(gesture: "Double-tap", action: "Select twice")
+                helpRow(gesture: "Tap and hold", action: "Hold OK down")
+                helpRow(gesture: "Double-tap and hold", action: "Repeat OK while held")
+                helpRow(gesture: "Swipe", action: "Move up, down, left or right")
+                helpRow(gesture: "Swipe and hold", action: "Keep moving that way while held")
+                helpRow(gesture: "Double-tap right side", action: "Mute")
+            }
+            .navigationTitle("Pad controls")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private func helpRow(gesture: String, action: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(gesture)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+            Text(action)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+        }
     }
 }
 
