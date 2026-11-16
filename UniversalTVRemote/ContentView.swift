@@ -567,11 +567,14 @@ private struct RemoteView: View {
                 // Diagnostic status — capped to a few lines so the page
                 // fits; the full text lives in Settings. Hidden while
                 // the pairing card or keyboard is up (they show the
-                // status themselves). A volume-capture problem (audio
-                // session failed, slider missing — v1.0.26) appends
-                // one line here so a failed field test can say why.
-                if layout.showDiagnostic {
-                    Text(session.status + (hardwareVolume.captureIssue.map { "\n" + $0 } ?? ""))
+                // status themselves). When connected (v1.0.32) the pill
+                // already says so, so the "Connected to …" line is
+                // dropped — only a volume-capture problem still shows
+                // down here. A volume-capture problem (audio session
+                // failed, slider missing — v1.0.26) appends one line
+                // here so a failed field test can say why.
+                if layout.showDiagnostic, let diagnosticText {
+                    Text(diagnosticText)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -791,6 +794,19 @@ private struct RemoteView: View {
             return session.awaitingTVPrompt ? "Check your TV" : "Connecting…"
         }
         return "Not connected"
+    }
+
+    /// Footer status text, or nil when there's nothing to say:
+    /// connected with no capture problem is already covered by
+    /// the pill (v1.0.32 — Nick: the "Connected to …" line at
+    /// the bottom just repeated the pill). Unconnected states
+    /// keep the full status (it carries the error detail the
+    /// pill can't), and a capture problem always shows.
+    private var diagnosticText: String? {
+        if session.isConnected {
+            return hardwareVolume.captureIssue
+        }
+        return session.status + (hardwareVolume.captureIssue.map { "\n" + $0 } ?? "")
     }
 
     /// True while the session is actively connecting — busy in any
