@@ -1115,7 +1115,6 @@ private struct PadHelpSheet: View {
             ScrollView {
                 VStack(spacing: 12) {
                     helpCard(icon: "touchid", tint: .blue, title: "Tap", subtitle: "Select / OK")
-                    helpCard(icon: "bolt.fill", tint: .purple, title: "Double-tap", subtitle: "Select twice")
                     helpCard(icon: "hand.raised.fill", tint: .yellow, title: "Tap + hold", subtitle: "Hold OK down")
                     helpCard(icon: "repeat", tint: .green, title: "Double-tap + hold", subtitle: "Repeat OK")
                     helpCard(icon: "arrow.up.and.down.and.arrow.left.and.right", tint: .cyan, title: "Swipe", subtitle: "Move that way")
@@ -1135,8 +1134,9 @@ private struct PadHelpSheet: View {
         .preferredColorScheme(.dark)
     }
 
-    /// One gesture card: colored icon tile, name + what it does,
-    /// chevron.
+    /// One gesture card: colored icon tile, name + what it does.
+    /// No chevron (v1.0.42): the rows aren't tappable, and the
+    /// arrow made them look clickable.
     private func helpCard(icon: String, tint: Color, title: String, subtitle: String) -> some View {
         HStack(spacing: 14) {
             Image(systemName: icon)
@@ -1153,9 +1153,6 @@ private struct PadHelpSheet: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Image(systemName: "chevron.right")
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
