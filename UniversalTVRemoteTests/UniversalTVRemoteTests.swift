@@ -653,6 +653,54 @@ final class HardwareVolumeDirectionTests: XCTestCase {
     }
 }
 
+/// Volume step tracking (v1.0.26): the pure tracker behind the
+/// outputVolume KVO — lastVolume always holds the phone's real
+/// volume, and the anchor reset only re-bases it when the reset
+/// actually moved the slider.
+final class VolumeStepTrackerTests: XCTestCase {
+    func testFirstPressAfterFailedAnchorReadsRealDirection() {
+        // The v1.0.23 bug: the phone is at max (1.0) and the anchor
+        // never landed — pressing down must read DOWN, not up (the
+        // old code measured against a phantom 0.5 anchor).
+        var tracker = VolumeStepTracker(startingVolume: 1.0)
+        XCTAssertEqual(tracker.step(to: 0.9375, resetSucceeded: false), Optional(false))
+        XCTAssertEqual(tracker.lastVolume, 0.9375)
+    }
+
+    func testStepUpFromRealVolume() {
+        var tracker = VolumeStepTracker(startingVolume: 0.25)
+        XCTAssertEqual(tracker.step(to: 0.3125, resetSucceeded: false), Optional(true))
+        XCTAssertEqual(tracker.lastVolume, 0.3125)
+    }
+
+    func testSuccessfulResetRebasesToAnchor() {
+        var tracker = VolumeStepTracker(startingVolume: 0.25)
+        XCTAssertEqual(tracker.step(to: 0.3125, resetSucceeded: true), Optional(true))
+        XCTAssertEqual(tracker.lastVolume, 0.5)
+        // The next press is measured from the anchor.
+        XCTAssertEqual(tracker.step(to: 0.4375, resetSucceeded: true), Optional(false))
+    }
+
+    func testFailedResetKeepsRealVolume() {
+        var tracker = VolumeStepTracker(startingVolume: 0.25)
+        XCTAssertEqual(tracker.step(to: 0.3125, resetSucceeded: false), Optional(true))
+        XCTAssertEqual(tracker.lastVolume, 0.3125)
+        XCTAssertEqual(tracker.step(to: 0.25, resetSucceeded: false), Optional(false))
+    }
+
+    func testResetEchoIsIgnored() {
+        var tracker = VolumeStepTracker(startingVolume: 0.5)
+        tracker.noteAnchorApplied()
+        XCTAssertNil(tracker.step(to: 0.5, resetSucceeded: true))
+    }
+
+    func testAnchorAppliedRebasesTracker() {
+        var tracker = VolumeStepTracker(startingVolume: 0.9)
+        tracker.noteAnchorApplied()
+        XCTAssertEqual(tracker.lastVolume, 0.5)
+    }
+}
+
 /// Swipe pad gesture decisions (v1.0.25): the pure state machine
 /// behind SwipePadView — tap, single-tap-hold, double-tap-hold
 /// spam, the double-tap window, and a swipe cancelling a hold.

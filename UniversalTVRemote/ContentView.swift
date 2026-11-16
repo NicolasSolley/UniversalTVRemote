@@ -358,11 +358,15 @@ private struct RemoteView: View {
     @State private var showKeyboard = false
     @FocusState private var keyboardFocused: Bool
     @FocusState private var pairingCodeFocused: Bool
-    /// Hardware volume buttons drive the TV volume (v1.0.23):
-    /// the controller watches the iPhone's outputVolume while
-    /// this view is up and turns each press into a .volumeUp /
-    /// .volumeDown through the same session send path the rocker
-    /// used — no haptics, the button press itself is the feedback.
+    /// Hardware volume buttons drive the TV volume (v1.0.23,
+    /// fixed in v1.0.26): the controller watches the iPhone's
+    /// outputVolume while this view is up and turns each press into
+    /// a .volumeUp / .volumeDown through the same session send path
+    /// the rocker used — no haptics, the button press itself is the
+    /// feedback. v1.0.26: the anchor is verified, not assumed
+    /// (lastVolume always tracks the phone's real volume), session
+    /// activation is retried, and a capture failure shows in the
+    /// diagnostic line instead of vanishing.
     @StateObject private var hardwareVolume = HardwareVolumeController()
     @Environment(\.scenePhase) private var scenePhase
 
@@ -537,9 +541,11 @@ private struct RemoteView: View {
                 // Diagnostic status — capped to a few lines so the page
                 // fits; the full text lives in Settings. Hidden while
                 // the pairing card or keyboard is up (they show the
-                // status themselves).
+                // status themselves). A volume-capture problem (audio
+                // session failed, slider missing — v1.0.26) appends
+                // one line here so a failed field test can say why.
                 if layout.showDiagnostic {
-                    Text(session.status)
+                    Text(session.status + (hardwareVolume.captureIssue.map { "\n" + $0 } ?? ""))
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -551,10 +557,18 @@ private struct RemoteView: View {
             .frame(maxWidth: .infinity)
             // The hidden MPVolumeView must sit in the hierarchy to
             // suppress the system volume HUD while the remote is up.
+            // Real-sized (200×44, v1.0.26) — MPVolumeView only
+            // creates its slider when laid out at a real size, and
+            // the view reports when it is in the hierarchy so the
+            // anchor can be applied for real. Still near-invisible
+            // and touch-disabled, in the background so it takes no
+            // layout space and can never swallow pad input.
             .background(
-                HiddenVolumeView(volumeView: hardwareVolume.volumeView)
-                    .frame(width: 1, height: 1)
-                    .opacity(0.01)
+                HiddenVolumeView(volumeView: hardwareVolume.volumeView) {
+                    hardwareVolume.volumeViewDidAppear()
+                }
+                .frame(width: 200, height: 44)
+                .opacity(0.01)
             )
         }
         .task { await session.connect() }
