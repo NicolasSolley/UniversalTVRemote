@@ -364,8 +364,14 @@ private struct RemoteLayout {
         // now, so it takes the space the old toggle used to take.
         // v1.0.23 raises the cap 300 → 320: the rocker is gone, so the
         // freed space goes to the pad on tall phones.
+        // v1.0.41 raised it to 560 and the pad got way too tall;
+        // v1.0.43 put it back to 320. v1.0.45 splits the difference
+        // at 440 — longer than the old pad, but nowhere near the
+        // giant one. On an iPhone 15 Plus the pad lands at ~436
+        // (the available space binds first), so the page fills up
+        // with no dead space at the bottom.
         let floor: CGFloat = pairingShown ? 80 : (keyboardShown ? 60 : 100)
-        let padSize = min(320, max(floor, h - fixed - gaps))
+        let padSize = min(440, max(floor, h - fixed - gaps))
 
         return RemoteLayout(gap: gap, topPadding: topPadding, topBarButton: topBarButton,
                             pairingCardPadding: pairingCardPadding, pairingCardSpacing: pairingCardSpacing,
