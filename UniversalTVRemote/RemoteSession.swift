@@ -139,6 +139,11 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
     private let voiceCapture = VoiceCapture()
     /// Session id of the utterance in progress, if any.
     private var voiceSessionId: Int?
+    /// Hardware volume steps funnel through one coalescing pump
+    /// (v1.0.28) instead of spawning one Task per step — a hold
+    /// stops the instant the finger lifts and never blocks other
+    /// keys behind a throttle backlog. Wired in init.
+    private let volumePump = VolumePump()
     /// Audio chunks flow capture -> continuation -> pump -> TV, in
     /// order: the AsyncStream preserves chunk order, so speech cannot
     /// arrive scrambled.
@@ -149,6 +154,13 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
         self.device = device
         self.capabilities = RemoteCapabilities.forBrand(device.brand)
         self.lg = LGRemote(host: device.host ?? "")
+        // The pump's send is one volume step through the normal
+        // send path (per-brand throttle included). Weak capture:
+        // the pump is owned by the session, so a strong capture
+        // would be a retain cycle.
+        volumePump.send = { [weak self] up in
+            _ = await self?.send(up ? .volumeUp : .volumeDown)
+        }
     }
 
     var supportsControl: Bool { device.brand.supportsControl }
@@ -230,6 +242,7 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
 
     func disconnect() {
         stopVoiceCapture()
+        volumePump.cancel()
         awaitingPairingCode = false
         pairingError = nil
         RokuRemote.resetQueue()
@@ -437,6 +450,16 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
     }
 
     // MARK: - Commands
+
+    /// One hardware volume step (v1.0.28): enqueued on the
+    /// coalescing pump, not sent directly. Rapid steps overwrite
+    /// the single pending slot, so a hold sends at the TV's pace
+    /// and stops the instant the finger lifts — and a pad tap
+    /// waits behind at most one volume send, never a backlog.
+    /// Non-volume commands use `send(_:)` and never touch the pump.
+    func sendVolume(up: Bool) {
+        volumePump.enqueue(up: up)
+    }
 
     func send(_ command: RemoteCommand) async {
         guard supportsControl, let host = device.host else { return }

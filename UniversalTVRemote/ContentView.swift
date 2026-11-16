@@ -247,7 +247,7 @@ private let remoteAccent = Color(red: 0.15, green: 0.45, blue: 1.0)
 /// Remote, redesigned in v1.0.12. The fork's remote screen is the
 /// design inspiration, not a template: a top bar (Devices pill, TV
 /// name, power), a Connected pill, then the navigation area, a
-/// Back/Home/Exit pill row, and a bottom row (keyboard, Mute), with
+/// Back/Home/Exit pill row, and a bottom row (keyboard), with
 /// the diagnostic status text below. Dark with a blue accent. No ads,
 /// no promos, no cast button, no tab bar.
 /// What stays ours: the mic is hold-to-talk and Android TV only.
@@ -298,10 +298,12 @@ private struct RemoteLayout {
         // rocker was way too big and crowded the pills above it),
         // and v1.0.23 removes the rocker entirely: the iPhone's
         // physical volume buttons drive the TV volume now, so the
-        // bottom row is just two circles (keyboard, Mute) and the
-        // row shrinks again. While the pairing card is up the bottom
-        // row stays compact — the card is the focus then, and the
-        // tall row would overflow short screens.
+        // bottom row is just the keyboard circle, and the row
+        // shrinks again. v1.0.28 removes the mute button too:
+        // pressing both volume buttons at once toggles mute.
+        // While the pairing card is up the bottom row stays compact
+        // — the card is the focus then, and the tall row would
+        // overflow short screens.
         let bottomCell: CGFloat = pairingShown ? (extraCompact ? 90 : 110)
             : (extraCompact ? 120 : (compact ? 132 : 144))
         let circleSize = min(112, bottomCell * 0.55)
@@ -361,12 +363,15 @@ private struct RemoteView: View {
     /// Hardware volume buttons drive the TV volume (v1.0.23,
     /// fixed in v1.0.26): the controller watches the iPhone's
     /// outputVolume while this view is up and turns each press into
-    /// a .volumeUp / .volumeDown through the same session send path
-    /// the rocker used — no haptics, the button press itself is the
+    /// a .volumeUp / .volumeDown through the session's coalescing
+    /// pump (v1.0.28) — no haptics, the button press itself is the
     /// feedback. v1.0.26: the anchor is verified, not assumed
     /// (lastVolume always tracks the phone's real volume), session
     /// activation is retried, and a capture failure shows in the
-    /// diagnostic line instead of vanishing.
+    /// diagnostic line instead of vanishing. v1.0.28: pressing both
+    /// buttons at once toggles mute, and a hold stops the instant
+    /// the finger lifts (the pump drops the pending step instead of
+    /// draining a backlog).
     @StateObject private var hardwareVolume = HardwareVolumeController()
     @Environment(\.scenePhase) private var scenePhase
 
@@ -488,14 +493,15 @@ private struct RemoteView: View {
                 }
                 .padding(.horizontal)
 
-                // Bottom row: equal columns on one axis — the
-                // keyboard button and the Mute square. (The volume
+                // Bottom row: the keyboard button only (v1.0.28).
+                // The mute button is gone: pressing both physical
+                // volume buttons at once toggles mute now, so the
+                // row is just the one circle, centered. (The volume
                 // rocker is gone in v1.0.23: the iPhone's physical
-                // volume buttons drive the TV volume now. Mute stays
-                // — it's a distinct command the volume buttons can't
-                // do. The mic button is out for now; the voice code
-                // stays dormant behind it. The apps row is gone in
-                // v1.0.18 — its space went to this row instead.)
+                // volume buttons drive the TV volume. The mic button
+                // is out for now; the voice code stays dormant behind
+                // it. The apps row is gone in v1.0.18 — its space went
+                // to this row instead.)
                 // Every control sits in a layout-sized cell so they
                 // share top and bottom edges. Icons only — the words
                 // underneath were removed in v1.0.19. Nothing here is
@@ -519,22 +525,6 @@ private struct RemoteView: View {
                         .frame(height: layout.bottomCell)
                         .frame(maxWidth: .infinity)
                     }
-                    Button { send(.mute) } label: {
-                        ZStack {
-                            RoundedRectangle(cornerRadius: 24)
-                                .fill(Color.white.opacity(0.10))
-                            RoundedRectangle(cornerRadius: 24)
-                                .stroke(Color.white.opacity(0.08), lineWidth: 1)
-                            Image(systemName: "speaker.slash.fill")
-                                .font(.title)
-                                .foregroundStyle(.white)
-                        }
-                        .frame(width: layout.circleSize, height: layout.circleSize)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Mute")
-                    .frame(height: layout.bottomCell)
-                    .frame(maxWidth: .infinity)
                 }
                 .padding(.top, layout.bottomRowTopPadding)
 
@@ -575,13 +565,19 @@ private struct RemoteView: View {
         .onAppear {
             // Hardware volume buttons → TV volume, scoped strictly
             // to this view: start here, stop on disappear (and on
-            // backgrounding, below). The step goes through the
-            // session send path, so the Samsung 200 ms throttle,
-            // the Android TV direct path, and the per-brand behavior
-            // all apply unchanged. No haptic — the button press
-            // itself and the TV's volume change are the feedback.
+            // backgrounding, below). Steps go through the session's
+            // coalescing pump (v1.0.28), so a hold stops the instant
+            // the finger lifts and never blocks other keys — no
+            // haptic, the button press itself and the TV's volume
+            // change are the feedback. Both buttons at once toggles
+            // mute instead (v1.0.28): one light buzz confirms the
+            // toggle, since a muted TV doesn't always show it.
             hardwareVolume.onStep = { [session] up in
-                Task { await session.send(up ? .volumeUp : .volumeDown) }
+                session.sendVolume(up: up)
+            }
+            hardwareVolume.onBothButtons = { [session] in
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                Task { await session.send(.mute) }
             }
             hardwareVolume.start()
         }
@@ -689,7 +685,9 @@ private struct RemoteView: View {
     /// volume rocker used to pass false for repeat steps of a hold,
     /// v1.0.20; the rocker is gone in v1.0.23, so no caller
     /// overrides it now. The hardware volume buttons don't use
-    /// this at all — they call session.send directly, no haptic.)
+    /// this at all — steps go through session.sendVolume (the
+    /// pump), and the both-buttons mute goes through
+    /// session.send(.mute) directly with its own buzz.)
     private func send(_ command: RemoteCommand, haptic: Bool = true) {
         if haptic { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
         Task { await session.send(command) }

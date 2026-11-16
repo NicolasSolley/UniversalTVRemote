@@ -854,3 +854,196 @@ final class SwipePadGestureTests: XCTestCase {
         XCTAssertEqual(g.touchUp(translation: CGSize(width: 5, height: -5), slop: slop), [.enter(haptic: true)])
     }
 }
+
+/// Both-buttons mute detection (v1.0.28): the pure detector behind
+/// the outputVolume KVO — a near-simultaneous opposite-direction
+/// pair is a mute toggle, everything else is a plain volume step.
+final class BothVolumeButtonsDetectorTests: XCTestCase {
+    private let t0 = Date()
+
+    private func at(_ offset: TimeInterval) -> Date { t0.addingTimeInterval(offset) }
+
+    func testSingleStepPassesThrough() {
+        var d = BothVolumeButtonsDetector()
+        XCTAssertEqual(d.step(up: true, at: at(0)), .step(true))
+        XCTAssertEqual(d.step(up: false, at: at(1)), .step(false))
+    }
+
+    func testOppositePairWithinWindowTogglesMute() {
+        var d = BothVolumeButtonsDetector()
+        // The first step of the pair still goes out as volume…
+        XCTAssertEqual(d.step(up: true, at: at(0)), .step(true))
+        // …the second, opposite step inside the window is the mute.
+        XCTAssertEqual(d.step(up: false, at: at(0.05)), .mute)
+    }
+
+    func testOppositePairInEitherOrderTogglesMute() {
+        var d = BothVolumeButtonsDetector()
+        XCTAssertEqual(d.step(up: false, at: at(0)), .step(false))
+        XCTAssertEqual(d.step(up: true, at: at(0.1)), .mute)
+    }
+
+    func testOppositePairOutsideWindowIsTwoSteps() {
+        var d = BothVolumeButtonsDetector()
+        XCTAssertEqual(d.step(up: true, at: at(0)), .step(true))
+        // 0.5 s later is a fresh press, not a both-press.
+        XCTAssertEqual(d.step(up: false, at: at(0.5)), .step(false))
+    }
+
+    func testSameDirectionPairIsTwoSteps() {
+        var d = BothVolumeButtonsDetector()
+        XCTAssertEqual(d.step(up: true, at: at(0)), .step(true))
+        XCTAssertEqual(d.step(up: true, at: at(0.05)), .step(true))
+    }
+
+    func testHoldingBothButtonsTogglesExactlyOnce() {
+        var d = BothVolumeButtonsDetector()
+        // A both-press held for 2 s: steps alternate rapidly the
+        // whole time. Exactly one mute, at the first pair — the
+        // hold must not toggle mute on, off, on…
+        var events: [VolumeButtonEvent] = []
+        var time: TimeInterval = 0
+        var up = true
+        for _ in 0..<20 {
+            events.append(d.step(up: up, at: at(time)))
+            up.toggle()
+            time += 0.1
+        }
+        XCTAssertEqual(events.filter { $0 == .mute }.count, 1)
+        XCTAssertEqual(events.first, .step(true))
+        XCTAssertEqual(events[1], .mute)
+    }
+
+    func testPairAfterReleaseTogglesAgain() {
+        var d = BothVolumeButtonsDetector()
+        XCTAssertEqual(d.step(up: true, at: at(0)), .step(true))
+        XCTAssertEqual(d.step(up: false, at: at(0.05)), .mute)
+        // The stream goes quiet for over the release gap, then a
+        // fresh both-press: it must toggle again.
+        XCTAssertEqual(d.step(up: true, at: at(1.0)), .step(true))
+        XCTAssertEqual(d.step(up: false, at: at(1.05)), .mute)
+    }
+
+    func testResetClearsPairState() {
+        var d = BothVolumeButtonsDetector()
+        XCTAssertEqual(d.step(up: true, at: at(0)), .step(true))
+        XCTAssertEqual(d.step(up: false, at: at(0.05)), .mute)
+        d.reset()
+        // After a reset the next opposite pair is a fresh both-press.
+        XCTAssertEqual(d.step(up: false, at: at(0.1)), .step(false))
+        XCTAssertEqual(d.step(up: true, at: at(0.15)), .mute)
+    }
+}
+
+/// The coalescing volume pump (v1.0.28): rapid steps collapse into
+/// one pending slot plus one in-flight send, so a hold stops the
+/// instant the finger lifts and never blocks other keys.
+@MainActor
+final class VolumePumpTests: XCTestCase {
+    /// Polls until `condition` is true or the timeout elapses.
+    private func waitUntil(_ condition: @escaping () -> Bool, timeout: TimeInterval = 2.0) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            guard Date() < deadline else { return }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+
+    func testSingleStepSendsOnce() async {
+        let pump = VolumePump()
+        var sent: [Bool] = []
+        pump.send = { up in sent.append(up) }
+        pump.enqueue(up: true)
+        await waitUntil { sent.count == 1 }
+        XCTAssertEqual(sent, [true])
+        XCTAssertFalse(pump.isPumping)
+    }
+
+    func testRapidStepsCoalesceToOnePending() async {
+        let pump = VolumePump()
+        var sent: [Bool] = []
+        // The first send is slow (throttle): three more steps land
+        // while it is in flight and must collapse into ONE pending
+        // step — not three queued sends.
+        pump.send = { up in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            sent.append(up)
+        }
+        pump.enqueue(up: true)
+        // Let the first send start before piling on, so the later
+        // steps genuinely arrive mid-send (a synchronous burst
+        // would coalesce into the first send's own slot).
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        pump.enqueue(up: true)
+        pump.enqueue(up: true)
+        pump.enqueue(up: true)
+        await waitUntil { sent.count == 2 }
+        XCTAssertEqual(sent, [true, true])
+        XCTAssertFalse(pump.isPumping)
+    }
+
+    func testLatestDirectionWins() async {
+        let pump = VolumePump()
+        var sent: [Bool] = []
+        pump.send = { up in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            sent.append(up)
+        }
+        pump.enqueue(up: true)
+        // A down step arrives while the up send is in flight: the
+        // pending slot flips to down.
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        pump.enqueue(up: false)
+        await waitUntil { sent.count == 2 }
+        XCTAssertEqual(sent, [true, false])
+    }
+
+    func testNoSendsAfterPumpDrains() async {
+        // The v1.0.28 bug, as a test: hold, release, and the pump
+        // must go quiet — nothing fires after the drain.
+        let pump = VolumePump()
+        var sent: [Bool] = []
+        pump.send = { up in
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            sent.append(up)
+        }
+        pump.enqueue(up: true)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        pump.enqueue(up: true)
+        pump.enqueue(up: true)
+        await waitUntil { sent.count == 2 }
+        // Released: wait well past another send cycle and assert
+        // nothing more went out.
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        XCTAssertEqual(sent, [true, true])
+        XCTAssertFalse(pump.isPumping)
+    }
+
+    func testCancelDropsPendingStep() async {
+        let pump = VolumePump()
+        var sent: [Bool] = []
+        pump.send = { up in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            sent.append(up)
+        }
+        pump.enqueue(up: true)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        pump.enqueue(up: true) // pending, waiting on the first send
+        pump.cancel() // disconnect mid-send: the pending step dies
+        await waitUntil { sent.count == 1 }
+        try? await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(sent, [true])
+        XCTAssertFalse(pump.isPumping)
+    }
+
+    func testSequentialStepsEachSend() async {
+        let pump = VolumePump()
+        var sent: [Bool] = []
+        pump.send = { up in sent.append(up) }
+        pump.enqueue(up: true)
+        await waitUntil { sent.count == 1 }
+        pump.enqueue(up: false)
+        await waitUntil { sent.count == 2 }
+        XCTAssertEqual(sent, [true, false])
+    }
+}
