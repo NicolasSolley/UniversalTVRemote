@@ -400,10 +400,6 @@ private struct RemoteView: View {
     @StateObject private var hardwareVolume = HardwareVolumeController()
     @Environment(\.scenePhase) private var scenePhase
 
-    /// Pad-controls reminder sheet (v1.0.35), opened from the ?
-    /// button in the top bar.
-    @State private var showPadHelp = false
-
     var body: some View {
         // No ScrollView on the remote (v1.0.15): everything fits on one
         // page. The layout sizes itself from the available height — the
@@ -451,7 +447,6 @@ private struct RemoteView: View {
             hardwareVolume.stop()
             session.disconnect()
         }
-        .sheet(isPresented: $showPadHelp) { PadHelpSheet() }
     }
 
     /// The remote page itself: the VStack of sections, split out
@@ -614,15 +609,9 @@ private struct RemoteView: View {
                 .foregroundStyle(.white)
                 .lineLimit(1)
             Spacer()
-            Button { showPadHelp = true } label: {
-                Image(systemName: "questionmark")
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.white)
-                    .frame(width: layout.topBarButton, height: layout.topBarButton)
-                    .background(Color.white.opacity(0.08), in: Circle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Pad controls")
+            // No ? button here (v1.0.44): the pad-controls sheet
+            // opens only from the devices page — the remote's top
+            // bar is just the TV name and power.
             Button { send(.power) } label: {
                 Image(systemName: "power")
                     .font(.headline.bold())
@@ -1201,6 +1190,47 @@ private struct PadSizePreferenceKey: PreferenceKey {
 /// swipe starting in it is still a swipe.
 /// The height comes from the layout so the pad fits the
 /// non-scrollable page on small phones.
+/// One finger position on the trail (v1.0.44): where the finger
+/// was, and when — the trail drops points older than 0.8s.
+private struct TrailPoint {
+    var point: CGPoint
+    var time: Date
+}
+
+/// The finger trail (v1.0.44), drawn in the pad's own coordinates:
+/// a soft wide line with a bright core, plus a glowing dot under
+/// the finger. Fades as a whole after lift (see trailOpacity).
+private struct PadTrailOverlay: View {
+    var points: [CGPoint]
+    var opacity: Double
+
+    var body: some View {
+        ZStack {
+            if points.count > 1 {
+                Path { path in
+                    path.move(to: points[0])
+                    for point in points.dropFirst() { path.addLine(to: point) }
+                }
+                .stroke(Color.white.opacity(0.18), style: StrokeStyle(lineWidth: 12, lineCap: .round, lineJoin: .round))
+                Path { path in
+                    path.move(to: points[0])
+                    for point in points.dropFirst() { path.addLine(to: point) }
+                }
+                .stroke(Color.white.opacity(0.45), style: StrokeStyle(lineWidth: 3.5, lineCap: .round, lineJoin: .round))
+            }
+            if let last = points.last {
+                Circle()
+                    .fill(Color.white.opacity(0.9))
+                    .frame(width: 14, height: 14)
+                    .shadow(color: .white.opacity(0.7), radius: 10)
+                    .position(last)
+            }
+        }
+        .opacity(opacity)
+        .allowsHitTesting(false)
+    }
+}
+
 private struct SwipePadView: View {
     var height: CGFloat
     /// Second parameter: whether the command should buzz. A tap
@@ -1228,11 +1258,19 @@ private struct SwipePadView: View {
     /// zone is a fraction of the pad, so taps are located against
     /// this, not against fixed points.
     @State private var padSize: CGSize = .zero
-    /// Press feedback (v1.0.34): while a finger is down the pad
-    /// dips subtly toward it — a small scale plus a faint tilt —
-    /// and springs back on lift.
+    /// Press feedback (v1.0.34, made stronger in v1.0.44 — the
+    /// 3° tilt barely read): while a finger is down the pad dips
+    /// toward it — a small scale plus a tilt — and springs back
+    /// on lift.
     @State private var isPressed = false
     @State private var pressLocation: CGPoint? = nil
+    /// Finger trail (v1.0.44): a short glowing line that follows
+    /// the finger across the pad and fades shortly after lift, so
+    /// the pad feels alive to touch. Points older than 0.8s drop
+    /// off while dragging; on lift the whole trail fades out.
+    @State private var trail: [TrailPoint] = []
+    @State private var trailOpacity: Double = 1
+    @State private var trailFadeTask: Task<Void, Never>?
 
     /// Same timing as the volume hold (v1.0.19/20): the hold engages
     /// 0.3s after touch down, then spam repeats one press every
@@ -1261,16 +1299,17 @@ private struct SwipePadView: View {
         return x >= Self.muteZoneMinX && y >= Self.muteZoneMinY && y <= Self.muteZoneMaxY
     }
 
-    /// Tilt toward the finger while pressed (v1.0.34): at most 3°,
-    /// around the axis perpendicular to the offset from center, so
-    /// the pad feels like it dips under the thumb. A dead-center
-    /// press doesn't tilt at all — it only scales.
+    /// Tilt toward the finger while pressed (v1.0.34, stronger in
+    /// v1.0.44): at most 5°, around the axis perpendicular to the
+    /// offset from center, so the pad feels like it dips under the
+    /// thumb. A dead-center press doesn't tilt at all — it only
+    /// scales.
     private var tiltAngle: Double {
         guard isPressed, let loc = pressLocation,
               padSize.width > 0, padSize.height > 0 else { return 0 }
         let dx = loc.x / padSize.width - 0.5
         let dy = loc.y / padSize.height - 0.5
-        return min(1, sqrt(dx * dx + dy * dy) * 2) * 3
+        return min(1, sqrt(dx * dx + dy * dy) * 2) * 5
     }
     private var tiltAxis: (x: CGFloat, y: CGFloat, z: CGFloat) {
         guard let loc = pressLocation,
@@ -1292,9 +1331,16 @@ private struct SwipePadView: View {
                 RoundedRectangle(cornerRadius: 24)
                     .stroke(remoteAccent.opacity(0.55), lineWidth: 1.5)
             )
+            // Finger trail (v1.0.44): drawn on the pad itself, so
+            // it tilts and scales with the pad. Clipped to the
+            // rounded corners so it never spills outside the pad.
+            .overlay(
+                PadTrailOverlay(points: trail.map(\.point), opacity: trailOpacity)
+                    .clipShape(RoundedRectangle(cornerRadius: 24))
+            )
             .frame(maxWidth: .infinity)
             .frame(height: height)
-            .scaleEffect(isPressed ? 0.98 : 1.0)
+            .scaleEffect(isPressed ? 0.96 : 1.0)
             .rotation3DEffect(.degrees(tiltAngle), axis: tiltAxis)
             .animation(.spring(response: 0.22, dampingFraction: 0.7), value: isPressed)
             .background(
@@ -1308,6 +1354,7 @@ private struct SwipePadView: View {
                     .onChanged { value in
                         isPressed = true
                         pressLocation = value.location
+                        addTrailPoint(value.location)
                         let t = value.translation
                         if abs(t.width) >= Self.tapSlop || abs(t.height) >= Self.tapSlop {
                             // It's a swipe — release a held key first,
@@ -1339,6 +1386,7 @@ private struct SwipePadView: View {
                     .onEnded { value in
                         isPressed = false
                         pressLocation = nil
+                        fadeTrail()
                         cancelHoldTask()
                         onCancelRepeats()
                         emit(gesture.touchUp(translation: value.translation, slop: Self.tapSlop))
@@ -1356,11 +1404,46 @@ private struct SwipePadView: View {
                 }
                 isPressed = false
                 pressLocation = nil
+                trailFadeTask?.cancel()
+                trailFadeTask = nil
+                trail.removeAll()
+                trailOpacity = 1
                 cancelHoldTask()
                 onCancelRepeats()
                 cancelWindowTask()
                 gesture.reset()
             }
+    }
+
+    /// Records one finger position for the trail (v1.0.44): points
+    /// older than 0.8s drop off, so the tail shortens behind the
+    /// finger, and points closer than 4pt to the last one are
+    /// skipped. A new touch cancels any fade in flight.
+    private func addTrailPoint(_ location: CGPoint) {
+        trailFadeTask?.cancel()
+        trailFadeTask = nil
+        trailOpacity = 1
+        let now = Date()
+        trail.removeAll { now.timeIntervalSince($0.time) > 0.8 }
+        if let last = trail.last,
+           hypot(location.x - last.point.x, location.y - last.point.y) < 4 { return }
+        trail.append(TrailPoint(point: location, time: now))
+        if trail.count > 60 { trail.removeFirst(trail.count - 60) }
+    }
+
+    /// Fades the trail out after lift (v1.0.44): it lingers a beat,
+    /// then fades over 0.4s and clears.
+    private func fadeTrail() {
+        trailFadeTask?.cancel()
+        trailFadeTask = Task {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeOut(duration: 0.4)) { trailOpacity = 0 }
+            try? await Task.sleep(nanoseconds: 400_000_000)
+            guard !Task.isCancelled else { return }
+            trail.removeAll()
+            trailOpacity = 1
+        }
     }
 
     /// Sends gesture outputs through the pad's callback. enterDown
