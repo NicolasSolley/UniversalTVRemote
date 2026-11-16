@@ -1,11 +1,128 @@
 import SwiftUI
 
+// MARK: - Settings (v1.0.46)
+
+/// Pad color themes (v1.0.46): the pad gradient and the app accent
+/// follow the chosen theme. Stored in UserDefaults; views read it
+/// through PadTheme.current, or through @AppStorage("padTheme")
+/// when they need to re-render live on a change.
+private enum PadTheme: String, CaseIterable {
+    case blue, purple, teal, green, orange, pink
+
+    var name: String {
+        switch self {
+        case .blue: return "Blue"
+        case .purple: return "Purple"
+        case .teal: return "Teal"
+        case .green: return "Green"
+        case .orange: return "Orange"
+        case .pink: return "Pink"
+        }
+    }
+    /// Gradient top / bottom for the pad.
+    var top: Color {
+        switch self {
+        case .blue: return Color(red: 0.10, green: 0.16, blue: 0.35)
+        case .purple: return Color(red: 0.20, green: 0.10, blue: 0.38)
+        case .teal: return Color(red: 0.05, green: 0.25, blue: 0.28)
+        case .green: return Color(red: 0.07, green: 0.25, blue: 0.14)
+        case .orange: return Color(red: 0.32, green: 0.15, blue: 0.05)
+        case .pink: return Color(red: 0.32, green: 0.10, blue: 0.24)
+        }
+    }
+    var bottom: Color {
+        switch self {
+        case .blue: return Color(red: 0.05, green: 0.07, blue: 0.18)
+        case .purple: return Color(red: 0.09, green: 0.05, blue: 0.20)
+        case .teal: return Color(red: 0.03, green: 0.12, blue: 0.14)
+        case .green: return Color(red: 0.04, green: 0.12, blue: 0.07)
+        case .orange: return Color(red: 0.16, green: 0.08, blue: 0.03)
+        case .pink: return Color(red: 0.16, green: 0.05, blue: 0.12)
+        }
+    }
+    /// The accent: pad border, TV icon, keyboard ring.
+    var accent: Color {
+        switch self {
+        case .blue: return Color(red: 0.15, green: 0.45, blue: 1.0)
+        case .purple: return Color(red: 0.62, green: 0.40, blue: 1.0)
+        case .teal: return Color(red: 0.15, green: 0.80, blue: 0.80)
+        case .green: return Color(red: 0.25, green: 0.85, blue: 0.45)
+        case .orange: return Color(red: 1.0, green: 0.55, blue: 0.15)
+        case .pink: return Color(red: 1.0, green: 0.40, blue: 0.65)
+        }
+    }
+    static var current: PadTheme {
+        PadTheme(rawValue: UserDefaults.standard.string(forKey: "padTheme") ?? "") ?? .blue
+    }
+}
+
+/// Pad border effect (v1.0.46): off is the plain static border;
+/// glow puts a soft halo around the pad; flow runs a light around
+/// the border, LED-keyboard style.
+private enum PadBorder: String, CaseIterable {
+    case off, glow, flow
+    var name: String {
+        switch self {
+        case .off: return "Off"
+        case .glow: return "Glow"
+        case .flow: return "Flow"
+        }
+    }
+    static var current: PadBorder {
+        PadBorder(rawValue: UserDefaults.standard.string(forKey: "padBorder") ?? "") ?? .off
+    }
+}
+
+/// Finger trail style (v1.0.46): how the swipe trail looks.
+private enum TrailStyle: String, CaseIterable {
+    case off, line, glow, dots
+    var name: String {
+        switch self {
+        case .off: return "Off"
+        case .line: return "Line"
+        case .glow: return "Glow"
+        case .dots: return "Dots"
+        }
+    }
+    static var current: TrailStyle {
+        TrailStyle(rawValue: UserDefaults.standard.string(forKey: "trailStyle") ?? "") ?? .glow
+    }
+}
+
+/// App appearance (v1.0.46): dark is the default (the app was
+/// dark-only before); light flips the page surfaces, system
+/// follows the phone. The pad keeps its own theme gradient in
+/// both modes.
+private enum AppAppearance: String, CaseIterable {
+    case system, dark, light
+    var name: String {
+        switch self {
+        case .system: return "System"
+        case .dark: return "Dark"
+        case .light: return "Light"
+        }
+    }
+    var scheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .dark: return .dark
+        case .light: return .light
+        }
+    }
+    static var current: AppAppearance {
+        AppAppearance(rawValue: UserDefaults.standard.string(forKey: "appearance") ?? "") ?? .dark
+    }
+}
+
 struct ContentView: View {
     @StateObject private var discovery = DiscoveryManager()
     @State private var session: RemoteSession?
     /// The launch scan runs once, when the app first opens — not on
     /// every appearance (returning from a remote keeps the list as is).
     @State private var didAutoScan = false
+    /// Appearance (v1.0.46): the whole app follows this — dark is
+    /// the default, the way the app has always looked.
+    @AppStorage("appearance") private var appearanceRaw = "dark"
 
     var body: some View {
         // NavigationView (not NavigationStack): the deployment target is
@@ -39,7 +156,7 @@ struct ContentView: View {
                 .navigationBarHidden(true)
             }
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme((AppAppearance(rawValue: appearanceRaw) ?? .dark).scheme)
         .task {
             // Scan automatically and silently on launch. There is no
             // scan button — pull-to-refresh re-scans. Discovery itself
@@ -73,30 +190,42 @@ private struct DiscoveryListView: View {
     /// Pad-controls reminder sheet (v1.0.35), opened from the ?
     /// button in the header.
     @State private var showPadHelp = false
+    /// Settings sheet (v1.0.46), opened from the gear at top left.
+    @State private var showSettings = false
 
     var body: some View {
         ScrollView {
             VStack(spacing: 20) {
-                // Header: centered title, with a ? button at top
-                // right (v1.0.35) that opens the pad-controls
-                // reminder. The X from the reference is gone
+                // Header: centered title, with a gear at top left
+                // (v1.0.46, opens Settings) and a ? at top right
+                // (v1.0.35, opens the pad-controls reminder) —
+                // symmetric. The X from the reference is gone
                 // (Nick's call, v1.0.9): the device list is the
                 // app's root, so there is no previous screen for
                 // it to return to. The title stays centered — the
-                // button overlays the header row instead of
+                // buttons overlay the header row instead of
                 // pushing the title off-center.
                 ZStack {
                     Text("Select a TV Device")
                         .font(.headline.bold())
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                     HStack {
+                        Button { showSettings = true } label: {
+                            Image(systemName: "gearshape")
+                                .font(.subheadline.bold())
+                                .foregroundStyle(.primary)
+                                .frame(width: 30, height: 30)
+                                .background(Color.primary.opacity(0.10), in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("Settings")
                         Spacer()
                         Button { showPadHelp = true } label: {
                             Image(systemName: "questionmark")
                                 .font(.subheadline.bold())
-                                .foregroundStyle(.white)
+                                .foregroundStyle(.primary)
                                 .frame(width: 30, height: 30)
-                                .background(Color.white.opacity(0.10), in: Circle())
+                                .background(Color.primary.opacity(0.10), in: Circle())
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Pad controls")
@@ -113,14 +242,14 @@ private struct DiscoveryListView: View {
                             deviceRow(device)
                             if device.id != discovery.devices.last?.id {
                                 Divider()
-                                    .background(Color.white.opacity(0.08))
+                                    .background(Color.primary.opacity(0.08))
                                     .padding(.leading, 76)
                             }
                         }
                     }
                 }
                 .padding(.vertical, 6)
-                .background(Color.white.opacity(0.07), in: RoundedRectangle(cornerRadius: 20))
+                .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 20))
                 .padding(.horizontal)
 
                 Text("Make sure your phone and TV are connected to the same wifi network.")
@@ -143,6 +272,7 @@ private struct DiscoveryListView: View {
             if !scanning { hasCompletedScan = true }
         }
         .sheet(isPresented: $showPadHelp) { PadHelpSheet() }
+        .sheet(isPresented: $showSettings) { SettingsSheet() }
     }
 
     /// The card's single row while no devices are listed: a looking
@@ -172,7 +302,7 @@ private struct DiscoveryListView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(device.name)
                         .font(.headline)
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                     Text(device.addressLine)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -182,7 +312,7 @@ private struct DiscoveryListView: View {
                     Text("Discovery only")
                         .font(.caption2)
                         .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(Color.white.opacity(0.08), in: Capsule())
+                        .background(Color.primary.opacity(0.08), in: Capsule())
                         .foregroundStyle(.secondary)
                 }
             }
@@ -227,16 +357,16 @@ private struct DiscoveryListView: View {
                 .font(.system(size: 10, weight: .bold))
                 .minimumScaleFactor(0.6)
                 .lineLimit(1)
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
                 .padding(.horizontal, 6)
         case .roku:
             Text("Roku")
                 .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
         case .lg:
             Text("LG")
                 .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
         case .airPlay:
             Image(systemName: "airplayvideo")
                 .font(.title3)
@@ -254,19 +384,20 @@ private struct DiscoveryListView: View {
         case .samsung: return Color(red: 0.05, green: 0.09, blue: 0.25)
         case .roku: return .purple
         case .lg: return .red
-        case .airPlay: return Color.white.opacity(0.10)
-        case .other: return Color.white.opacity(0.10)
+        case .airPlay: return Color.primary.opacity(0.10)
+        case .other: return Color.primary.opacity(0.10)
         }
     }
 }
 
 // MARK: - Remote
 
-/// Blue accent for the redesigned remote (v1.0.12): the selected
+/// Accent for the redesigned remote (v1.0.12): the selected
 /// toggle segment, the mic ring, the Play/Pause button, the Devices
 /// pill text. One accent, used sparingly — the rest stays dark and
-/// neutral.
-private let remoteAccent = Color(red: 0.15, green: 0.45, blue: 1.0)
+/// neutral. Since v1.0.46 it follows the pad color theme in
+/// Settings.
+private var remoteAccent: Color { PadTheme.current.accent }
 
 /// Remote, redesigned in v1.0.12. The fork's remote screen is the
 /// design inspiration, not a template: a top bar (Devices pill, TV
@@ -543,7 +674,7 @@ private struct RemoteView: View {
             VStack(spacing: layout.pairingCardSpacing) {
                 Text("Enter the code shown on your TV")
                     .font(.headline)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                 TextField("Code", text: $session.pairingCode)
                     .font(.system(.title3, design: .monospaced))
                     .multilineTextAlignment(.center)
@@ -568,8 +699,8 @@ private struct RemoteView: View {
                         }
                     }
                     .padding(.vertical, 10)
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.white.opacity(0.08), lineWidth: 1))
+                    .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.primary.opacity(0.08), lineWidth: 1))
                 // A failed attempt (wrong code, or the TV
                 // discarding the code and showing a new one)
                 // shows its error here on the card — the
@@ -583,8 +714,8 @@ private struct RemoteView: View {
                 }
             }
             .padding(layout.pairingCardPadding)
-            .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
-            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.08), lineWidth: 1))
+            .background(Color.primary.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
+            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.primary.opacity(0.08), lineWidth: 1))
             .padding(.horizontal)
             .onAppear { pairingCodeFocused = true }
         }
@@ -604,15 +735,15 @@ private struct RemoteView: View {
                     .foregroundStyle(remoteAccent)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .background(Color.white.opacity(0.08), in: Capsule())
-                    .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+                    .background(Color.primary.opacity(0.08), in: Capsule())
+                    .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Devices")
             Spacer()
             Text(session.device.name)
                 .font(.headline.bold())
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
                 .lineLimit(1)
             Spacer()
             // No ? button here (v1.0.44): the pad-controls sheet
@@ -623,7 +754,7 @@ private struct RemoteView: View {
                     .font(.headline.bold())
                     .foregroundStyle(.red)
                     .frame(width: layout.topBarButton, height: layout.topBarButton)
-                    .background(Color.white.opacity(0.08), in: Circle())
+                    .background(Color.primary.opacity(0.08), in: Circle())
             }
             .buttonStyle(.plain)
         }
@@ -645,16 +776,16 @@ private struct RemoteView: View {
             if isConnecting {
                 ProgressView()
                     .controlSize(.small)
-                    .tint(.white)
+                    .tint(.primary)
             }
             Text(connectionLabel)
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
-        .background(Color.white.opacity(0.08), in: Capsule())
-        .overlay(Capsule().stroke(Color.white.opacity(0.08), lineWidth: 1))
+        .background(Color.primary.opacity(0.08), in: Capsule())
+        .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
     }
 
     private var connectionDotColor: Color {
@@ -785,12 +916,12 @@ private struct RemoteView: View {
                 Button { showKeyboard.toggle() } label: {
                     ZStack {
                         Circle()
-                            .fill(Color.white.opacity(0.10))
+                            .fill(Color.primary.opacity(0.10))
                         Circle()
-                            .stroke(showKeyboard ? remoteAccent : Color.white.opacity(0.08), lineWidth: 2.5)
+                            .stroke(showKeyboard ? remoteAccent : Color.primary.opacity(0.08), lineWidth: 2.5)
                         Image(systemName: "keyboard")
                             .font(.title)
-                            .foregroundStyle(.white)
+                            .foregroundStyle(.primary)
                     }
                     .frame(width: layout.circleSize, height: layout.circleSize)
                 }
@@ -812,10 +943,10 @@ private struct RemoteView: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.title2.bold())
-                .foregroundStyle(.white)
+                .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, minHeight: height)
-                .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 28))
-                .overlay(RoundedRectangle(cornerRadius: 28).stroke(Color.white.opacity(0.08), lineWidth: 1))
+                .background(Color.primary.opacity(0.10), in: RoundedRectangle(cornerRadius: 28))
+                .overlay(RoundedRectangle(cornerRadius: 28).stroke(Color.primary.opacity(0.08), lineWidth: 1))
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
@@ -1132,7 +1263,8 @@ private struct PadHelpSheet: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
+        // No preferredColorScheme here (v1.0.46): the sheet follows
+        // the app's appearance setting like everything else.
     }
 
     /// One gesture card: colored icon tile, name + what it does.
@@ -1148,7 +1280,7 @@ private struct PadHelpSheet: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.headline)
-                    .foregroundStyle(.white)
+                    .foregroundStyle(.primary)
                 Text(subtitle)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -1157,8 +1289,90 @@ private struct PadHelpSheet: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 20))
-        .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.08), lineWidth: 1))
+        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 20))
+        .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.primary.opacity(0.08), lineWidth: 1))
+    }
+}
+
+/// Settings (v1.0.46): a customization menu opened from the gear
+/// on the devices page — pad color, pad border effect, trail
+/// style, and light/dark mode. Everything persists in UserDefaults
+/// and applies at once; the pad keeps its own theme gradient in
+/// both appearances.
+private struct SettingsSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("padTheme") private var padThemeRaw = "blue"
+    @AppStorage("padBorder") private var padBorderRaw = "off"
+    @AppStorage("trailStyle") private var trailStyleRaw = "glow"
+    @AppStorage("appearance") private var appearanceRaw = "dark"
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section("Pad color") {
+                    HStack(spacing: 16) {
+                        ForEach(PadTheme.allCases, id: \.self) { theme in
+                            Button { padThemeRaw = theme.rawValue } label: {
+                                ZStack {
+                                    Circle()
+                                        .fill(LinearGradient(colors: [theme.top, theme.bottom], startPoint: .top, endPoint: .bottom))
+                                        .frame(width: 40, height: 40)
+                                    if padThemeRaw == theme.rawValue {
+                                        Image(systemName: "checkmark")
+                                            .font(.subheadline.bold())
+                                            .foregroundStyle(.white)
+                                    }
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(theme.name)
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    Text((PadTheme(rawValue: padThemeRaw) ?? .blue).name)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
+                Section("Pad border") {
+                    Picker("Border", selection: $padBorderRaw) {
+                        ForEach(PadBorder.allCases, id: \.self) { effect in
+                            Text(effect.name).tag(effect.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    Text("Flow runs a light around the pad, like an LED keyboard.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                Section("Trail") {
+                    Picker("Trail", selection: $trailStyleRaw) {
+                        ForEach(TrailStyle.allCases, id: \.self) { style in
+                            Text(style.name).tag(style.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    Text("How the swipe trail looks on the pad.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                Section("Appearance") {
+                    Picker("Appearance", selection: $appearanceRaw) {
+                        ForEach(AppAppearance.allCases, id: \.self) { appearance in
+                            Text(appearance.name).tag(appearance.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                }
+            }
+            .navigationTitle("Settings")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
     }
 }
 
@@ -1203,37 +1417,68 @@ private struct TrailPoint {
     var time: Date
 }
 
-/// The finger trail (v1.0.44), drawn in the pad's own coordinates:
-/// a soft wide line with a bright core, plus a glowing dot under
-/// the finger. Fades as a whole after lift (see trailOpacity).
+/// The finger trail (v1.0.44, styles in v1.0.46), drawn in the
+/// pad's own coordinates. Glow is the original: a soft wide line
+/// with a bright core, plus a glowing dot under the finger. Line
+/// is a single thin line. Dots is a row of circles that shrink and
+/// fade with age. Off draws nothing. Fades as a whole after lift
+/// (see trailOpacity).
 private struct PadTrailOverlay: View {
-    var points: [CGPoint]
+    var points: [TrailPoint]
     var opacity: Double
+    var style: TrailStyle
 
     var body: some View {
         ZStack {
-            if points.count > 1 {
-                Path { path in
-                    path.move(to: points[0])
-                    for point in points.dropFirst() { path.addLine(to: point) }
+            switch style {
+            case .off:
+                EmptyView()
+            case .line:
+                if points.count > 1 {
+                    trailPath
+                        .stroke(Color.white.opacity(0.5), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
                 }
-                .stroke(Color.white.opacity(0.18), style: StrokeStyle(lineWidth: 12, lineCap: .round, lineJoin: .round))
-                Path { path in
-                    path.move(to: points[0])
-                    for point in points.dropFirst() { path.addLine(to: point) }
+            case .glow:
+                if points.count > 1 {
+                    trailPath
+                        .stroke(Color.white.opacity(0.18), style: StrokeStyle(lineWidth: 12, lineCap: .round, lineJoin: .round))
+                    trailPath
+                        .stroke(Color.white.opacity(0.45), style: StrokeStyle(lineWidth: 3.5, lineCap: .round, lineJoin: .round))
                 }
-                .stroke(Color.white.opacity(0.45), style: StrokeStyle(lineWidth: 3.5, lineCap: .round, lineJoin: .round))
-            }
-            if let last = points.last {
-                Circle()
-                    .fill(Color.white.opacity(0.9))
-                    .frame(width: 14, height: 14)
-                    .shadow(color: .white.opacity(0.7), radius: 10)
-                    .position(last)
+                if let last = points.last {
+                    Circle()
+                        .fill(Color.white.opacity(0.9))
+                        .frame(width: 14, height: 14)
+                        .shadow(color: .white.opacity(0.7), radius: 10)
+                        .position(last.point)
+                }
+            case .dots:
+                ForEach(points.indices, id: \.self) { i in
+                    let age = Date().timeIntervalSince(points[i].time)
+                    Circle()
+                        .fill(Color.white.opacity(max(0, 0.9 - age)))
+                        .frame(width: dotSize(age), height: dotSize(age))
+                        .position(points[i].point)
+                }
             }
         }
         .opacity(opacity)
         .allowsHitTesting(false)
+    }
+
+    /// The path through the recorded points.
+    private var trailPath: Path {
+        var path = Path()
+        if let first = points.first {
+            path.move(to: first.point)
+            for point in points.dropFirst() { path.addLine(to: point.point) }
+        }
+        return path
+    }
+
+    /// A dot's size by age: 12pt fresh, shrinking to 3pt.
+    private func dotSize(_ age: TimeInterval) -> CGFloat {
+        max(3, 12 - age * 10)
     }
 }
 
@@ -1277,6 +1522,14 @@ private struct SwipePadView: View {
     @State private var trail: [TrailPoint] = []
     @State private var trailOpacity: Double = 1
     @State private var trailFadeTask: Task<Void, Never>?
+    /// Settings (v1.0.46), read live so the pad re-renders when
+    /// they change: color theme, border effect, trail style.
+    @AppStorage("padTheme") private var padThemeRaw = "blue"
+    @AppStorage("padBorder") private var padBorderRaw = "off"
+    @AppStorage("trailStyle") private var trailStyleRaw = "glow"
+    private var theme: PadTheme { PadTheme(rawValue: padThemeRaw) ?? .blue }
+    private var borderEffect: PadBorder { PadBorder(rawValue: padBorderRaw) ?? .off }
+    private var trailStyle: TrailStyle { TrailStyle(rawValue: trailStyleRaw) ?? .glow }
 
     /// Same timing as the volume hold (v1.0.19/20): the hold engages
     /// 0.3s after touch down, then spam repeats one press every
@@ -1325,23 +1578,50 @@ private struct SwipePadView: View {
         return (x: -dy, y: dx, z: 0)
     }
 
+    /// The pad's border (v1.0.46): off is the plain static stroke;
+    /// glow adds a soft halo in the theme color; flow runs a bright
+    /// segment around the border, LED-keyboard style — a trimmed
+    /// stroke rotating once every 3 seconds, driven by a
+    /// TimelineView so it stays smooth with no timer to manage.
+    @ViewBuilder
+    private var padBorder: some View {
+        switch borderEffect {
+        case .off:
+            RoundedRectangle(cornerRadius: 24)
+                .stroke(theme.accent.opacity(0.55), lineWidth: 1.5)
+        case .glow:
+            RoundedRectangle(cornerRadius: 24)
+                .stroke(theme.accent, lineWidth: 2)
+                .shadow(color: theme.accent.opacity(0.8), radius: 14)
+        case .flow:
+            ZStack {
+                RoundedRectangle(cornerRadius: 24)
+                    .stroke(theme.accent.opacity(0.25), lineWidth: 2)
+                TimelineView(.animation) { timeline in
+                    let angle = (timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3) / 3) * 360
+                    RoundedRectangle(cornerRadius: 24)
+                        .trim(from: 0, to: 0.15)
+                        .stroke(theme.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .shadow(color: theme.accent.opacity(0.9), radius: 8)
+                        .rotationEffect(.degrees(angle))
+                }
+            }
+        }
+    }
+
     var body: some View {
         RoundedRectangle(cornerRadius: 24)
             .fill(
                 LinearGradient(
-                    colors: [Color(red: 0.10, green: 0.16, blue: 0.35),
-                             Color(red: 0.05, green: 0.07, blue: 0.18)],
+                    colors: [theme.top, theme.bottom],
                     startPoint: .top, endPoint: .bottom)
             )
-            .overlay(
-                RoundedRectangle(cornerRadius: 24)
-                    .stroke(remoteAccent.opacity(0.55), lineWidth: 1.5)
-            )
+            .overlay(padBorder)
             // Finger trail (v1.0.44): drawn on the pad itself, so
             // it tilts and scales with the pad. Clipped to the
             // rounded corners so it never spills outside the pad.
             .overlay(
-                PadTrailOverlay(points: trail.map(\.point), opacity: trailOpacity)
+                PadTrailOverlay(points: trail, opacity: trailOpacity, style: trailStyle)
                     .clipShape(RoundedRectangle(cornerRadius: 24))
             )
             .frame(maxWidth: .infinity)
