@@ -1,4 +1,5 @@
 import XCTest
+import CoreGraphics
 import CryptoKit
 import Security
 @testable import UniversalTVRemote
@@ -649,5 +650,103 @@ final class HardwareVolumeDirectionTests: XCTestCase {
         // A jump from the anchor (e.g. the first press after a
         // failed anchor) is still just one direction, not many.
         XCTAssertEqual(HardwareVolumeController.direction(from: 0.5, to: 0.9625), Optional(true))
+    }
+}
+
+/// Swipe pad gesture decisions (v1.0.25): the pure state machine
+/// behind SwipePadView — tap, single-tap-hold, double-tap-hold
+/// spam, the double-tap window, and a swipe cancelling a hold.
+final class SwipePadGestureTests: XCTestCase {
+    private let slop: CGFloat = 14
+    private let still = CGSize(width: 0, height: 0)
+    private let swipeRight = CGSize(width: 40, height: 2)
+
+    func testTapSendsExactlyOneEnter() {
+        var g = SwipePadGesture()
+        XCTAssertTrue(g.touchDown())
+        XCTAssertEqual(g.touchUp(translation: still, slop: slop), [.enter(haptic: true)])
+        XCTAssertTrue(g.isAwaitingSecondTap)
+    }
+
+    func testTapHeldSendsDownAtOnsetAndUpOnLiftWithNoEnterOnLift() {
+        var g = SwipePadGesture()
+        XCTAssertTrue(g.touchDown())
+        XCTAssertEqual(g.onsetTimerFired(), [.enterDown])
+        XCTAssertTrue(g.isKeyHeldDown)
+        XCTAssertEqual(g.touchUp(translation: still, slop: slop), [.enterUp])
+        XCTAssertFalse(g.isKeyHeldDown)
+        // A hold-lift is not a tap: it never opens a double-tap window.
+        XCTAssertFalse(g.isAwaitingSecondTap)
+    }
+
+    func testDoubleTapHeldSpams() {
+        var g = SwipePadGesture()
+        XCTAssertTrue(g.touchDown())
+        XCTAssertEqual(g.touchUp(translation: still, slop: slop), [.enter(haptic: true)])
+        XCTAssertTrue(g.touchDown()) // second tap inside the window
+        // First repeat buzzes once…
+        XCTAssertEqual(g.onsetTimerFired(), [.enter(haptic: true)])
+        XCTAssertTrue(g.isSpamming)
+        // …later repeats are silent.
+        XCTAssertEqual(g.spamTick(), [.enter(haptic: false)])
+        XCTAssertEqual(g.spamTick(), [.enter(haptic: false)])
+        // Lift stops the spam; no key was held down, so no key-up.
+        XCTAssertEqual(g.touchUp(translation: still, slop: slop), [])
+        XCTAssertFalse(g.isSpamming)
+    }
+
+    func testDoubleTapQuickSendsTwoEnters() {
+        var g = SwipePadGesture()
+        XCTAssertTrue(g.touchDown())
+        XCTAssertEqual(g.touchUp(translation: still, slop: slop), [.enter(haptic: true)])
+        XCTAssertTrue(g.touchDown())
+        XCTAssertEqual(g.touchUp(translation: still, slop: slop), [.enter(haptic: true)])
+        XCTAssertFalse(g.isAwaitingSecondTap)
+    }
+
+    func testDoubleTapWindowExpiryMakesTwoSeparateTaps() {
+        var g = SwipePadGesture()
+        XCTAssertTrue(g.touchDown())
+        XCTAssertEqual(g.touchUp(translation: still, slop: slop), [.enter(haptic: true)])
+        g.secondTapWindowExpired()
+        XCTAssertFalse(g.isAwaitingSecondTap)
+        // The next tap is a fresh single: it opens a new window.
+        XCTAssertTrue(g.touchDown())
+        XCTAssertEqual(g.touchUp(translation: still, slop: slop), [.enter(haptic: true)])
+        XCTAssertTrue(g.isAwaitingSecondTap)
+    }
+
+    func testSwipeCancelsHoldAndReleasesKeyFirst() {
+        var g = SwipePadGesture()
+        XCTAssertTrue(g.touchDown())
+        XCTAssertEqual(g.onsetTimerFired(), [.enterDown])
+        XCTAssertEqual(g.moved(translation: swipeRight, slop: slop), [.enterUp])
+        XCTAssertFalse(g.isKeyHeldDown)
+        XCTAssertEqual(g.touchUp(translation: swipeRight, slop: slop), [.right])
+    }
+
+    func testSwipeBeforeOnsetSendsDirectionAndNoEnter() {
+        var g = SwipePadGesture()
+        XCTAssertTrue(g.touchDown())
+        XCTAssertEqual(g.moved(translation: swipeRight, slop: slop), [])
+        XCTAssertEqual(g.touchUp(translation: swipeRight, slop: slop), [.right])
+    }
+
+    func testHoldLiftResetsDoubleTapWindow() {
+        var g = SwipePadGesture()
+        XCTAssertTrue(g.touchDown())
+        XCTAssertEqual(g.onsetTimerFired(), [.enterDown])
+        XCTAssertEqual(g.touchUp(translation: still, slop: slop), [.enterUp])
+        // The next tap is a fresh single, not a double-tap: holding
+        // it engages a hold again instead of spamming.
+        XCTAssertTrue(g.touchDown())
+        XCTAssertEqual(g.onsetTimerFired(), [.enterDown])
+    }
+
+    func testSmallMovementWithinSlopIsStillATap() {
+        var g = SwipePadGesture()
+        XCTAssertTrue(g.touchDown())
+        XCTAssertEqual(g.moved(translation: CGSize(width: 5, height: -5), slop: slop), [])
+        XCTAssertEqual(g.touchUp(translation: CGSize(width: 5, height: -5), slop: slop), [.enter(haptic: true)])
     }
 }

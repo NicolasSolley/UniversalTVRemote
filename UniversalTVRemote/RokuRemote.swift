@@ -56,6 +56,17 @@ enum RokuRemote {
         try await enqueue(path: "keypress/\(key)", to: host, port: port).value
     }
 
+    /// True key hold (v1.0.25): ECP `/keydown/<Key>` / `/keyup/<Key>`
+    /// — the same serial queue as a press, so down/up stay ordered
+    /// against any other key.
+    @MainActor static func sendKeyDown(key: String, to host: String, port: Int = defaultPort) async throws {
+        try await enqueue(path: "keydown/\(key)", to: host, port: port).value
+    }
+
+    @MainActor static func sendKeyUp(key: String, to host: String, port: Int = defaultPort) async throws {
+        try await enqueue(path: "keyup/\(key)", to: host, port: port).value
+    }
+
     /// Enqueues one POST behind the previous press. A failed press does
     /// not block the chain (`try?` on the predecessor); the current
     /// press's own error propagates to its awaiter.

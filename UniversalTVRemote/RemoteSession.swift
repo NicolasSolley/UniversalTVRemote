@@ -12,6 +12,11 @@ enum RemoteCommand {
     case volumeUp, volumeDown, mute
     case channelUp, channelDown
     case up, down, left, right, enter
+    /// Hold the OK key down / release it (swipe pad single-tap-hold,
+    /// v1.0.25). Roku/Samsung/Android TV send a real key-down/up;
+    /// LG has no hold in its protocol, so enterDown is one plain
+    /// enter and enterUp is a no-op (see sendLG).
+    case enterDown, enterUp
     case back, home, info, menu
     /// Exit the current app / back out to the previous screen (fork's
     /// Exit button; v1.0.12's Back/Home/Exit pill row needs this).
@@ -479,6 +484,8 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
         case .left: try await RokuRemote.send(key: "Left", to: host)
         case .right: try await RokuRemote.send(key: "Right", to: host)
         case .enter: try await RokuRemote.send(key: "Select", to: host)
+        case .enterDown: try await RokuRemote.sendKeyDown(key: "Select", to: host)
+        case .enterUp: try await RokuRemote.sendKeyUp(key: "Select", to: host)
         case .back: try await RokuRemote.send(key: "Back", to: host)
         case .home: try await RokuRemote.send(key: "Home", to: host)
         case .exit: try await RokuRemote.send(key: "Home", to: host)
@@ -512,6 +519,8 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
         case .left: try await samsung.sendKey(.left, to: host)
         case .right: try await samsung.sendKey(.right, to: host)
         case .enter: try await samsung.sendKey(.enter, to: host)
+        case .enterDown: await samsung.sendKeyDown(.enter, to: host)
+        case .enterUp: await samsung.sendKeyUp(.enter, to: host)
         case .back: try await samsung.sendKey(.back, to: host)
         case .home: try await samsung.sendKey(.home, to: host)
         case .exit: try await samsung.sendKey(.exit, to: host)
@@ -549,6 +558,12 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
         case .left: try await lg.dpadLeft()
         case .right: try await lg.dpadRight()
         case .enter: try await lg.enter()
+        // LG has no key-down/up in its pointer-socket protocol
+        // (discrete `type:button` presses only), so a hold is a
+        // single plain enter at onset and nothing on lift — a
+        // fallback, not a faked hold.
+        case .enterDown: try await lg.enter()
+        case .enterUp: break
         case .back: try await lg.back()
         case .home: try await lg.home()
         case .exit: try await lg.exit()
@@ -583,6 +598,8 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
         case .left: driver.send(.left)
         case .right: driver.send(.right)
         case .enter: driver.send(.select)
+        case .enterDown: driver.sendKeyDown(.select)
+        case .enterUp: driver.sendKeyUp(.select)
         case .back: driver.send(.back)
         case .home: driver.send(.home)
         case .exit: driver.send(.exit) // fork: exit == back (code 4)

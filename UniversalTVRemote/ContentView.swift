@@ -703,35 +703,191 @@ private struct RemoteView: View {
 
 // MARK: - Swipe pad
 
+/// Pure gesture decision logic for the swipe pad (v1.0.25) — no
+/// timers, no SwiftUI, so unit tests can drive it directly. The view
+/// owns the two timers (hold onset, double-tap window) and feeds this
+/// type touch events; it returns the commands to send.
+///
+/// Modes:
+/// - Quick tap (lift before the 0.3s onset): exactly one enter, on
+///   lift. A second tap within the window is a second enter; held
+///   past onset it spams enters instead (double-tap-hold).
+/// - Single tap held past onset: the OK key goes DOWN at onset and
+///   UP on lift — no enter on lift. A hold-lift is not a tap, so it
+///   never opens a double-tap window.
+/// - Swipe (≥ slop): a held key is released first, then the normal
+///   single directional press on release. A key is never left down.
+struct SwipePadGesture {
+    enum Output: Equatable {
+        case enter(haptic: Bool)
+        case enterDown
+        case enterUp
+        case up, down, left, right
+    }
+
+    private enum State {
+        case idle
+        case awaitingSecondTap
+        case singleDown
+        case singleHeld
+        case doubleDown
+        case doubleSpam
+        case swiping
+    }
+
+    private var state: State = .idle
+
+    /// True while a key-down has been sent and not yet released.
+    var isKeyHeldDown: Bool { state == .singleHeld }
+    /// True while double-tap-hold spam is active.
+    var isSpamming: Bool { state == .doubleSpam }
+    /// True after a quick tap lifted, while a second tap still
+    /// counts as a double-tap.
+    var isAwaitingSecondTap: Bool { state == .awaitingSecondTap }
+
+    /// Finger down. Returns true when the view should start the hold
+    /// onset timer (a fresh single or double tap); false when this
+    /// touch is already a swipe that wandered back inside the slop.
+    mutating func touchDown() -> Bool {
+        switch state {
+        case .idle:
+            state = .singleDown
+            return true
+        case .awaitingSecondTap:
+            state = .doubleDown
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// The 0.3s hold onset fired: a single tap engages the hold
+    /// (key down), a double-tap starts spamming enters.
+    mutating func onsetTimerFired() -> [Output] {
+        switch state {
+        case .singleDown:
+            state = .singleHeld
+            return [.enterDown]
+        case .doubleDown:
+            state = .doubleSpam
+            return [.enter(haptic: true)]
+        default:
+            return []
+        }
+    }
+
+    /// One spam interval (0.12s) while double-tap-hold is active.
+    /// Later repeats are silent; the first repeat (from
+    /// onsetTimerFired) buzzed once.
+    mutating func spamTick() -> [Output] {
+        state == .doubleSpam ? [.enter(haptic: false)] : []
+    }
+
+    /// Finger moved. Beyond the slop the gesture becomes a swipe: a
+    /// held key is released first, then the swipe proceeds.
+    mutating func moved(translation: CGSize, slop: CGFloat) -> [Output] {
+        guard abs(translation.width) >= slop || abs(translation.height) >= slop else { return [] }
+        switch state {
+        case .singleHeld:
+            state = .swiping
+            return [.enterUp]
+        case .singleDown, .doubleDown, .doubleSpam:
+            state = .swiping
+            return []
+        default:
+            return []
+        }
+    }
+
+    /// Finger lifted. A swipe sends its direction; a quick tap sends
+    /// one enter (and opens the double-tap window for a first tap
+    /// only); a hold releases the key with no enter on lift; spam
+    /// just stops.
+    mutating func touchUp(translation: CGSize, slop: CGFloat) -> [Output] {
+        let isSwipe = abs(translation.width) >= slop || abs(translation.height) >= slop
+        switch state {
+        case .singleDown:
+            if isSwipe {
+                state = .idle
+                return [direction(of: translation)]
+            }
+            state = .awaitingSecondTap
+            return [.enter(haptic: true)]
+        case .singleHeld:
+            state = .idle
+            return isSwipe ? [.enterUp, direction(of: translation)] : [.enterUp]
+        case .doubleDown:
+            if isSwipe {
+                state = .idle
+                return [direction(of: translation)]
+            }
+            state = .idle
+            return [.enter(haptic: true)]
+        case .doubleSpam:
+            state = .idle
+            return isSwipe ? [direction(of: translation)] : []
+        case .swiping:
+            state = .idle
+            return [direction(of: translation)]
+        case .awaitingSecondTap, .idle:
+            return []
+        }
+    }
+
+    /// The double-tap window expired with no second tap: the first
+    /// tap stands alone, and the next tap is a fresh single.
+    mutating func secondTapWindowExpired() {
+        if state == .awaitingSecondTap { state = .idle }
+    }
+
+    mutating func reset() { state = .idle }
+
+    private func direction(of translation: CGSize) -> Output {
+        if abs(translation.width) > abs(translation.height) {
+            return translation.width > 0 ? .right : .left
+        }
+        return translation.height > 0 ? .down : .up
+    }
+}
+
 /// Big swipe pad (the Swipe half of the toggle): near full-width,
 /// a bare pad — no chevrons, no hand icon, no label.
 /// One drag is one command on release (tap = select) — the same
 /// gesture as the old touchpad, only the size and the look changed.
-/// HOLDING the pad (v1.0.24) repeats the regular OK/select press
-/// while held — same timing as the volume hold (0.3s onset, then
-/// one press every 0.12s) — so holding it on a focused key (e.g.
-/// backspace in a search box) repeats that key instead of tapping
-/// many times. It is NOT backspace-specific: it is just the
-/// regular OK click repeated. A quick tap still sends exactly one
-/// OK press, and swipes still send single directional presses.
+/// HOLDING the pad (v1.0.24) repeated the regular OK/select press
+/// while held. v1.0.25 splits that into two modes, decided by the
+/// pure SwipePadGesture above: a single tap held past the 0.3s
+/// onset holds the OK key DOWN until lift (a long-press, e.g. for
+/// a context menu), while a double-tap held past onset spams OK
+/// presses at the old cadence (first repeat at onset, then one
+/// every 0.12s). A quick tap still sends exactly one OK press, a
+/// quick double-tap sends two, and swipes still send single
+/// directional presses — swiping out of a hold releases the key
+/// first, so a key is never left stuck down.
 /// The height comes from the layout so the pad fits the
 /// non-scrollable page on small phones.
 private struct SwipePadView: View {
     var height: CGFloat
     /// Second parameter: whether the command should buzz. A tap
-    /// buzzes once, and the first repeat of a hold buzzes once;
-    /// later repeats of a hold are silent — the same rule as the
-    /// volume hold (v1.0.20), because buzzing at repeat rate is
-    /// faster than the TV moves.
+    /// buzzes once, the hold onset buzzes once, and the first spam
+    /// repeat of a double-tap-hold buzzes once; later repeats of a
+    /// hold are silent — the same rule as the volume hold (v1.0.20),
+    /// because buzzing at repeat rate is faster than the TV moves.
+    /// A key release never buzzes.
     var onCommand: (RemoteCommand, Bool) -> Void
 
-    @State private var repeatTask: Task<Void, Never>?
-    @State private var holdFired = false
+    @State private var gesture = SwipePadGesture()
+    @State private var holdTask: Task<Void, Never>?
+    @State private var windowTask: Task<Void, Never>?
 
-    /// Same timing as the volume hold (v1.0.19/20): repeats start
-    /// 0.3s after touch down, then one press every 0.12s (~8/s).
+    /// Same timing as the volume hold (v1.0.19/20): the hold engages
+    /// 0.3s after touch down, then spam repeats one press every
+    /// 0.12s (~8/s).
     private static let holdOnset: UInt64 = 300_000_000
     private static let holdInterval: UInt64 = 120_000_000
+    /// A second tap within this long of the first tap's lift counts
+    /// as a double-tap; after it, the next tap is a fresh single.
+    private static let doubleTapWindow: UInt64 = 300_000_000
     /// Finger movement within this box counts as a tap/hold;
     /// beyond it, the gesture is a swipe.
     private static let tapSlop: CGFloat = 14
@@ -755,56 +911,91 @@ private struct SwipePadView: View {
                     .onChanged { value in
                         let t = value.translation
                         if abs(t.width) >= Self.tapSlop || abs(t.height) >= Self.tapSlop {
-                            // It's a swipe — cancel any hold repeat.
-                            cancelHoldRepeat()
-                        } else if repeatTask == nil {
-                            // Finger down and still — start the hold timer.
-                            startHoldRepeat()
+                            // It's a swipe — release a held key first,
+                            // then cancel the hold timer.
+                            emit(gesture.moved(translation: t, slop: Self.tapSlop))
+                            cancelHoldTask()
+                        } else if holdTask == nil {
+                            // Finger down and still — the gesture
+                            // decides single vs double-tap; start the
+                            // hold timer when it says this is a tap.
+                            cancelWindowTask()
+                            if gesture.touchDown() {
+                                startHoldTask()
+                            }
                         }
                     }
                     .onEnded { value in
-                        // Capture before cancelling: if the hold already
-                        // fired repeats, the release must not add one
-                        // more OK press on top of them.
-                        let didHoldRepeat = holdFired
-                        cancelHoldRepeat()
-                        let t = value.translation
-                        if abs(t.width) < Self.tapSlop, abs(t.height) < Self.tapSlop {
-                            // Tap, or a hold that never reached onset:
-                            // exactly one OK press.
-                            if !didHoldRepeat {
-                                onCommand(.enter, true)
-                            }
-                        } else if abs(t.width) > abs(t.height) {
-                            onCommand(t.width > 0 ? .right : .left, true)
-                        } else {
-                            onCommand(t.height > 0 ? .down : .up, true)
+                        cancelHoldTask()
+                        emit(gesture.touchUp(translation: value.translation, slop: Self.tapSlop))
+                        if gesture.isAwaitingSecondTap {
+                            cancelWindowTask()
+                            startWindowTask()
                         }
                     }
             )
+            .onDisappear {
+                // Safety: never leave a key stuck down if the pad
+                // goes away mid-hold.
+                if gesture.isKeyHeldDown {
+                    onCommand(.enterUp, false)
+                }
+                cancelHoldTask()
+                cancelWindowTask()
+                gesture.reset()
+            }
     }
 
-    /// Starts the hold timer: first OK press after the onset, then
-    /// one every interval until the finger lifts or swipes. The
-    /// first repeat buzzes once; later repeats are silent.
-    private func startHoldRepeat() {
-        repeatTask = Task {
-            try? await Task.sleep(nanoseconds: Self.holdOnset)
-            guard !Task.isCancelled else { return }
-            holdFired = true
-            onCommand(.enter, true)
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: Self.holdInterval)
-                guard !Task.isCancelled else { return }
-                onCommand(.enter, false)
+    /// Sends gesture outputs through the pad's callback. enterDown
+    /// buzzes once at onset; a key release never buzzes.
+    private func emit(_ outputs: [SwipePadGesture.Output]) {
+        for output in outputs {
+            switch output {
+            case .enter(let haptic): onCommand(.enter, haptic)
+            case .enterDown: onCommand(.enterDown, true)
+            case .enterUp: onCommand(.enterUp, false)
+            case .up: onCommand(.up, true)
+            case .down: onCommand(.down, true)
+            case .left: onCommand(.left, true)
+            case .right: onCommand(.right, true)
             }
         }
     }
 
-    private func cancelHoldRepeat() {
-        repeatTask?.cancel()
-        repeatTask = nil
-        holdFired = false
+    /// Hold timer: at onset the gesture either engages the hold
+    /// (single tap) or starts spamming (double-tap-hold); spam then
+    /// ticks every interval until the finger lifts or swipes.
+    private func startHoldTask() {
+        holdTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: Self.holdOnset)
+            guard !Task.isCancelled else { return }
+            emit(gesture.onsetTimerFired())
+            while gesture.isSpamming, !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: Self.holdInterval)
+                guard !Task.isCancelled else { return }
+                emit(gesture.spamTick())
+            }
+        }
+    }
+
+    /// Double-tap window timer: started on a quick tap's lift; if
+    /// no second tap lands, the tap stands alone.
+    private func startWindowTask() {
+        windowTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: Self.doubleTapWindow)
+            guard !Task.isCancelled else { return }
+            gesture.secondTapWindowExpired()
+        }
+    }
+
+    private func cancelHoldTask() {
+        holdTask?.cancel()
+        holdTask = nil
+    }
+
+    private func cancelWindowTask() {
+        windowTask?.cancel()
+        windowTask = nil
     }
 }
 

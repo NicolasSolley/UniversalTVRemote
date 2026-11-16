@@ -335,6 +335,24 @@ actor SamsungRemote {
         try await sendKeyPayload(key, cmd: "Click")
     }
 
+    /// True key hold (v1.0.25): "Press" / "Release", the same cmds
+    /// power-off already uses. Unlike sendKey, a down/up is NEVER
+    /// queued: pendingKeys only holds plain keys, so a queued Press
+    /// would later fire as a Click — and a Release with no Press is
+    /// meaningless. If the socket isn't live after the connect
+    /// attempt, the down/up is dropped silently.
+    func sendKeyDown(_ key: Key, to host: String) async {
+        do { try await connect(to: host) } catch { return }
+        guard task != nil, !connectionLost, connectedHost == host else { return }
+        try? await sendKeyPayload(key, cmd: "Press")
+    }
+
+    func sendKeyUp(_ key: Key, to host: String) async {
+        do { try await connect(to: host) } catch { return }
+        guard task != nil, !connectionLost, connectedHost == host else { return }
+        try? await sendKeyPayload(key, cmd: "Release")
+    }
+
     /// Sends one key on the open socket (connect first — use
     /// sendKey(_:to:) for the full connect-or-queue path).
     private func sendKeyPayload(_ key: Key, cmd: String) async throws {

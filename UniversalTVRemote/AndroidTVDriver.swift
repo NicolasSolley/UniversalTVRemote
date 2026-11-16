@@ -408,10 +408,32 @@ final class AndroidTVDriver: TVDriver {
             }
             return
         }
+        sendKeyMessage(code: code, direction: 3) // SHORT press
+    }
+
+    /// True key hold (v1.0.25): the RemoteKey direction enum from
+    /// androidtvremote2's remotemessage.proto is UNKNOWN_DIRECTION =
+    /// 0, START_LONG = 1, END_LONG = 2, SHORT = 3 — so down is 1,
+    /// up is 2. Only sends while connected: a down/up is NEVER
+    /// queued (a queued down would fire late as a stuck key, and
+    /// send() only queues plain SHORT presses).
+    func sendKeyDown(_ key: RemoteKey) {
+        guard let code = Self.keyCode(key), state == .connected, remote != nil else { return }
+        sendKeyMessage(code: code, direction: 1) // START_LONG
+    }
+
+    func sendKeyUp(_ key: RemoteKey) {
+        guard let code = Self.keyCode(key), state == .connected, remote != nil else { return }
+        sendKeyMessage(code: code, direction: 2) // END_LONG
+    }
+
+    /// One RemoteKey message (field 10): key code + direction.
+    private func sendKeyMessage(code: Int, direction: UInt64) {
+        guard let remote else { return }
         var m = ProtoWriter()
         m.message(10) { k in
             k.uint(1, UInt64(code))
-            k.uint(2, 3) // SHORT press
+            k.uint(2, direction)
         }
         remote.send(m)
     }
