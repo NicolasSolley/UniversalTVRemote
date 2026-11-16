@@ -299,10 +299,10 @@ private struct RemoteLayout {
     var pairingCardPadding: CGFloat
     var pairingCardSpacing: CGFloat
     var padSize: CGFloat
-    /// The button strip attached to the pad's bottom edge (v1.0.41):
-    /// Back / Home / Exit / Keyboard in one row, inside the pad
-    /// unit instead of floating pills below it.
-    var stripHeight: CGFloat
+    var pillsButtonHeight: CGFloat
+    var bottomCell: CGFloat
+    var circleSize: CGFloat
+    var bottomRowTopPadding: CGFloat
     var diagnosticLines: Int
     var showDiagnostic: Bool
     var showLGNote: Bool
@@ -316,11 +316,27 @@ private struct RemoteLayout {
         let topBarButton: CGFloat = extraCompact ? 40 : 44
         let pairingCardPadding: CGFloat = extraCompact ? 10 : (compact ? 12 : 14)
         let pairingCardSpacing: CGFloat = extraCompact ? 8 : (compact ? 9 : 10)
-        // The button strip is part of the pad unit (v1.0.41) — the
-        // Back / Home / Exit pills and the keyboard circle are gone
-        // as floating rows, so the strip's height is the only
-        // non-pad control height left to budget.
-        let stripHeight: CGFloat = extraCompact ? 56 : (compact ? 60 : 64)
+        let pillsButtonHeight: CGFloat = extraCompact ? 44 : (compact ? 48 : 56)
+        // The apps row is gone (v1.0.18), so its height went to the
+        // bottom row instead — but v1.0.20 shrank the row back (the
+        // rocker was way too big and crowded the pills above it),
+        // and v1.0.23 removes the rocker entirely: the iPhone's
+        // physical volume buttons drive the TV volume now, so the
+        // bottom row is just two circles (keyboard, Mute) and the
+        // row shrinks again. v1.0.28 removed the mute button (both
+        // volume buttons at once toggled mute instead); v1.0.29
+        // puts it back — pressing both buttons at once was awkward,
+        // and mute belongs on a button of its own.
+        // While the pairing card is up the bottom row stays compact
+        // — the card is the focus then, and the tall row would
+        // overflow short screens.
+        let bottomCell: CGFloat = pairingShown ? (extraCompact ? 90 : 110)
+            : (extraCompact ? 120 : (compact ? 132 : 144))
+        let circleSize = min(112, bottomCell * 0.55)
+        // Breathing room above the bottom row (v1.0.20): the rocker
+        // crowded the Back/Home/Exit pills, so the row sits clearly
+        // lower now. Budgeted in `fixed` below, on top of the gap.
+        let bottomRowTopPadding: CGFloat = extraCompact ? 10 : (compact ? 14 : 18)
         let showDiagnostic = !pairingShown && !keyboardShown
         let diagnosticLines = compact ? 2 : 3
         let showLGNote = isLG && !extraCompact
@@ -331,10 +347,12 @@ private struct RemoteLayout {
         if keyboardShown { fixed += extraCompact ? 36 : (compact ? 40 : 44) }
         fixed += 38 // connection pill
         if showLGNote { fixed += 16 }
-        fixed += stripHeight // button strip, inside the pad unit
+        fixed += pillsButtonHeight // pills row — icons only, no labels
+        fixed += bottomCell // bottom row — icons only, no labels
+        fixed += bottomRowTopPadding // breathing room above the bottom row (v1.0.20)
         if showDiagnostic { fixed += CGFloat(diagnosticLines) * 17 }
         // Gaps between sections.
-        var sections = 4 // topBar, pill, padUnit, diagnostic
+        var sections = 6 // topBar, pill, pad, pills, bottom, diagnostic
         if pairingShown { sections += 1 }
         if keyboardShown { sections += 1 }
         if showLGNote { sections += 1 }
@@ -346,17 +364,15 @@ private struct RemoteLayout {
         // now, so it takes the space the old toggle used to take.
         // v1.0.23 raises the cap 300 → 320: the rocker is gone, so the
         // freed space goes to the pad on tall phones.
-        // v1.0.41 raises the cap 320 → 560: the pills row and the
-        // bottom row are folded into the pad unit, so their space
-        // goes to the pad too — the remote is basically one big
-        // trackpad with a button strip now.
         let floor: CGFloat = pairingShown ? 80 : (keyboardShown ? 60 : 100)
-        let padSize = min(560, max(floor, h - fixed - gaps))
+        let padSize = min(320, max(floor, h - fixed - gaps))
 
         return RemoteLayout(gap: gap, topPadding: topPadding, topBarButton: topBarButton,
                             pairingCardPadding: pairingCardPadding, pairingCardSpacing: pairingCardSpacing,
                             padSize: padSize,
-                            stripHeight: stripHeight,
+                            pillsButtonHeight: pillsButtonHeight,
+                            bottomCell: bottomCell, circleSize: circleSize,
+                            bottomRowTopPadding: bottomRowTopPadding,
                             diagnosticLines: diagnosticLines, showDiagnostic: showDiagnostic,
                             showLGNote: showLGNote)
     }
@@ -464,13 +480,20 @@ private struct RemoteView: View {
             }
 
             // Navigation: the swipe pad is the one and only
-            // navigation control — no D-pad, no toggle. The pad
-            // unit (v1.0.41) is the pad with the Back / Home /
-            // Exit / Keyboard row attached to its bottom edge, so
-            // the page is one surface instead of floating pills.
-            // It sizes from the layout so the page fits without
-            // scrolling.
-            padUnit(layout: layout)
+            // navigation control — no D-pad, no toggle. It sizes
+            // from the layout so the page fits without scrolling.
+            SwipePadView(height: layout.padSize, onCommand: { send($0, haptic: $1) }, onRepeatCommand: { sendRepeat($0, haptic: $1) }, onCancelRepeats: { session.cancelRepeats() })
+                .padding(.horizontal)
+
+            // Back / Home / Exit pill row — icons only, no labels.
+            HStack(spacing: 16) {
+                pillButton(systemImage: "arrow.left", label: "Back", height: layout.pillsButtonHeight) { send(.back) }
+                pillButton(systemImage: "house", label: "Home", height: layout.pillsButtonHeight) { send(.home) }
+                pillButton(systemImage: "rectangle.portrait.and.arrow.right", label: "Exit", height: layout.pillsButtonHeight) { send(.exit) }
+            }
+            .padding(.horizontal)
+
+            bottomRow(layout: layout)
 
             // Diagnostic status — capped to a few lines so the page
             // fits; the full text lives in Settings. Hidden while
@@ -507,71 +530,6 @@ private struct RemoteView: View {
             .frame(width: 200, height: 44)
             .opacity(0.01)
         )
-    }
-
-    /// The pad unit (v1.0.41): the swipe pad with the Back / Home /
-    /// Exit / Keyboard row attached to its bottom edge — one surface,
-    /// not floating pills. The pad still tilts and scales on press;
-    /// the strip is static, separated from the pad by a faint line.
-    /// The pad extends 12pt behind the strip so its bottom edge
-    /// never peeks out while it scales or tilts. No mute button —
-    /// mute is the pad's double-tap right-side zone.
-    /// How much of the pad hides behind the strip (v1.0.41): the
-    /// 0.98 press scale pulls the pad's bottom edge up ~4pt and the
-    /// tilt a couple more, so 12pt of cover is plenty.
-    private static let padStripOverlap: CGFloat = 12
-
-    private func padUnit(layout: RemoteLayout) -> some View {
-        ZStack(alignment: .top) {
-            SwipePadView(height: layout.padSize + Self.padStripOverlap, onCommand: { send($0, haptic: $1) }, onRepeatCommand: { sendRepeat($0, haptic: $1) }, onCancelRepeats: { session.cancelRepeats() })
-            VStack(spacing: 0) {
-                Spacer()
-                buttonStrip(layout: layout)
-            }
-            .frame(maxHeight: .infinity)
-        }
-        .frame(height: layout.padSize + layout.stripHeight)
-        .background(Color(red: 0.05, green: 0.07, blue: 0.18))
-        .clipShape(RoundedRectangle(cornerRadius: 24))
-        .overlay(RoundedRectangle(cornerRadius: 24).stroke(remoteAccent.opacity(0.55), lineWidth: 1.5))
-        .padding(.horizontal)
-    }
-
-    /// The button strip attached to the pad's bottom edge (v1.0.41):
-    /// Back, Home, Exit, and Keyboard (Samsung/Roku only — Android
-    /// TV and LG pop the keyboard up on their own). Icons only, no
-    /// labels. Static — it does not tilt with the pad. A faint line
-    /// at its top edge separates it from the gesture area.
-    private func buttonStrip(layout: RemoteLayout) -> some View {
-        HStack(spacing: 0) {
-            stripButton(systemImage: "arrow.left", label: "Back") { send(.back) }
-            stripButton(systemImage: "house", label: "Home") { send(.home) }
-            stripButton(systemImage: "rectangle.portrait.and.arrow.right", label: "Exit") { send(.exit) }
-            if session.capabilities.supportsTextInput && !session.capabilities.supportsAutoKeyboard {
-                stripButton(systemImage: "keyboard", label: "Keyboard") { showKeyboard.toggle() }
-            }
-        }
-        .frame(height: layout.stripHeight)
-        .background(Color(red: 0.05, green: 0.07, blue: 0.18))
-        .overlay(alignment: .top) {
-            Rectangle()
-                .fill(Color.white.opacity(0.08))
-                .frame(height: 1)
-        }
-    }
-
-    /// One cell of the attached strip: an icon filling its cell.
-    /// The `label` is VoiceOver-only — the icons are
-    /// self-explanatory.
-    private func stripButton(systemImage: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.title2)
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
     }
 
     /// Pairing code card (Android TV): the TV shows a code.
@@ -812,13 +770,61 @@ private struct RemoteView: View {
         }
     }
 
-    /// Bottom row (v1.0.34–v1.0.40) and the Back / Home / Exit pill
-    /// row: both REMOVED in v1.0.41 — the keyboard cell and the
-    /// three pills moved into the strip attached to the pad's bottom
-    /// edge (see buttonStrip / stripButton). The keyboard cell still
-    /// only appears where the button is needed: on TVs that announce
-    /// a focused text field (Android TV, LG) the keyboard pops up on
-    /// its own and the cell hides.
+    /// Bottom row (v1.0.34): just the keyboard button, centered.
+    /// The row only exists where the button is needed: on TVs that
+    /// announce a focused text field (Android TV, LG) the keyboard
+    /// pops up on its own and the button hides. (The volume rocker
+    /// is gone in v1.0.23: the iPhone's physical volume buttons
+    /// drive the TV volume now. The mic button is out for now; the
+    /// voice code stays dormant behind it. The apps row is gone in
+    /// v1.0.18 — its space went to this row instead.)
+    /// The control sits in a layout-sized cell. Icons only — the
+    /// words underneath were removed in v1.0.19. Nothing here is
+    /// ever a dead button. A separate view so the body stays small
+    /// enough for the compiler to type-check.
+    @ViewBuilder
+    private func bottomRow(layout: RemoteLayout) -> some View {
+        if session.capabilities.supportsTextInput && !session.capabilities.supportsAutoKeyboard {
+            HStack(alignment: .top, spacing: 16) {
+                Spacer()
+                Button { showKeyboard.toggle() } label: {
+                    ZStack {
+                        Circle()
+                            .fill(Color.white.opacity(0.10))
+                        Circle()
+                            .stroke(showKeyboard ? remoteAccent : Color.white.opacity(0.08), lineWidth: 2.5)
+                        Image(systemName: "keyboard")
+                            .font(.title)
+                            .foregroundStyle(.white)
+                    }
+                    .frame(width: layout.circleSize, height: layout.circleSize)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Keyboard")
+                .frame(height: layout.bottomCell)
+                Spacer()
+            }
+            .padding(.top, layout.bottomRowTopPadding)
+        }
+    }
+
+    /// Wide pill button with an icon only (Back / Home / Exit row).
+    /// The `label` is VoiceOver-only now — the visible words
+    /// underneath were removed in v1.0.19; the icons are
+    /// self-explanatory. The button height comes from the layout
+    /// so the row shrinks on short screens.
+    private func pillButton(systemImage: String, label: String, height: CGFloat, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.title2.bold())
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, minHeight: height)
+                .background(Color.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 28))
+                .overlay(RoundedRectangle(cornerRadius: 28).stroke(Color.white.opacity(0.08), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+    }
 
 }
 
@@ -1275,18 +1281,16 @@ private struct SwipePadView: View {
     }
 
     var body: some View {
-        // Plain rectangle, not a rounded one (v1.0.41): the pad
-        // lives inside the pad unit now, and the unit clips the
-        // whole thing to one rounded outline with a single border.
-        // Rounding the pad itself would show its bottom corners
-        // peeking out above the attached strip. The tilt and scale
-        // still apply to the pad only — the strip never moves.
-        Rectangle()
+        RoundedRectangle(cornerRadius: 24)
             .fill(
                 LinearGradient(
                     colors: [Color(red: 0.10, green: 0.16, blue: 0.35),
                              Color(red: 0.05, green: 0.07, blue: 0.18)],
                     startPoint: .top, endPoint: .bottom)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 24)
+                    .stroke(remoteAccent.opacity(0.55), lineWidth: 1.5)
             )
             .frame(maxWidth: .infinity)
             .frame(height: height)
