@@ -102,6 +102,7 @@ private struct DiscoveryListView: View {
                         .accessibilityLabel("Pad controls")
                     }
                 }
+                .padding(.horizontal)
 
                 // One dark card holding the whole TV list.
                 VStack(spacing: 0) {
@@ -1107,20 +1108,27 @@ struct SwipePadGesture {
     }
 }
 
-/// Pad controls reminder (v1.0.35, diagram in v1.0.36, rebuilt
-/// in v1.0.37, picture dropped in v1.0.39): just the instructions
-/// for the controls — no picture of the remote at all. The v1.0.36
-/// leader-line diagram looked terrible and the v1.0.37 picture was
-/// still more than the sheet needed. One clean row per gesture:
-/// gesture on the left, what it does on the right.
+/// Pad controls reminder (v1.0.35 list, v1.0.36 diagram rejected,
+/// v1.0.39 back to a plain list, v1.0.40 card style): each gesture
+/// is its own card — a colored icon tile, the gesture name, what
+/// it does, and a chevron — matching the mockup Nick sent. No
+/// picture of the remote.
 private struct PadHelpSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationView {
             ScrollView {
-                gestureList
-                    .padding()
+                VStack(spacing: 12) {
+                    helpCard(icon: "touchid", tint: .blue, title: "Tap", subtitle: "Select / OK")
+                    helpCard(icon: "bolt.fill", tint: .purple, title: "Double-tap", subtitle: "Select twice")
+                    helpCard(icon: "hand.raised.fill", tint: .yellow, title: "Tap + hold", subtitle: "Hold OK down")
+                    helpCard(icon: "repeat", tint: .green, title: "Double-tap + hold", subtitle: "Repeat OK")
+                    helpCard(icon: "arrow.up.and.down.and.arrow.left.and.right", tint: .cyan, title: "Swipe", subtitle: "Move that way")
+                    helpCard(icon: "forward.fill", tint: .indigo, title: "Swipe + hold", subtitle: "Keep moving")
+                    helpCard(icon: "speaker.slash.fill", tint: .red, title: "Double-tap right side", subtitle: "Mute audio")
+                }
+                .padding()
             }
             .navigationTitle("Pad controls")
             .navigationBarTitleDisplayMode(.inline)
@@ -1133,39 +1141,32 @@ private struct PadHelpSheet: View {
         .preferredColorScheme(.dark)
     }
 
-    /// The pad gestures, one clean row each: gesture on the left,
-    /// what it does on the right.
-    private var gestureList: some View {
-        VStack(spacing: 0) {
-            gestureRow("Tap", "Select / OK")
-            gestureRow("Double-tap", "Select twice")
-            gestureRow("Tap + hold", "Hold OK down")
-            gestureRow("Double-tap + hold", "Repeat OK")
-            gestureRow("Swipe", "Move that way")
-            gestureRow("Swipe + hold", "Keep moving")
-            gestureRow("Double-tap right side", "Mute", last: true)
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 4)
-        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
-    }
-
-    private func gestureRow(_ gesture: String, _ action: String, last: Bool = false) -> some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text(gesture)
-                    .font(.subheadline.weight(.semibold))
+    /// One gesture card: colored icon tile, name + what it does,
+    /// chevron.
+    private func helpCard(icon: String, tint: Color, title: String, subtitle: String) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: icon)
+                .font(.title3)
+                .foregroundStyle(tint)
+                .frame(width: 52, height: 52)
+                .background(tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 14))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.headline)
                     .foregroundStyle(.white)
-                Spacer()
-                Text(action)
+                Text(subtitle)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
-            .padding(.vertical, 10)
-            if !last {
-                Divider().background(Color.white.opacity(0.08))
-            }
+            Spacer()
+            Image(systemName: "chevron.right")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 20))
+        .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.white.opacity(0.08), lineWidth: 1))
     }
 }
 
