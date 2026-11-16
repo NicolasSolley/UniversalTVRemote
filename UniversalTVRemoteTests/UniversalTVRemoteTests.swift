@@ -1038,6 +1038,7 @@ final class TVVolumeLevelTests: XCTestCase {
     }
 }
 
+@MainActor
 final class VolumePumpDriveTests: XCTestCase {
     /// Polls until `condition` is true or the timeout elapses.
     private func waitUntil(_ condition: @escaping () -> Bool, timeout: TimeInterval = 2.0) async {
