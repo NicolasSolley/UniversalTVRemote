@@ -273,7 +273,7 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
                 isConnected = true
                 status = "Connected to \(device.name)."
                 RememberedTVStore.record(device)
-                NotificationCenter.default.post(name: .tvDidConnect, userInfo: ["host": host])
+                NotificationCenter.default.post(name: .tvDidConnect, object: nil, userInfo: ["host": host])
                 await loadLGApps()
             } catch let error as LGError {
                 isConnected = false
@@ -345,7 +345,7 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
             status = "Connected to \(device.name)."
             RememberedTVStore.record(device)
             if let host = device.host {
-                NotificationCenter.default.post(name: .tvDidConnect, userInfo: ["host": host])
+                NotificationCenter.default.post(name: .tvDidConnect, object: nil, userInfo: ["host": host])
             }
         case .failed(let reason):
             isConnected = false
@@ -752,7 +752,7 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
         }
         device.macAddress = info.mac ?? RokuRemote.macAddress(for: host)
         RememberedTVStore.record(device)
-        NotificationCenter.default.post(name: .tvDidConnect, userInfo: ["host": host])
+        NotificationCenter.default.post(name: .tvDidConnect, object: nil, userInfo: ["host": host])
         await loadRokuApps()
     }
 
@@ -765,7 +765,7 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
         status = "Connected to \(device.name)."
         device.macAddress = SamsungRemote.macAddress(for: host)
         RememberedTVStore.record(device)
-        NotificationCenter.default.post(name: .tvDidConnect, userInfo: ["host": host])
+        NotificationCenter.default.post(name: .tvDidConnect, object: nil, userInfo: ["host": host])
         await loadSamsungApps()
     }
 
