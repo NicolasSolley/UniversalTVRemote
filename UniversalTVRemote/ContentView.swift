@@ -729,14 +729,17 @@ private struct RemoteView: View {
 /// - Single tap held past onset: the OK key goes DOWN at onset and
 ///   UP on lift — no enter on lift. A hold-lift is not a tap, so it
 ///   never opens a double-tap window.
-/// - Swipe (≥ slop): a held key is released first, then the normal
-///   single directional press on release. A key is never left down.
+/// - Swipe (≥ slop): a held key is released first, then the first
+///   directional press fires at once, with the direction locked in
+///   for the touch. Hold past the 0.3s onset and that direction
+///   repeats every 0.12s until lift; a quick swipe-and-lift is still
+///   exactly one press. A key is never left down.
 struct SwipePadGesture {
     enum Output: Equatable {
         case enter(haptic: Bool)
         case enterDown
         case enterUp
-        case up, down, left, right
+        case up(haptic: Bool), down(haptic: Bool), left(haptic: Bool), right(haptic: Bool)
     }
 
     private enum State {
@@ -751,6 +754,13 @@ struct SwipePadGesture {
 
     private var state: State = .idle
 
+    /// The direction locked in when the current swipe was
+    /// recognized; nil when not swiping.
+    private var swipeDirection: Output?
+    /// True once a repeat of the held swipe has fired, so only the
+    /// first repeat buzzes and later ones stay silent.
+    private var swipeRepeatFired = false
+
     /// True while a key-down has been sent and not yet released.
     var isKeyHeldDown: Bool { state == .singleHeld }
     /// True while double-tap-hold spam is active.
@@ -758,6 +768,8 @@ struct SwipePadGesture {
     /// True after a quick tap lifted, while a second tap still
     /// counts as a double-tap.
     var isAwaitingSecondTap: Bool { state == .awaitingSecondTap }
+    /// True while a swipe is being held down (repeats active).
+    var isSwiping: Bool { state == .swiping }
 
     /// Finger down. Returns true when the view should start the hold
     /// onset timer (a fresh single or double tap); false when this
@@ -776,7 +788,8 @@ struct SwipePadGesture {
     }
 
     /// The 0.3s hold onset fired: a single tap engages the hold
-    /// (key down), a double-tap starts spamming enters.
+    /// (key down), a double-tap starts spamming enters, and a held
+    /// swipe fires its first directional repeat.
     mutating func onsetTimerFired() -> [Output] {
         switch state {
         case .singleDown:
@@ -785,6 +798,10 @@ struct SwipePadGesture {
         case .doubleDown:
             state = .doubleSpam
             return [.enter(haptic: true)]
+        case .swiping:
+            // First repeat of a held swipe — buzzes once, like the
+            // first repeat of a double-tap-hold.
+            return nextSwipeRepeat()
         default:
             return []
         }
@@ -797,26 +814,63 @@ struct SwipePadGesture {
         state == .doubleSpam ? [.enter(haptic: false)] : []
     }
 
+    /// One repeat interval (0.12s) while a swipe is held down.
+    /// The first repeat buzzes once; later repeats are silent.
+    mutating func swipeTick() -> [Output] {
+        state == .swiping ? nextSwipeRepeat() : []
+    }
+
+    /// The next repeat of the held swipe: the first one buzzes,
+    /// later ones are silent.
+    private mutating func nextSwipeRepeat() -> [Output] {
+        guard let direction = swipeDirection else { return [] }
+        if swipeRepeatFired { return [silent(direction)] }
+        swipeRepeatFired = true
+        return [direction]
+    }
+
+    /// The same direction with its haptic silenced.
+    private func silent(_ output: Output) -> Output {
+        switch output {
+        case .up(_): return .up(haptic: false)
+        case .down(_): return .down(haptic: false)
+        case .left(_): return .left(haptic: false)
+        case .right(_): return .right(haptic: false)
+        default: return output
+        }
+    }
+
     /// Finger moved. Beyond the slop the gesture becomes a swipe: a
-    /// held key is released first, then the swipe proceeds.
+    /// held key is released first, then the first directional press
+    /// fires at once and the direction locks in for the touch —
+    /// further movement never changes it. Holding past the onset
+    /// repeats that direction (see onsetTimerFired / swipeTick).
     mutating func moved(translation: CGSize, slop: CGFloat) -> [Output] {
         guard abs(translation.width) >= slop || abs(translation.height) >= slop else { return [] }
         switch state {
         case .singleHeld:
             state = .swiping
-            return [.enterUp]
+            let direction = direction(of: translation)
+            swipeDirection = direction
+            return [.enterUp, direction]
         case .singleDown, .doubleDown, .doubleSpam:
             state = .swiping
+            let direction = direction(of: translation)
+            swipeDirection = direction
+            return [direction]
+        case .swiping:
             return []
         default:
             return []
         }
     }
 
-    /// Finger lifted. A swipe sends its direction; a quick tap sends
-    /// one enter (and opens the double-tap window for a first tap
-    /// only); a hold releases the key with no enter on lift; spam
-    /// just stops.
+    /// Finger lifted. A swipe whose press never fired (a flick too
+    /// fast for moved() to see) sends its direction; a swipe already
+    /// recognized sends nothing more — its press fired in moved()
+    /// and its repeats stop. A quick tap sends one enter (and opens
+    /// the double-tap window for a first tap only); a hold releases
+    /// the key with no enter on lift; spam just stops.
     mutating func touchUp(translation: CGSize, slop: CGFloat) -> [Output] {
         let isSwipe = abs(translation.width) >= slop || abs(translation.height) >= slop
         switch state {
@@ -842,7 +896,9 @@ struct SwipePadGesture {
             return isSwipe ? [direction(of: translation)] : []
         case .swiping:
             state = .idle
-            return [direction(of: translation)]
+            swipeDirection = nil
+            swipeRepeatFired = false
+            return []
         case .awaitingSecondTap, .idle:
             return []
         }
@@ -854,13 +910,17 @@ struct SwipePadGesture {
         if state == .awaitingSecondTap { state = .idle }
     }
 
-    mutating func reset() { state = .idle }
+    mutating func reset() {
+        state = .idle
+        swipeDirection = nil
+        swipeRepeatFired = false
+    }
 
-    private func direction(of translation: CGSize) -> Output {
+    private func direction(of translation: CGSize, haptic: Bool = true) -> Output {
         if abs(translation.width) > abs(translation.height) {
-            return translation.width > 0 ? .right : .left
+            return translation.width > 0 ? .right(haptic: haptic) : .left(haptic: haptic)
         }
-        return translation.height > 0 ? .down : .up
+        return translation.height > 0 ? .down(haptic: haptic) : .up(haptic: haptic)
     }
 }
 
@@ -875,9 +935,12 @@ struct SwipePadGesture {
 /// a context menu), while a double-tap held past onset spams OK
 /// presses at the old cadence (first repeat at onset, then one
 /// every 0.12s). A quick tap still sends exactly one OK press, a
-/// quick double-tap sends two, and swipes still send single
-/// directional presses — swiping out of a hold releases the key
-/// first, so a key is never left stuck down.
+/// quick double-tap sends two. v1.0.27 adds swipe-and-hold: a swipe
+/// fires its first directional press at once and, held past the
+/// 0.3s onset, repeats that same direction every 0.12s until lift;
+/// a quick swipe-and-lift is still exactly one press. Swiping out
+/// of a hold releases the key first, so a key is never left stuck
+/// down.
 /// The height comes from the layout so the pad fits the
 /// non-scrollable page on small phones.
 private struct SwipePadView: View {
@@ -926,9 +989,17 @@ private struct SwipePadView: View {
                         let t = value.translation
                         if abs(t.width) >= Self.tapSlop || abs(t.height) >= Self.tapSlop {
                             // It's a swipe — release a held key first,
-                            // then cancel the hold timer.
+                            // then fire the first directional press.
+                            // The hold task keeps running: if the
+                            // onset hasn't fired yet it drives the
+                            // first swipe repeat at onset and the
+                            // ticks after that. If it already fired
+                            // (swiped out of a key hold) start the
+                            // repeat loop directly.
                             emit(gesture.moved(translation: t, slop: Self.tapSlop))
-                            cancelHoldTask()
+                            if gesture.isSwiping, holdTask == nil {
+                                startSwipeRepeatTask()
+                            }
                         } else if holdTask == nil {
                             // Finger down and still — the gesture
                             // decides single vs double-tap; start the
@@ -968,27 +1039,46 @@ private struct SwipePadView: View {
             case .enter(let haptic): onCommand(.enter, haptic)
             case .enterDown: onCommand(.enterDown, true)
             case .enterUp: onCommand(.enterUp, false)
-            case .up: onCommand(.up, true)
-            case .down: onCommand(.down, true)
-            case .left: onCommand(.left, true)
-            case .right: onCommand(.right, true)
+            case .up(let haptic): onCommand(.up, haptic)
+            case .down(let haptic): onCommand(.down, haptic)
+            case .left(let haptic): onCommand(.left, haptic)
+            case .right(let haptic): onCommand(.right, haptic)
             }
         }
     }
 
     /// Hold timer: at onset the gesture either engages the hold
-    /// (single tap) or starts spamming (double-tap-hold); spam then
-    /// ticks every interval until the finger lifts or swipes.
+    /// (single tap), starts spamming (double-tap-hold), or fires
+    /// the first repeat of a held swipe; spam and swipe repeats
+    /// then tick every interval until the finger lifts. Clears its
+    /// own slot when it finishes, so a later swipe out of a hold
+    /// can start a fresh repeat task.
     private func startHoldTask() {
         holdTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: Self.holdOnset)
             guard !Task.isCancelled else { return }
             emit(gesture.onsetTimerFired())
-            while gesture.isSpamming, !Task.isCancelled {
+            while gesture.isSpamming || gesture.isSwiping, !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: Self.holdInterval)
                 guard !Task.isCancelled else { return }
-                emit(gesture.spamTick())
+                emit(gesture.isSpamming ? gesture.spamTick() : gesture.swipeTick())
             }
+            holdTask = nil
+        }
+    }
+
+    /// Repeat loop for a swipe that started after the hold onset
+    /// already fired (swiped out of a key hold): the onset gate
+    /// has passed, so repeats tick every interval from here — the
+    /// first one buzzes once, later ones are silent.
+    private func startSwipeRepeatTask() {
+        holdTask = Task { @MainActor in
+            while gesture.isSwiping, !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: Self.holdInterval)
+                guard !Task.isCancelled else { return }
+                emit(gesture.swipeTick())
+            }
+            holdTask = nil
         }
     }
 

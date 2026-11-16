@@ -701,9 +701,10 @@ final class VolumeStepTrackerTests: XCTestCase {
     }
 }
 
-/// Swipe pad gesture decisions (v1.0.25): the pure state machine
-/// behind SwipePadView — tap, single-tap-hold, double-tap-hold
-/// spam, the double-tap window, and a swipe cancelling a hold.
+/// Swipe pad gesture decisions (v1.0.25, swipe-and-hold repeat
+/// v1.0.27): the pure state machine behind SwipePadView — tap,
+/// single-tap-hold, double-tap-hold spam, the double-tap window,
+/// a swipe cancelling a hold, and a held swipe repeating.
 final class SwipePadGestureTests: XCTestCase {
     private let slop: CGFloat = 14
     private let still = CGSize(width: 0, height: 0)
@@ -768,16 +769,71 @@ final class SwipePadGestureTests: XCTestCase {
         var g = SwipePadGesture()
         XCTAssertTrue(g.touchDown())
         XCTAssertEqual(g.onsetTimerFired(), [.enterDown])
-        XCTAssertEqual(g.moved(translation: swipeRight, slop: slop), [.enterUp])
+        // Key released first, then the first press fires at once.
+        XCTAssertEqual(g.moved(translation: swipeRight, slop: slop), [.enterUp, .right(haptic: true)])
         XCTAssertFalse(g.isKeyHeldDown)
-        XCTAssertEqual(g.touchUp(translation: swipeRight, slop: slop), [.right])
+        XCTAssertTrue(g.isSwiping)
+        // Lift sends nothing more — the press already fired.
+        XCTAssertEqual(g.touchUp(translation: swipeRight, slop: slop), [])
+        XCTAssertFalse(g.isSwiping)
     }
 
     func testSwipeBeforeOnsetSendsDirectionAndNoEnter() {
         var g = SwipePadGesture()
         XCTAssertTrue(g.touchDown())
-        XCTAssertEqual(g.moved(translation: swipeRight, slop: slop), [])
-        XCTAssertEqual(g.touchUp(translation: swipeRight, slop: slop), [.right])
+        // The first press fires at swipe recognition…
+        XCTAssertEqual(g.moved(translation: swipeRight, slop: slop), [.right(haptic: true)])
+        XCTAssertTrue(g.isSwiping)
+        // …and lift sends nothing more.
+        XCTAssertEqual(g.touchUp(translation: swipeRight, slop: slop), [])
+        XCTAssertFalse(g.isSwiping)
+    }
+
+    func testSwipeHeldRepeatsAfterOnset() {
+        var g = SwipePadGesture()
+        XCTAssertTrue(g.touchDown())
+        XCTAssertEqual(g.moved(translation: swipeRight, slop: slop), [.right(haptic: true)])
+        // First repeat buzzes once…
+        XCTAssertEqual(g.onsetTimerFired(), [.right(haptic: true)])
+        // …later repeats are silent.
+        XCTAssertEqual(g.swipeTick(), [.right(haptic: false)])
+        XCTAssertEqual(g.swipeTick(), [.right(haptic: false)])
+        // Release stops the repeats and sends no extra press.
+        XCTAssertEqual(g.touchUp(translation: swipeRight, slop: slop), [])
+        XCTAssertFalse(g.isSwiping)
+        XCTAssertEqual(g.swipeTick(), [])
+    }
+
+    func testSwipeHeldAfterHoldRepeats() {
+        var g = SwipePadGesture()
+        XCTAssertTrue(g.touchDown())
+        XCTAssertEqual(g.onsetTimerFired(), [.enterDown])
+        // Swiping out of a hold releases the key, then fires the press.
+        XCTAssertEqual(g.moved(translation: swipeRight, slop: slop), [.enterUp, .right(haptic: true)])
+        // First repeat buzzes once…
+        XCTAssertEqual(g.swipeTick(), [.right(haptic: true)])
+        // …later repeats are silent.
+        XCTAssertEqual(g.swipeTick(), [.right(haptic: false)])
+        XCTAssertEqual(g.touchUp(translation: swipeRight, slop: slop), [])
+        XCTAssertFalse(g.isSwiping)
+    }
+
+    func testSwipeLocksDirectionForTheTouch() {
+        var g = SwipePadGesture()
+        XCTAssertTrue(g.touchDown())
+        XCTAssertEqual(g.moved(translation: swipeRight, slop: slop), [.right(haptic: true)])
+        // Wandering up mid-swipe changes nothing.
+        XCTAssertEqual(g.moved(translation: CGSize(width: 2, height: -40), slop: slop), [])
+        XCTAssertEqual(g.swipeTick(), [.right(haptic: true)])
+        XCTAssertEqual(g.touchUp(translation: CGSize(width: 2, height: -40), slop: slop), [])
+    }
+
+    func testSwipeLiftWithoutMovedSendsOnePress() {
+        // A flick too fast for moved() to see still sends one press, on lift.
+        var g = SwipePadGesture()
+        XCTAssertTrue(g.touchDown())
+        XCTAssertEqual(g.touchUp(translation: swipeRight, slop: slop), [.right(haptic: true)])
+        XCTAssertFalse(g.isSwiping)
     }
 
     func testHoldLiftResetsDoubleTapWindow() {
