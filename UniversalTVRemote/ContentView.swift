@@ -1654,7 +1654,12 @@ private struct SwipePadView: View {
             // too, not just the press state.
             .scaleEffect(isPressed ? 0.99 : 1.0)
             .rotation3DEffect(.degrees(tiltAngle), axis: tiltAxis)
-            .animation(.spring(response: 0.2, dampingFraction: 0.75), value: (isPressed, pressLocation))
+            // Two watches, not one tuple: a tuple can't conform to
+            // Equatable, so `value: (isPressed, pressLocation)`
+            // fails the build (v1.0.47 CI). The tilt still tracks
+            // the finger as it moves, and the press still springs.
+            .animation(.spring(response: 0.2, dampingFraction: 0.75), value: isPressed)
+            .animation(.spring(response: 0.2, dampingFraction: 0.75), value: pressLocation)
             .background(
                 GeometryReader { geo in
                     Color.clear.preference(key: PadSizePreferenceKey.self, value: geo.size)

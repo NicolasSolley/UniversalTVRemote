@@ -50,7 +50,7 @@ struct TVDevice: Identifiable, Hashable {
     /// The TV's MAC, when a driver has reported it (Samsung /api/v2/
     /// wifiMac, Roku device-info wifi-mac). The magic packet needs
     /// it — without it a sleeping TV cannot be woken (v1.0.47).
-    var macAddress: String?
+    var macAddress: String? = nil
     /// A remembered TV the current scan has not found live: asleep,
     /// not gone. Cleared the moment any discovery path finds it.
     var isSleeping: Bool = false
