@@ -357,16 +357,16 @@ private struct DiscoveryListView: View {
                 .font(.system(size: 10, weight: .bold))
                 .minimumScaleFactor(0.6)
                 .lineLimit(1)
-                .foregroundStyle(.primary)
+                .foregroundStyle(.white)
                 .padding(.horizontal, 6)
         case .roku:
             Text("Roku")
                 .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(.primary)
+                .foregroundStyle(.white)
         case .lg:
             Text("LG")
                 .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(.primary)
+                .foregroundStyle(.white)
         case .airPlay:
             Image(systemName: "airplayvideo")
                 .font(.title3)
