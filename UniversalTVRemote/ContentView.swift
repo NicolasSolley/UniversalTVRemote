@@ -446,46 +446,10 @@ private struct RemoteView: View {
                 // Keyboard / text input, revealed by the keyboard
                 // button in the bottom row — or on its own when the
                 // TV announces a focused text field (v1.0.34 auto
-                // keyboard). Send closes it (v1.0.34): the text is
-                // on the TV, so there is nothing left to type. The
-                // × dismisses without sending — the only way to
-                // close it on a TV where the button hides, and the
-                // escape hatch everywhere else.
-                if showKeyboard, session.capabilities.supportsTextInput {
-                    HStack {
-                        TextField("Type on the TV…", text: $keyboardText)
-                            .textFieldStyle(.roundedBorder)
-                            .focused($keyboardFocused)
-                            .autocorrectionDisabled(true)
-                            .textInputAutocapitalization(.never)
-                        Button("Send") {
-                            let text = keyboardText
-                            guard !text.isEmpty else { return }
-                            keyboardText = ""
-                            showKeyboard = false
-                            keyboardFocused = false
-                            Task { await session.send(.text(text)) }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(keyboardText.isEmpty)
-                        Button {
-                            keyboardText = ""
-                            showKeyboard = false
-                            keyboardFocused = false
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.subheadline.bold())
-                                .foregroundStyle(.secondary)
-                                .frame(width: 28, height: 28)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Close keyboard")
-                    }
-                    .padding(.horizontal)
-                    // Focus on appear so the iOS keyboard pops up at
-                    // once — no second tap on the text field.
-                    .onAppear { keyboardFocused = true }
-                }
+                // keyboard). Extracted (see keyboardInputRow): the
+                // body got too big for the compiler to type-check
+                // as one expression.
+                keyboardInputRow
 
                 connectionPill
 
@@ -516,41 +480,10 @@ private struct RemoteView: View {
 
                 // Bottom row (v1.0.34): just the keyboard button,
                 // centered — the mute button is gone, mute lives on
-                // the pad's middle-right double-tap now. The row
-                // only exists where the button is needed: on TVs
-                // that announce a focused text field (Android TV,
-                // LG) the keyboard pops up on its own and the
-                // button hides. (The volume rocker is gone in
-                // v1.0.23: the iPhone's physical volume buttons
-                // drive the TV volume now. The mic button is out
-                // for now; the voice code stays dormant behind it.
-                // The apps row is gone in v1.0.18 — its space went
-                // to this row instead.)
-                // The control sits in a layout-sized cell. Icons
-                // only — the words underneath were removed in
-                // v1.0.19. Nothing here is ever a dead button.
-                if session.capabilities.supportsTextInput && !session.capabilities.supportsAutoKeyboard {
-                    HStack(alignment: .top, spacing: 16) {
-                        Spacer()
-                        Button { showKeyboard.toggle() } label: {
-                            ZStack {
-                                Circle()
-                                    .fill(Color.white.opacity(0.10))
-                                Circle()
-                                    .stroke(showKeyboard ? remoteAccent : Color.white.opacity(0.08), lineWidth: 2.5)
-                                Image(systemName: "keyboard")
-                                    .font(.title)
-                                    .foregroundStyle(.white)
-                            }
-                            .frame(width: layout.circleSize, height: layout.circleSize)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel("Keyboard")
-                        .frame(height: layout.bottomCell)
-                        Spacer()
-                    }
-                    .padding(.top, layout.bottomRowTopPadding)
-                }
+                // the pad's middle-right double-tap now. Extracted
+                // (see bottomRow(layout:)): the body got too big
+                // for the compiler to type-check as one expression.
+                bottomRow(layout: layout)
 
                 // Diagnostic status — capped to a few lines so the page
                 // fits; the full text lives in Settings. Hidden while
@@ -745,6 +678,91 @@ private struct RemoteView: View {
     private func sendRepeat(_ command: RemoteCommand, haptic: Bool = true) {
         if haptic { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
         session.sendRepeat(command)
+    }
+
+    /// Keyboard / text input, revealed by the keyboard button — or
+    /// on its own when the TV announces a focused text field
+    /// (v1.0.34 auto keyboard). Send closes it (v1.0.34): the text
+    /// is on the TV, so there is nothing left to type. The ×
+    /// dismisses without sending — the only way to close it on a
+    /// TV where the button hides, and the escape hatch everywhere
+    /// else. A separate view so the body stays small enough for
+    /// the compiler to type-check.
+    @ViewBuilder
+    private var keyboardInputRow: some View {
+        if showKeyboard, session.capabilities.supportsTextInput {
+            HStack {
+                TextField("Type on the TV…", text: $keyboardText)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($keyboardFocused)
+                    .autocorrectionDisabled(true)
+                    .textInputAutocapitalization(.never)
+                Button("Send") {
+                    let text = keyboardText
+                    guard !text.isEmpty else { return }
+                    keyboardText = ""
+                    showKeyboard = false
+                    keyboardFocused = false
+                    Task { await session.send(.text(text)) }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(keyboardText.isEmpty)
+                Button {
+                    keyboardText = ""
+                    showKeyboard = false
+                    keyboardFocused = false
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.subheadline.bold())
+                        .foregroundStyle(.secondary)
+                        .frame(width: 28, height: 28)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Close keyboard")
+            }
+            .padding(.horizontal)
+            // Focus on appear so the iOS keyboard pops up at
+            // once — no second tap on the text field.
+            .onAppear { keyboardFocused = true }
+        }
+    }
+
+    /// Bottom row (v1.0.34): just the keyboard button, centered.
+    /// The row only exists where the button is needed: on TVs that
+    /// announce a focused text field (Android TV, LG) the keyboard
+    /// pops up on its own and the button hides. (The volume rocker
+    /// is gone in v1.0.23: the iPhone's physical volume buttons
+    /// drive the TV volume now. The mic button is out for now; the
+    /// voice code stays dormant behind it. The apps row is gone in
+    /// v1.0.18 — its space went to this row instead.)
+    /// The control sits in a layout-sized cell. Icons only — the
+    /// words underneath were removed in v1.0.19. Nothing here is
+    /// ever a dead button. A separate view so the body stays small
+    /// enough for the compiler to type-check.
+    @ViewBuilder
+    private func bottomRow(layout: RemoteLayout) -> some View {
+        if session.capabilities.supportsTextInput && !session.capabilities.supportsAutoKeyboard {
+            HStack(alignment: .top, spacing: 16) {
+                Spacer()
+                Button { showKeyboard.toggle() } label: {
+                    ZStack {
+                        Circle()
+                            .fill(Color.white.opacity(0.10))
+                        Circle()
+                            .stroke(showKeyboard ? remoteAccent : Color.white.opacity(0.08), lineWidth: 2.5)
+                        Image(systemName: "keyboard")
+                            .font(.title)
+                            .foregroundStyle(.white)
+                    }
+                    .frame(width: layout.circleSize, height: layout.circleSize)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Keyboard")
+                .frame(height: layout.bottomCell)
+                Spacer()
+            }
+            .padding(.top, layout.bottomRowTopPadding)
+        }
     }
 
     /// Wide pill button with an icon only (Back / Home / Exit row).
@@ -1047,6 +1065,18 @@ struct SwipePadGesture {
     }
 }
 
+/// Reports the pad's rendered size up through the view tree
+/// (v1.0.34): the mute zone is a fraction of the pad, so taps are
+/// located against the measured size. A PreferenceKey, not
+/// onChange(of: geo.size) — a zero-parameter onChange closure
+/// resolves to the iOS 17 overload, and the target is iOS 15.
+private struct PadSizePreferenceKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        value = nextValue()
+    }
+}
+
 /// Big swipe pad (the Swipe half of the toggle): near full-width,
 /// a bare pad — no chevrons, no hand icon, no label.
 /// One drag is one command on release (tap = select) — the same
@@ -1167,11 +1197,10 @@ private struct SwipePadView: View {
             .animation(.spring(response: 0.22, dampingFraction: 0.7), value: isPressed)
             .background(
                 GeometryReader { geo in
-                    Color.clear
-                        .onAppear { padSize = geo.size }
-                        .onChange(of: geo.size) { padSize = geo.size }
+                    Color.clear.preference(key: PadSizePreferenceKey.self, value: geo.size)
                 }
             )
+            .onPreferenceChange(PadSizePreferenceKey.self) { padSize = $0 }
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
