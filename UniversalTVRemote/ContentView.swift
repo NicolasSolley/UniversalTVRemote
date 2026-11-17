@@ -341,10 +341,13 @@ struct RemoteLayout {
     var topPadding: CGFloat
     var topBarButton: CGFloat
     /// Height of the connection-pill row (v1.0.58): the pill
-    /// itself is 9+9 padding around a ~20pt line, and the zone
-    /// guide toggle lives in that row now, so it is sized to
-    /// this height — any taller and the row would grow and the
-    /// pad (which absorbs the slack) would shrink.
+    /// itself is 9+9 padding around a ~20pt line. The zone
+    /// guide toggle lives in that row too, but it renders at
+    /// topBarButton size (44, v1.0.60) while occupying only
+    /// this height as its layout slot — the circle overflows
+    /// 3pt above and below the row into the empty space there,
+    /// so the row doesn't grow and the pad (which absorbs the
+    /// slack) doesn't shrink.
     var connectionPillHeight: CGFloat = 38
     var pairingCardPadding: CGFloat
     var pairingCardSpacing: CGFloat
@@ -730,10 +733,12 @@ private struct RemoteView: View {
     /// Connection row (v1.0.58): the status pill stays centered,
     /// and the zone guide toggle sits at the right edge, directly
     /// under the power button — a vertical stack on the right,
-    /// power on top, guide below. The toggle is sized to the
-    /// row's budgeted height (layout.connectionPillHeight), so
-    /// the row doesn't grow and the pad size doesn't move; it
-    /// keeps the same look and behavior as in the top bar (accent
+    /// power on top, guide below. The toggle renders at the same
+    /// size as the power button (layout.topBarButton, v1.0.60)
+    /// but occupies only the row's budgeted height
+    /// (layout.connectionPillHeight) as its layout slot, so the
+    /// row doesn't grow and the pad size doesn't move; it keeps
+    /// the same look and behavior as in the top bar (accent
     /// ring + tinted icon when on), just in the new spot. The
     /// toggle hides entirely when Settings turns it off
     /// (showGuideButton) — the pill stays centered either way.
@@ -747,12 +752,18 @@ private struct RemoteView: View {
                         Image(systemName: "rectangle.split.2x2")
                             .font(.headline.bold())
                             .foregroundStyle(showZones ? remoteAccent : .primary)
-                            .frame(width: layout.connectionPillHeight, height: layout.connectionPillHeight)
+                            .frame(width: layout.topBarButton, height: layout.topBarButton)
                             .background(surfaceFill, in: Circle())
                             .overlay(Circle().stroke(showZones ? remoteAccent : Color.primary.opacity(0.08), lineWidth: showZones ? 2 : 1))
                             .shadow(color: surfaceShadow, radius: 6, y: 2)
                     }
                     .buttonStyle(.plain)
+                    // Layout slot stays the pill row's 38pt (v1.0.60):
+                    // the 44pt circle renders centered in it and
+                    // overflows 3pt above/below the row into the
+                    // empty space there — the row height, pad size,
+                    // and crop aspect don't move.
+                    .frame(width: layout.connectionPillHeight, height: layout.connectionPillHeight)
                     .accessibilityLabel("Show pad zones")
                 }
                 .padding(.horizontal)
