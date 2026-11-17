@@ -1272,15 +1272,18 @@ struct SwipePadGesture {
 /// is its own card — a colored icon tile, the gesture name, what
 /// it does, and a chevron — matching the mockup Nick sent. No
 /// picture of the remote.
+/// Pad controls help, glassmorphic (v1.0.50): Nick's screenshot —
+/// frosted glass cards on the page background, floating pill
+/// header, same six gesture cards.
 private struct PadHelpSheet: View {
     @Environment(\.dismiss) private var dismiss
-    /// Resolved color scheme (v1.0.48): the sheet's background
-    /// matches the home screen's — same AppBackground, not the
-    /// system black/white.
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        NavigationView {
+        VStack(spacing: 0) {
+            GlassHeaderPill(title: "Pad controls") { dismiss() }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
             ScrollView {
                 VStack(spacing: 12) {
                     helpCard(icon: "touchid", tint: .blue, title: "Tap", subtitle: "Select / OK")
@@ -1290,22 +1293,14 @@ private struct PadHelpSheet: View {
                     helpCard(icon: "forward.fill", tint: .indigo, title: "Swipe + hold", subtitle: "Keep moving")
                     helpCard(icon: "speaker.slash.fill", tint: .red, title: "Double-tap right side", subtitle: "Mute audio")
                 }
-                .padding()
-            }
-            // Same background as the home screen (v1.0.48): the
-            // sheet was showing the system black/white while the
-            // home screen uses the Chrome gray / soft gray.
-            .background(AppBackground.color(for: colorScheme).ignoresSafeArea())
-            .navigationTitle("Pad controls")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
+                .padding(16)
+                .padding(.bottom, 24)
             }
         }
-        // No preferredColorScheme here (v1.0.46): the sheet follows
-        // the app's appearance setting like everything else.
+        // Same background as the home screen (v1.0.48): the
+        // sheet was showing the system black/white while the
+        // home screen uses the Chrome gray / soft gray.
+        .background(AppBackground.color(for: colorScheme).ignoresSafeArea())
     }
 
     /// One gesture card: colored icon tile, name + what it does.
@@ -1330,8 +1325,7 @@ private struct PadHelpSheet: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 14)
-        .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 20))
-        .overlay(RoundedRectangle(cornerRadius: 20).stroke(Color.primary.opacity(0.08), lineWidth: 1))
+        .background(GlassCardBackground())
     }
 }
 
@@ -1340,85 +1334,214 @@ private struct PadHelpSheet: View {
 /// style, and light/dark mode. Everything persists in UserDefaults
 /// and applies at once; the pad keeps its own theme gradient in
 /// both appearances.
-/// Settings, rebuilt the Apple way (v1.0.49): the old sheet stacked
-/// three segmented pickers and a row of color circles, which read
-/// like a homemade control panel. Real Settings screens are an
-/// inset-grouped list where each row drills into a sub-list with a
-/// checkmark on the current choice — label on the left, current
-/// value in gray on the right. That's what this is now.
+/// Frosted-glass card fill (v1.0.50): ultraThinMaterial in a big
+/// rounded rect, hairline stroke, soft shadow. The material
+/// adapts to light and dark on its own, so the same card reads
+/// as glass on both appearances.
+private struct GlassCardBackground: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: 28)
+            .fill(.ultraThinMaterial)
+            .overlay(
+                RoundedRectangle(cornerRadius: 28)
+                    .stroke(Color.primary.opacity(0.10), lineWidth: 1)
+            )
+            .shadow(color: .black.opacity(0.18), radius: 16, y: 6)
+    }
+}
+
+/// Floating glass header pill for the sheets (v1.0.50): title
+/// centered, Done on the right, like Nick's screenshot.
+private struct GlassHeaderPill: View {
+    let title: String
+    var onDone: () -> Void
+
+    var body: some View {
+        ZStack {
+            Capsule()
+                .fill(.ultraThinMaterial)
+                .overlay(
+                    Capsule()
+                        .stroke(Color.primary.opacity(0.12), lineWidth: 1)
+                )
+            Text(title)
+                .font(.headline)
+            HStack {
+                Spacer()
+                Button("Done", action: onDone)
+            }
+            .padding(.horizontal, 20)
+        }
+        .frame(height: 52)
+    }
+}
+
+/// A glass section (v1.0.50): title on its own — no icon next to
+/// it, Nick's call — then a frosted card holding the controls.
+private struct GlassSection<Content: View>: View {
+    let title: String
+    let content: Content
+
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(title)
+                .font(.subheadline.bold())
+                .foregroundStyle(.secondary)
+                .padding(.leading, 6)
+            VStack(alignment: .leading, spacing: 12) {
+                content
+            }
+            .padding(16)
+            .background(GlassCardBackground())
+        }
+    }
+}
+
+/// A segmented control that looks like the one in Nick's
+/// screenshot (v1.0.50): dark track, the selected segment a solid
+/// blue pill. The stock .segmented picker reads as a plain form
+/// control next to the glass cards.
+private struct GlassSegmentedControl: View {
+    let options: [(value: String, name: String)]
+    @Binding var selection: String
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(options, id: \.value) { option in
+                Button {
+                    withAnimation(.snappy) { selection = option.value }
+                } label: {
+                    Text(option.name)
+                        .font(.subheadline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12)
+                                .fill(selection == option.value ? Color.blue : Color.clear)
+                        )
+                        .foregroundStyle(selection == option.value ? .white : .primary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(4)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color.primary.opacity(0.08))
+        )
+    }
+}
+
+/// Settings, glassmorphic (v1.0.50): Nick's screenshot — frosted
+/// glass cards on the page background, floating pill header,
+/// title-only section headers. Supersedes the v1.0.49 Apple-list
+/// rebuild before it ever shipped: he wants the glass look, not
+/// the Settings-app list. Also adds the pad cover picker.
 private struct SettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
     @AppStorage("padTheme") private var padThemeRaw = "blue"
     @AppStorage("padBorder") private var padBorderRaw = "off"
     @AppStorage("trailStyle") private var trailStyleRaw = "glow"
     @AppStorage("appearance") private var appearanceRaw = "dark"
+    @AppStorage("padCoverVersion") private var coverVersion = 0
+    @State private var showPhotoPicker = false
+    @State private var showCropper = false
+    @State private var cropImage: UIImage?
+    @State private var showRemoveCoverAlert = false
 
     var body: some View {
-        NavigationView {
-            List {
-                Section("Pad color") {
-                    NavigationLink {
-                        SettingsOptionList(
-                            title: "Pad Color",
-                            options: PadTheme.allCases.map { theme in
-                                SettingsOption(value: theme.rawValue, name: theme.name, top: theme.top, bottom: theme.bottom)
-                            },
-                            selection: $padThemeRaw
-                        )
-                    } label: {
-                        SettingsRow(label: "Color", value: (PadTheme(rawValue: padThemeRaw) ?? .blue).name)
+        VStack(spacing: 0) {
+            GlassHeaderPill(title: "Settings") { dismiss() }
+                .padding(.horizontal, 16)
+                .padding(.top, 12)
+            ScrollView {
+                VStack(spacing: 24) {
+                    GlassSection("PAD COLOR") {
+                        HStack(spacing: 16) {
+                            ForEach(PadTheme.allCases, id: \.self) { theme in
+                                Button { padThemeRaw = theme.rawValue } label: {
+                                    ZStack {
+                                        Circle()
+                                            .fill(LinearGradient(colors: [theme.top, theme.bottom], startPoint: .top, endPoint: .bottom))
+                                            .frame(width: 40, height: 40)
+                                        if padThemeRaw == theme.rawValue {
+                                            Image(systemName: "checkmark")
+                                                .font(.subheadline.bold())
+                                                .foregroundStyle(.white)
+                                        }
+                                    }
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel(theme.name)
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                        Divider()
+                        Text((PadTheme(rawValue: padThemeRaw) ?? .blue).name)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    }
+                    GlassSection("PAD BORDER") {
+                        GlassSegmentedControl(options: PadBorder.allCases.map { ($0.rawValue, $0.name) }, selection: $padBorderRaw)
+                        Text("Flow runs a light around the pad, like an LED keyboard.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    GlassSection("TRAIL") {
+                        GlassSegmentedControl(options: TrailStyle.allCases.map { ($0.rawValue, $0.name) }, selection: $trailStyleRaw)
+                        Text("How the swipe trail looks on the pad.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    GlassSection("APPEARANCE") {
+                        GlassSegmentedControl(options: AppAppearance.allCases.map { ($0.rawValue, $0.name) }, selection: $appearanceRaw)
+                    }
+                    GlassSection("PAD COVER") {
+                        if let cover = PadCoverStore.image(for: coverVersion) {
+                            Image(uiImage: cover)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(height: 120)
+                                .clipShape(RoundedRectangle(cornerRadius: 16))
+                            HStack(spacing: 16) {
+                                Button("Change photo") { showPhotoPicker = true }
+                                Button("Adjust crop") {
+                                    cropImage = PadCoverStore.loadOriginal() ?? cover
+                                    showCropper = true
+                                }
+                                Spacer()
+                                Button("Remove", role: .destructive) { showRemoveCoverAlert = true }
+                            }
+                            .font(.subheadline)
+                        } else {
+                            Button { showPhotoPicker = true } label: {
+                                HStack {
+                                    Image(systemName: "photo")
+                                    Text("Choose a photo")
+                                    Spacer()
+                                    Image(systemName: "chevron.right")
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                            Text("Crop it to the pad and use it as the pad's cover art.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
-                Section {
-                    NavigationLink {
-                        SettingsOptionList(
-                            title: "Pad Border",
-                            options: PadBorder.allCases.map { SettingsOption(value: $0.rawValue, name: $0.name) },
-                            selection: $padBorderRaw
-                        )
-                    } label: {
-                        SettingsRow(label: "Border", value: (PadBorder(rawValue: padBorderRaw) ?? .off).name)
-                    }
-                } header: {
-                    Text("Pad border")
-                } footer: {
-                    Text("Flow runs a light around the pad, like an LED keyboard.")
-                }
-                Section {
-                    NavigationLink {
-                        SettingsOptionList(
-                            title: "Trail",
-                            options: TrailStyle.allCases.map { SettingsOption(value: $0.rawValue, name: $0.name) },
-                            selection: $trailStyleRaw
-                        )
-                    } label: {
-                        SettingsRow(label: "Trail", value: (TrailStyle(rawValue: trailStyleRaw) ?? .glow).name)
-                    }
-                } header: {
-                    Text("Trail")
-                } footer: {
-                    Text("How the swipe trail looks on the pad.")
-                }
-                Section("Appearance") {
-                    NavigationLink {
-                        SettingsOptionList(
-                            title: "Appearance",
-                            options: AppAppearance.allCases.map { SettingsOption(value: $0.rawValue, name: $0.name) },
-                            selection: $appearanceRaw
-                        )
-                    } label: {
-                        SettingsRow(label: "Appearance", value: (AppAppearance(rawValue: appearanceRaw) ?? .dark).name)
-                    }
-                }
-            }
-            .listStyle(.insetGrouped)
-            .navigationTitle("Settings")
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
+                .padding(16)
+                .padding(.bottom, 24)
             }
         }
+        .background(AppBackground.color(for: colorScheme).ignoresSafeArea())
         // Live appearance (v1.0.48): a sheet's color scheme is
         // frozen at presentation — the root view's
         // preferredColorScheme flips the app behind it, but the
@@ -1427,75 +1550,274 @@ private struct SettingsSheet: View {
         // the sheet's own @AppStorage, flips it the moment the
         // picker changes.
         .preferredColorScheme((AppAppearance(rawValue: appearanceRaw) ?? .dark).scheme)
-    }
-}
-
-/// One Settings-style row: label on the left, current value in gray
-/// on the right, chevron added by the NavigationLink.
-private struct SettingsRow: View {
-    let label: String
-    let value: String
-
-    var body: some View {
-        HStack {
-            Text(label)
-            Spacer()
-            Text(value)
-                .foregroundStyle(.secondary)
-        }
-    }
-}
-
-/// One option in a Settings sub-list: name, optional color swatch,
-/// checkmark on the current choice.
-private struct SettingsOption {
-    let value: String
-    let name: String
-    let top: Color?
-    let bottom: Color?
-
-    init(value: String, name: String, top: Color? = nil, bottom: Color? = nil) {
-        self.value = value
-        self.name = name
-        self.top = top
-        self.bottom = bottom
-    }
-}
-
-/// A sub-list of choices, the way Settings drills down: tap a row
-/// to pick it, checkmark shows the current one.
-private struct SettingsOptionList: View {
-    let title: String
-    let options: [SettingsOption]
-    @Binding var selection: String
-
-    var body: some View {
-        List {
-            ForEach(options, id: \.value) { option in
-                Button {
-                    selection = option.value
-                } label: {
-                    HStack {
-                        if let top = option.top, let bottom = option.bottom {
-                            Circle()
-                                .fill(LinearGradient(colors: [top, bottom], startPoint: .top, endPoint: .bottom))
-                                .frame(width: 22, height: 22)
-                        }
-                        Text(option.name)
-                        Spacer()
-                        if selection == option.value {
-                            Image(systemName: "checkmark")
-                                .font(.body.bold())
-                                .foregroundStyle(Color.accentColor)
-                        }
+        .sheet(isPresented: $showPhotoPicker) {
+            PadCoverPicker(
+                onPick: { image in
+                    showPhotoPicker = false
+                    cropImage = image
+                    // Let the picker finish dismissing before the
+                    // cropper presents, or the second sheet never
+                    // appears.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                        showCropper = true
                     }
-                    .foregroundStyle(.primary)
-                }
-                .buttonStyle(.plain)
+                },
+                onCancel: { showPhotoPicker = false }
+            )
+        }
+        .sheet(isPresented: $showCropper) {
+            if let cropImage {
+                PadCoverCropView(
+                    image: cropImage,
+                    onDone: { cropped in
+                        PadCoverStore.saveOriginal(cropImage)
+                        PadCoverStore.saveCover(cropped)
+                        coverVersion += 1
+                        showCropper = false
+                    },
+                    onCancel: { showCropper = false }
+                )
             }
         }
-        .listStyle(.insetGrouped)
-        .navigationTitle(title)
+        .alert("Remove pad cover?", isPresented: $showRemoveCoverAlert) {
+            Button("Remove cover", role: .destructive) {
+                PadCoverStore.remove()
+                coverVersion += 1
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The pad goes back to its color theme.")
+        }
+    }
+}
+
+/// Pad cover art (v1.0.50): a user-picked photo, cropped to the
+/// pad's shape in Settings, saved as JPEGs in Documents. The pad
+/// reads it through a version counter in @AppStorage so it
+/// re-renders when the cover changes.
+private enum PadCoverStore {
+    private static var documents: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    }
+    static var coverURL: URL { documents.appendingPathComponent("pad-cover.jpg") }
+    static var originalURL: URL { documents.appendingPathComponent("pad-cover-original.jpg") }
+
+    private static var cachedImage: UIImage?
+    private static var cachedVersion = -1
+
+    static func image(for version: Int) -> UIImage? {
+        if cachedVersion != version {
+            cachedImage = UIImage(contentsOfFile: coverURL.path)
+            cachedVersion = version
+        }
+        return cachedImage
+    }
+
+    static func loadOriginal() -> UIImage? {
+        UIImage(contentsOfFile: originalURL.path)
+    }
+
+    static func saveCover(_ image: UIImage) {
+        if let data = image.jpegData(compressionQuality: 0.9) {
+            try? data.write(to: coverURL, options: .atomic)
+        }
+    }
+
+    static func saveOriginal(_ image: UIImage) {
+        if let data = image.jpegData(compressionQuality: 0.92) {
+            try? data.write(to: originalURL, options: .atomic)
+        }
+    }
+
+    static func remove() {
+        try? FileManager.default.removeItem(at: coverURL)
+        try? FileManager.default.removeItem(at: originalURL)
+        cachedImage = nil
+    }
+
+    /// The pad's measured aspect (width / height), saved by the
+    /// pad itself so the cropper frames the photo to the real
+    /// pad shape. 0.91 is the iPhone 15 Plus fallback.
+    static var padAspect: CGFloat {
+        let w = UserDefaults.standard.double(forKey: "padMeasuredWidth")
+        let h = UserDefaults.standard.double(forKey: "padMeasuredHeight")
+        guard w > 0, h > 0 else { return 0.91 }
+        return w / h
+    }
+}
+
+/// The system photo picker (v1.0.50): UIImagePickerController
+/// works back to iOS 15, where PhotosPicker doesn't exist.
+/// Needs NSPhotoLibraryUsageDescription in Info.plist.
+private struct PadCoverPicker: UIViewControllerRepresentable {
+    var onPick: (UIImage) -> Void
+    var onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onPick: onPick, onCancel: onCancel)
+    }
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .photoLibrary
+        picker.allowsEditing = false
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        var onPick: (UIImage) -> Void
+        var onCancel: () -> Void
+
+        init(onPick: @escaping (UIImage) -> Void, onCancel: @escaping () -> Void) {
+            self.onPick = onPick
+            self.onCancel = onCancel
+        }
+
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            if let image = info[.originalImage] as? UIImage {
+                onPick(image)
+            } else {
+                onCancel()
+            }
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            onCancel()
+        }
+    }
+}
+
+/// Crop a photo to the pad's shape (v1.0.50): drag to move, pinch
+/// to zoom, double-tap to reset. The frame is the pad — same
+/// aspect, same rounded corners — so what you see is what the pad
+/// shows.
+private struct PadCoverCropView: View {
+    let image: UIImage
+    var onDone: (UIImage) -> Void
+    var onCancel: () -> Void
+
+    @State private var scale: CGFloat = 1
+    @State private var offset: CGSize = .zero
+    @State private var lastScale: CGFloat = 1
+    @State private var lastOffset: CGSize = .zero
+
+    private var frameSize: CGSize {
+        let w = min(UIScreen.main.bounds.width - 32, 520)
+        return CGSize(width: w, height: w / PadCoverStore.padAspect)
+    }
+    private var fitScale: CGFloat {
+        max(frameSize.width / image.size.width, frameSize.height / image.size.height)
+    }
+    private var totalScale: CGFloat { fitScale * scale }
+
+    private func clampedOffset(_ o: CGSize) -> CGSize {
+        let sw = image.size.width * totalScale
+        let sh = image.size.height * totalScale
+        let mx = max(0, (sw - frameSize.width) / 2)
+        let my = max(0, (sh - frameSize.height) / 2)
+        return CGSize(width: min(max(o.width, -mx), mx),
+                      height: min(max(o.height, -my), my))
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button("Cancel", action: onCancel)
+                Spacer()
+                Text("Crop pad cover")
+                    .font(.headline)
+                Spacer()
+                Button("Set cover") { onDone(croppedImage()) }
+                    .font(.headline)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+            Spacer()
+            ZStack {
+                Image(uiImage: image)
+                    .resizable()
+                    .frame(width: image.size.width * totalScale,
+                           height: image.size.height * totalScale)
+                    .offset(offset)
+            }
+            .frame(width: frameSize.width, height: frameSize.height)
+            .clipShape(RoundedRectangle(cornerRadius: 24))
+            .overlay(
+                RoundedRectangle(cornerRadius: 24)
+                    .stroke(Color.white.opacity(0.7), lineWidth: 2)
+            )
+            .gesture(
+                SimultaneousGesture(
+                    DragGesture()
+                        .onChanged { value in
+                            offset = clampedOffset(CGSize(
+                                width: lastOffset.width + value.translation.width,
+                                height: lastOffset.height + value.translation.height))
+                        }
+                        .onEnded { _ in lastOffset = offset },
+                    MagnificationGesture()
+                        .onChanged { value in
+                            scale = min(4, max(1, lastScale * value))
+                            offset = clampedOffset(offset)
+                        }
+                        .onEnded { _ in lastScale = scale }
+                )
+            )
+            .onTapGesture(count: 2) {
+                scale = 1
+                lastScale = 1
+                offset = .zero
+                lastOffset = .zero
+            }
+            Spacer()
+            Text("Drag to move · Pinch to zoom · Double-tap to reset")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 24)
+        }
+        .background(Color.black.ignoresSafeArea())
+    }
+
+    /// The visible rect, in the photo's own points: invert the
+    /// display transform (fit scale × user zoom, plus offset).
+    private func croppedImage() -> UIImage {
+        let normalized = image.normalizedOrientation()
+        let ts = fitScale * scale
+        let vw = frameSize.width / ts
+        let vh = frameSize.height / ts
+        let cx = normalized.size.width / 2 - offset.width / ts
+        let cy = normalized.size.height / 2 - offset.height / ts
+        var rect = CGRect(x: cx - vw / 2, y: cy - vh / 2, width: vw, height: vh)
+        rect.origin.x = min(max(rect.origin.x, 0), max(0, normalized.size.width - rect.width))
+        rect.origin.y = min(max(rect.origin.y, 0), max(0, normalized.size.height - rect.height))
+        rect.size.width = min(rect.width, normalized.size.width)
+        rect.size.height = min(rect.height, normalized.size.height)
+        let s = normalized.scale
+        let pixelRect = CGRect(x: rect.origin.x * s, y: rect.origin.y * s,
+                               width: rect.width * s, height: rect.height * s)
+        guard let cg = normalized.cgImage?.cropping(to: pixelRect) else { return normalized }
+        let cropped = UIImage(cgImage: cg, scale: s, orientation: .up)
+        let targetW: CGFloat = 1200
+        guard cropped.size.width > targetW else { return cropped }
+        let k = targetW / cropped.size.width
+        let size = CGSize(width: cropped.size.width * k, height: cropped.size.height * k)
+        return UIGraphicsImageRenderer(size: size).image { _ in
+            cropped.draw(in: CGRect(origin: .zero, size: size))
+        }
+    }
+}
+
+private extension UIImage {
+    /// Redraw with the orientation baked in, so pixel math
+    /// (cropping) and point math (display) agree.
+    func normalizedOrientation() -> UIImage {
+        guard imageOrientation != .up else { return self }
+        return UIGraphicsImageRenderer(size: size).image { _ in
+            draw(in: CGRect(origin: .zero, size: size))
+        }
     }
 }
 
@@ -1663,6 +1985,9 @@ private struct SwipePadView: View {
     @AppStorage("padTheme") private var padThemeRaw = "blue"
     @AppStorage("padBorder") private var padBorderRaw = "off"
     @AppStorage("trailStyle") private var trailStyleRaw = "glow"
+    /// Pad cover art (v1.0.50): bumped whenever the cover is
+    /// set, re-cropped, or removed, so the pad re-renders.
+    @AppStorage("padCoverVersion") private var coverVersion = 0
     private var theme: PadTheme { PadTheme(rawValue: padThemeRaw) ?? .blue }
     private var borderEffect: PadBorder { PadBorder(rawValue: padBorderRaw) ?? .off }
     private var trailStyle: TrailStyle { TrailStyle(rawValue: trailStyleRaw) ?? .glow }
@@ -1753,6 +2078,20 @@ private struct SwipePadView: View {
                     colors: [theme.top, theme.bottom],
                     startPoint: .top, endPoint: .bottom)
             )
+            // Pad cover art (v1.0.50): a user photo cropped to the
+            // pad's shape replaces the theme gradient. The border
+            // and trail still draw on top, in the theme accent.
+            .overlay(
+                Group {
+                    if let cover = PadCoverStore.image(for: coverVersion) {
+                        Image(uiImage: cover)
+                            .resizable()
+                            .scaledToFill()
+                            .overlay(Color.black.opacity(0.12))
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 24))
+            )
             .overlay(padBorder)
             // Finger trail (v1.0.44): drawn on the pad itself, so
             // it tilts and scales with the pad. Clipped to the
@@ -1782,7 +2121,13 @@ private struct SwipePadView: View {
                     Color.clear.preference(key: PadSizePreferenceKey.self, value: geo.size)
                 }
             )
-            .onPreferenceChange(PadSizePreferenceKey.self) { padSize = $0 }
+            .onPreferenceChange(PadSizePreferenceKey.self) { size in
+                padSize = size
+                // Pad cover crop (v1.0.50): remember the real pad
+                // size so the cropper frames the photo to it.
+                UserDefaults.standard.set(size.width, forKey: "padMeasuredWidth")
+                UserDefaults.standard.set(size.height, forKey: "padMeasuredHeight")
+            }
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in

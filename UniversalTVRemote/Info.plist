@@ -7,10 +7,11 @@
     <key>CFBundleIdentifier</key><string>com.nicolassolley.universaltvremote</string>
     <key>CFBundleName</key><string>UniversalTVRemote</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>1.0.49</string>
-    <key>CFBundleVersion</key><string>49</string>
+    <key>CFBundleShortVersionString</key><string>1.0.50</string>
+    <key>CFBundleVersion</key><string>50</string>
     <key>LSRequiresIPhoneOS</key><true/>
     <key>NSMicrophoneUsageDescription</key><string>Hold the mic button and speak — your voice is sent to the TV so it can act on it.</string>
+    <key>NSPhotoLibraryUsageDescription</key><string>Choose a photo to use as your pad's cover art.</string>
     <key>NSLocalNetworkUsageDescription</key><string>Find and control TVs on your local Wi-Fi network.</string>
     <key>NSBonjourServices</key>
     <array>
