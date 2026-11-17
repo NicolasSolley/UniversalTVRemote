@@ -1274,6 +1274,10 @@ struct SwipePadGesture {
 /// picture of the remote.
 private struct PadHelpSheet: View {
     @Environment(\.dismiss) private var dismiss
+    /// Resolved color scheme (v1.0.48): the sheet's background
+    /// matches the home screen's — same AppBackground, not the
+    /// system black/white.
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         NavigationView {
@@ -1288,6 +1292,10 @@ private struct PadHelpSheet: View {
                 }
                 .padding()
             }
+            // Same background as the home screen (v1.0.48): the
+            // sheet was showing the system black/white while the
+            // home screen uses the Chrome gray / soft gray.
+            .background(AppBackground.color(for: colorScheme).ignoresSafeArea())
             .navigationTitle("Pad controls")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
