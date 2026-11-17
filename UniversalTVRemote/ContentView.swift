@@ -340,6 +340,12 @@ struct RemoteLayout {
     var gap: CGFloat
     var topPadding: CGFloat
     var topBarButton: CGFloat
+    /// Height of the connection-pill row (v1.0.58): the pill
+    /// itself is 9+9 padding around a ~20pt line, and the zone
+    /// guide toggle lives in that row now, so it is sized to
+    /// this height — any taller and the row would grow and the
+    /// pad (which absorbs the slack) would shrink.
+    var connectionPillHeight: CGFloat = 38
     var pairingCardPadding: CGFloat
     var pairingCardSpacing: CGFloat
     var padSize: CGFloat
@@ -357,6 +363,7 @@ struct RemoteLayout {
         let gap: CGFloat = extraCompact ? 6 : (compact ? 8 : 10)
         let topPadding: CGFloat = extraCompact ? 4 : 8
         let topBarButton: CGFloat = extraCompact ? 40 : 44
+        let connectionPillHeight: CGFloat = 38
         let pairingCardPadding: CGFloat = extraCompact ? 10 : (compact ? 12 : 14)
         let pairingCardSpacing: CGFloat = extraCompact ? 8 : (compact ? 9 : 10)
         // The apps row is gone (v1.0.18), so its height went to the
@@ -384,7 +391,7 @@ struct RemoteLayout {
         var fixed: CGFloat = topPadding + topBarButton
         if pairingShown { fixed += extraCompact ? 155 : (compact ? 165 : 170) }
         if keyboardShown { fixed += extraCompact ? 36 : (compact ? 40 : 44) }
-        fixed += 38 // connection pill
+        fixed += connectionPillHeight // connection pill row (v1.0.58: also holds the zone guide toggle)
         if showLGNote { fixed += 16 }
         fixed += bottomCell // bottom row — icons only, no labels
         fixed += bottomRowTopPadding // breathing room above the bottom row (v1.0.20)
@@ -407,6 +414,7 @@ struct RemoteLayout {
         let padSize = min(500, max(floor, h - fixed - gaps))
 
         return RemoteLayout(gap: gap, topPadding: topPadding, topBarButton: topBarButton,
+                            connectionPillHeight: connectionPillHeight,
                             pairingCardPadding: pairingCardPadding, pairingCardSpacing: pairingCardSpacing,
                             padSize: padSize,
                             bottomCell: bottomCell, circleSize: circleSize,
@@ -541,7 +549,7 @@ private struct RemoteView: View {
 
             keyboardInputRow
 
-            connectionPill
+            connectionRow(layout)
 
             // LG power note — hidden on the shortest screens (it
             // also lives in Settings); the layout budgets for it
@@ -660,9 +668,15 @@ private struct RemoteView: View {
         }
     }
 
-    /// Top bar: Devices pill (back to the list), TV name centered,
-    /// power on the right. No gear — the Connected pill below already
-    /// shows the connection state, so a settings sheet is redundant.
+    /// Top bar: Devices circle (back to the list), TV name
+    /// centered, power on the right. Both ends are the same
+    /// 44pt circle (v1.0.58 — the Devices button used to be a
+    /// wider pill, which pushed the name off-center), so with a
+    /// Spacer on each side the name is dead center. No gear —
+    /// the Connected pill below already shows the connection
+    /// state, so a settings sheet is redundant. The zone guide
+    /// toggle lives under the power button now, in the
+    /// connection row — see connectionRow(layout:).
     private func topBar(_ layout: RemoteLayout) -> some View {
         HStack(spacing: 10) {
             Button {
@@ -674,12 +688,11 @@ private struct RemoteView: View {
                 onBack()
             } label: {
                 Image(systemName: "tv")
-                    .font(.subheadline.bold())
+                    .font(.headline.bold())
                     .foregroundStyle(remoteAccent)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(surfaceFill, in: Capsule())
-                    .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
+                    .frame(width: layout.topBarButton, height: layout.topBarButton)
+                    .background(surfaceFill, in: Circle())
+                    .overlay(Circle().stroke(Color.primary.opacity(0.08), lineWidth: 1))
                     .shadow(color: surfaceShadow, radius: 6, y: 2)
             }
             .buttonStyle(.plain)
@@ -690,22 +703,6 @@ private struct RemoteView: View {
                 .foregroundStyle(.primary)
                 .lineLimit(1)
             Spacer()
-            // Zone overlay toggle (v1.0.56): shows the faint
-            // zone lines + icons on the pad, so the double-tap
-            // zones are visible while learning them. Same circle
-            // treatment as the power button; the accent ring +
-            // tinted icon mark it on, like the keyboard button.
-            Button { showZones.toggle() } label: {
-                Image(systemName: "rectangle.split.2x2")
-                    .font(.headline.bold())
-                    .foregroundStyle(showZones ? remoteAccent : .primary)
-                    .frame(width: layout.topBarButton, height: layout.topBarButton)
-                    .background(surfaceFill, in: Circle())
-                    .overlay(Circle().stroke(showZones ? remoteAccent : Color.primary.opacity(0.08), lineWidth: showZones ? 2 : 1))
-                    .shadow(color: surfaceShadow, radius: 6, y: 2)
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Show pad zones")
             // No ? button here (v1.0.44): the pad-controls sheet
             // opens only from the devices page — the remote's top
             // bar is just the TV name and power.
@@ -720,6 +717,35 @@ private struct RemoteView: View {
             .buttonStyle(.plain)
         }
         .padding(.horizontal)
+    }
+
+    /// Connection row (v1.0.58): the status pill stays centered,
+    /// and the zone guide toggle sits at the right edge, directly
+    /// under the power button — a vertical stack on the right,
+    /// power on top, guide below. The toggle is sized to the
+    /// row's budgeted height (layout.connectionPillHeight), so
+    /// the row doesn't grow and the pad size doesn't move; it
+    /// keeps the same look and behavior as in the top bar (accent
+    /// ring + tinted icon when on), just in the new spot.
+    private func connectionRow(_ layout: RemoteLayout) -> some View {
+        ZStack {
+            connectionPill
+            HStack {
+                Spacer()
+                Button { showZones.toggle() } label: {
+                    Image(systemName: "rectangle.split.2x2")
+                        .font(.headline.bold())
+                        .foregroundStyle(showZones ? remoteAccent : .primary)
+                        .frame(width: layout.connectionPillHeight, height: layout.connectionPillHeight)
+                        .background(surfaceFill, in: Circle())
+                        .overlay(Circle().stroke(showZones ? remoteAccent : Color.primary.opacity(0.08), lineWidth: showZones ? 2 : 1))
+                        .shadow(color: surfaceShadow, radius: 6, y: 2)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Show pad zones")
+            }
+            .padding(.horizontal)
+        }
     }
 
     /// Connected pill: status dot + one-line state. Green when

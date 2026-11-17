@@ -1769,3 +1769,19 @@ final class DirectionHintTests: XCTestCase {
         XCTAssertEqual(geometry.directionArrowCenter(.right), CGPoint(x: 235, y: 110))
     }
 }
+
+/// Top-bar centering (v1.0.58): the guide toggle moved out of the
+/// top bar into the connection row, under the power button, and
+/// the Devices button became a circle the same size as power, so
+/// the TV name centers between two equal ends. The toggle is
+/// sized to the pill row's budgeted height, so the row — and the
+/// pad — don't move: the 15 Plus pad is still 500pt (cap binds)
+/// at 845pt usable height.
+final class TopBarLayoutTests: XCTestCase {
+    func testGuideToggleFitsPillRowWithoutMovingPad() {
+        let layout = RemoteLayout.make(height: 845, pairingShown: false, keyboardShown: false, isLG: false)
+        XCTAssertEqual(layout.topBarButton, 44)
+        XCTAssertEqual(layout.connectionPillHeight, 38)
+        XCTAssertEqual(layout.padSize, 500)
+    }
+}
