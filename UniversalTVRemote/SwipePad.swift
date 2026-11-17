@@ -330,7 +330,7 @@ struct SwipePadGesture {
 /// A double-tap zone on the pad (v1.0.34 mute, v1.0.55
 /// back/home/exit): the zone only changes what a double-tap
 /// does — a single tap inside one still sends OK.
-enum PadZone: Equatable {
+enum PadZone: Equatable, Hashable {
     case mute, back, home, exit
 }
 
@@ -368,6 +368,27 @@ struct PadGeometry {
         if isHomeZone(location) { return .home }
         if isExitZone(location) { return .exit }
         return nil
+    }
+
+    /// The center of a zone, in pad coordinates — where the zone
+    /// overlay (v1.0.56) puts the zone's icon. Nil until the size
+    /// is known.
+    func center(of zone: PadZone) -> CGPoint? {
+        guard size.width > 0, size.height > 0 else { return nil }
+        switch zone {
+        case .mute:
+            return CGPoint(x: (Self.muteZoneMinX + 1) / 2 * size.width,
+                           y: (Self.muteZoneMinY + Self.muteZoneMaxY) / 2 * size.height)
+        case .back:
+            return CGPoint(x: Self.backZoneMaxX / 2 * size.width,
+                           y: (Self.bottomZoneMinY + 1) / 2 * size.height)
+        case .home:
+            return CGPoint(x: (Self.backZoneMaxX + Self.homeZoneMaxX) / 2 * size.width,
+                           y: (Self.bottomZoneMinY + 1) / 2 * size.height)
+        case .exit:
+            return CGPoint(x: (Self.homeZoneMaxX + 1) / 2 * size.width,
+                           y: (Self.bottomZoneMinY + 1) / 2 * size.height)
+        }
     }
 
     /// True when a tap location (in the pad's own coordinates)
@@ -618,6 +639,79 @@ struct PadTrailOverlay: View {
     }
 }
 
+/// Zone overlay (v1.0.56): faint lines separating the pad's
+/// double-tap zones, with an icon in each one — mute top-right,
+/// back / home / exit along the bottom. Purely visual:
+/// `.allowsHitTesting(false)`, so taps, swipes, holds and
+/// double-taps pass straight through to the pad underneath.
+/// The lines come straight from PadGeometry's zone constants,
+/// so they sit exactly on the real tap boundaries; the icons
+/// reuse the help sheet's icon + tint pairs.
+struct PadZoneOverlay: View {
+    var size: CGSize
+
+    var body: some View {
+        ZStack {
+            if size.width > 0, size.height > 0 {
+                zoneLines
+                ForEach([PadZone.mute, .back, .home, .exit], id: \.self) { zone in
+                    if let center = PadGeometry(size: size).center(of: zone) {
+                        zoneIcon(zone)
+                            .position(center)
+                    }
+                }
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    /// The divider lines: the mute zone's left and top edges,
+    /// the shared y = 0.75 line across the whole pad (mute
+    /// zone's bottom edge and the bottom strip's top edge in
+    /// one), and the two verticals splitting the bottom strip
+    /// into thirds. Primary at low opacity, so the lines read
+    /// faint on both the light and the dark pad.
+    private var zoneLines: some View {
+        Path { path in
+            let w = size.width, h = size.height
+            // Mute zone: left edge, then top edge.
+            path.move(to: CGPoint(x: PadGeometry.muteZoneMinX * w, y: PadGeometry.muteZoneMinY * h))
+            path.addLine(to: CGPoint(x: PadGeometry.muteZoneMinX * w, y: PadGeometry.muteZoneMaxY * h))
+            path.move(to: CGPoint(x: PadGeometry.muteZoneMinX * w, y: PadGeometry.muteZoneMinY * h))
+            path.addLine(to: CGPoint(x: w, y: PadGeometry.muteZoneMinY * h))
+            // Shared y = 0.75 line, full width.
+            path.move(to: CGPoint(x: 0, y: PadGeometry.bottomZoneMinY * h))
+            path.addLine(to: CGPoint(x: w, y: PadGeometry.bottomZoneMinY * h))
+            // Bottom strip thirds.
+            path.move(to: CGPoint(x: PadGeometry.backZoneMaxX * w, y: PadGeometry.bottomZoneMinY * h))
+            path.addLine(to: CGPoint(x: PadGeometry.backZoneMaxX * w, y: h))
+            path.move(to: CGPoint(x: PadGeometry.homeZoneMaxX * w, y: PadGeometry.bottomZoneMinY * h))
+            path.addLine(to: CGPoint(x: PadGeometry.homeZoneMaxX * w, y: h))
+        }
+        .stroke(Color.primary.opacity(0.25), lineWidth: 1)
+    }
+
+    /// One zone's icon: the help sheet's icon + tint, on a
+    /// faint tinted chip so it reads on any pad color or cover
+    /// photo. Small on purpose — the pad stays a pad, not a
+    /// legend.
+    private func zoneIcon(_ zone: PadZone) -> some View {
+        let (icon, tint): (String, Color) = {
+            switch zone {
+            case .mute: return ("speaker.slash.fill", .red)
+            case .back: return ("arrow.left", .orange)
+            case .home: return ("house", .purple)
+            case .exit: return ("rectangle.portrait.and.arrow.right", .pink)
+            }
+        }()
+        return Image(systemName: icon)
+            .font(.subheadline.bold())
+            .foregroundStyle(tint)
+            .frame(width: 34, height: 34)
+            .background(tint.opacity(0.15), in: Circle())
+    }
+}
+
 
 /// Big swipe pad (the Swipe half of the toggle): near full-width,
 /// a bare pad — no chevrons, no hand icon, no label.
@@ -674,18 +768,24 @@ struct SwipePadView: View {
     /// unfocus. The pad calls this for a touch that landed while
     /// the keyboard was open; the touch itself sends nothing.
     var onDismissKeyboard: () -> Void
+    /// Zone overlay toggle (v1.0.56): when true the pad draws
+    /// the faint zone lines + icons on top (PadZoneOverlay).
+    /// A plain value from RemoteView — @State there, not
+    /// persisted: it resets when the remote closes.
+    var showZones: Bool
 
     /// Explicit init (v1.0.53): the synthesized memberwise init is
     /// private to this file because of the private @State /
     /// @AppStorage properties below, so RemoteView in ContentView.swift
     /// needs this to construct the pad.
-    init(height: CGFloat, onCommand: @escaping (RemoteCommand, Bool) -> Void, onRepeatCommand: @escaping (RemoteCommand, Bool) -> Void, onCancelRepeats: @escaping () -> Void, isKeyboardOpen: Bool, onDismissKeyboard: @escaping () -> Void) {
+    init(height: CGFloat, onCommand: @escaping (RemoteCommand, Bool) -> Void, onRepeatCommand: @escaping (RemoteCommand, Bool) -> Void, onCancelRepeats: @escaping () -> Void, isKeyboardOpen: Bool, onDismissKeyboard: @escaping () -> Void, showZones: Bool) {
         self.height = height
         self.onCommand = onCommand
         self.onRepeatCommand = onRepeatCommand
         self.onCancelRepeats = onCancelRepeats
         self.isKeyboardOpen = isKeyboardOpen
         self.onDismissKeyboard = onDismissKeyboard
+        self.showZones = showZones
     }
 
     /// A touch that landed while the keyboard was open (v1.0.53):
@@ -854,6 +954,18 @@ struct SwipePadView: View {
             .overlay(
                 PadTrailOverlay(strokes: trail, opacity: trailOpacity, style: trailStyle, color: colorScheme == .light ? theme.accent : .white)
                     .clipShape(RoundedRectangle(cornerRadius: 24))
+            )
+            // Zone overlay (v1.0.56): faint zone lines + icons,
+            // shown on demand from the remote's top bar. Purely
+            // visual — .allowsHitTesting(false) inside — so taps,
+            // swipes, holds and double-taps pass straight through.
+            .overlay(
+                Group {
+                    if showZones {
+                        PadZoneOverlay(size: padSize)
+                            .clipShape(RoundedRectangle(cornerRadius: 24))
+                    }
+                }
             )
             .frame(maxWidth: .infinity)
             .frame(height: height)

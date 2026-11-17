@@ -2,6 +2,8 @@ import XCTest
 import CoreGraphics
 import CryptoKit
 import Security
+import SwiftUI
+import UIKit
 @testable import UniversalTVRemote
 
 /// Tests for the ported Android TV code (v1.0.15–v1.0.16): DER encoding, the
@@ -1525,6 +1527,31 @@ final class PadGeometryTests: XCTestCase {
         XCTAssertNil(PadGeometry(size: .zero).zone(at: CGPoint(x: 10, y: 10)))
     }
 
+    func testZoneCenters() {
+        // Zone overlay (v1.0.56): on a 360x220 pad the mute icon
+        // sits at (0.835, 0.5) and the bottom icons at y 0.875,
+        // x 1/6, 1/2, 5/6.
+        XCTAssertEqual(pad.center(of: .mute)?.x ?? -1, 300.6, accuracy: 0.001)
+        XCTAssertEqual(pad.center(of: .mute)?.y ?? -1, 110, accuracy: 0.001)
+        XCTAssertEqual(pad.center(of: .back)?.x ?? -1, 60, accuracy: 0.001)
+        XCTAssertEqual(pad.center(of: .back)?.y ?? -1, 192.5, accuracy: 0.001)
+        XCTAssertEqual(pad.center(of: .home)?.x ?? -1, 180, accuracy: 0.001)
+        XCTAssertEqual(pad.center(of: .home)?.y ?? -1, 192.5, accuracy: 0.001)
+        XCTAssertEqual(pad.center(of: .exit)?.x ?? -1, 300, accuracy: 0.001)
+        XCTAssertEqual(pad.center(of: .exit)?.y ?? -1, 192.5, accuracy: 0.001)
+        XCTAssertNil(PadGeometry(size: .zero).center(of: .mute))
+    }
+
+    func testZoneCentersFallInTheirZones() {
+        // The overlay icons must sit inside the zones they label.
+        for zone in [PadZone.mute, .back, .home, .exit] {
+            guard let center = pad.center(of: zone) else {
+                return XCTFail("center should exist for \(zone)")
+            }
+            XCTAssertEqual(pad.zone(at: center), zone)
+        }
+    }
+
     func testTiltAxis() {
         let idle = pad.tiltAxis(pressLocation: nil)
         XCTAssertEqual(idle.x, 0, accuracy: 0.0001)
@@ -1604,5 +1631,66 @@ final class DERGuardTests: XCTestCase {
     func testIntegerNegativeEncodesZero() {
         XCTAssertEqual(DER.integer(-1), [0x02, 0x01, 0x00])
         XCTAssertEqual(DER.integer(0), [0x02, 0x01, 0x00])
+    }
+}
+
+/// Appearance mapping (v1.0.56): Dark and Light pin the scheme;
+/// System resolves to the device's live scheme explicitly —
+/// preferredColorScheme(nil) never reverted a forced scheme,
+/// so picking System left the app stuck on Light/Dark.
+final class AppAppearanceTests: XCTestCase {
+    func testDarkMapsToDark() {
+        XCTAssertEqual(AppAppearance.dark.scheme, .dark)
+    }
+
+    func testLightMapsToLight() {
+        XCTAssertEqual(AppAppearance.light.scheme, .light)
+    }
+
+    func testSystemMapsToDeviceScheme() {
+        let device: ColorScheme = UIScreen.main.traitCollection.userInterfaceStyle == .dark ? .dark : .light
+        XCTAssertEqual(AppAppearance.system.scheme, device)
+        XCTAssertEqual(AppAppearance.deviceScheme, device)
+    }
+}
+
+/// Crop geometry (v1.0.56): the crop must come out at the
+/// frame's aspect — what you see is what the pad shows. A
+/// letterboxed crop (wrong aspect) is the bug: the saved cover
+/// would carry black bars onto the pad.
+final class PadCoverCropTests: XCTestCase {
+    private let frame = CGSize(width: 360, height: 500)
+
+    private func solidImage(width: CGFloat, height: CGFloat) -> UIImage {
+        UIGraphicsImageRenderer(size: CGSize(width: width, height: height)).image { ctx in
+            UIColor.red.setFill()
+            ctx.fill(CGRect(origin: .zero, size: CGSize(width: width, height: height)))
+        }
+    }
+
+    private func aspect(_ size: CGSize) -> CGFloat { size.width / size.height }
+
+    func testSquareImageCropsToFrameAspect() {
+        let cropped = PadCoverCropView.crop(image: solidImage(width: 1000, height: 1000), scale: 1, offset: .zero, frameSize: frame)
+        XCTAssertEqual(aspect(cropped.size), aspect(frame), accuracy: 0.01)
+        XCTAssertEqual(cropped.size.width, 720, accuracy: 1)
+        XCTAssertEqual(cropped.size.height, 1000, accuracy: 1)
+    }
+
+    func testPortraitImageCropsTopAndBottom() {
+        let cropped = PadCoverCropView.crop(image: solidImage(width: 1000, height: 1500), scale: 1, offset: .zero, frameSize: frame)
+        XCTAssertEqual(aspect(cropped.size), aspect(frame), accuracy: 0.01)
+        XCTAssertLessThan(cropped.size.height, 1500)
+    }
+
+    func testLandscapeImageCropsSides() {
+        let cropped = PadCoverCropView.crop(image: solidImage(width: 1500, height: 1000), scale: 1, offset: .zero, frameSize: frame)
+        XCTAssertEqual(aspect(cropped.size), aspect(frame), accuracy: 0.01)
+        XCTAssertEqual(cropped.size.width, 720, accuracy: 1)
+    }
+
+    func testOffsetKeepsFrameAspect() {
+        let cropped = PadCoverCropView.crop(image: solidImage(width: 1000, height: 1000), scale: 1, offset: CGSize(width: 100, height: 0), frameSize: frame)
+        XCTAssertEqual(aspect(cropped.size), aspect(frame), accuracy: 0.01)
     }
 }

@@ -164,9 +164,25 @@ enum AppAppearance: String, CaseIterable {
         case .light: return "Light"
         }
     }
-    var scheme: ColorScheme? {
+    /// The phone's real system appearance, straight off the
+    /// screen's trait collection (v1.0.56): UIScreen's traits
+    /// are NOT affected by any preferredColorScheme override
+    /// SwiftUI has applied, so this reads the device's actual
+    /// appearance even while the app is forcing one.
+    static var deviceScheme: ColorScheme {
+        UIScreen.main.traitCollection.userInterfaceStyle == .dark ? .dark : .light
+    }
+    /// The scheme to force. System resolves to the device's
+    /// live scheme explicitly (v1.0.56) — the old mapping
+    /// returned nil for System, and preferredColorScheme(nil)
+    /// does NOT revert a previously forced scheme: once Light
+    /// (or Dark) had been forced, picking System left the app
+    /// stuck on it instead of following the phone. Dark and
+    /// Light always worked (non-nil to non-nil propagates);
+    /// only the System flip was broken.
+    var scheme: ColorScheme {
         switch self {
-        case .system: return nil
+        case .system: return Self.deviceScheme
         case .dark: return .dark
         case .light: return .light
         }

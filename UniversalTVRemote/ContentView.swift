@@ -422,6 +422,10 @@ private struct RemoteView: View {
 
     @State private var keyboardText = ""
     @State private var showKeyboard = false
+    /// Zone overlay toggle (v1.0.56): shows the faint zone
+    /// lines + icons on the pad. @State, not persisted — it
+    /// resets when the remote closes.
+    @State private var showZones = false
     @FocusState private var keyboardFocused: Bool
     @FocusState private var pairingCodeFocused: Bool
     /// Hardware volume buttons drive the TV volume (v1.0.23):
@@ -538,7 +542,7 @@ private struct RemoteView: View {
             // Back / Home / Exit live in the pad now (v1.0.55):
             // double-tap the bottom-left, bottom-middle, or
             // bottom-right — the pill row is gone.
-            SwipePadView(height: layout.padSize, onCommand: { send($0, haptic: $1) }, onRepeatCommand: { sendRepeat($0, haptic: $1) }, onCancelRepeats: { session.cancelRepeats() }, isKeyboardOpen: showKeyboard, onDismissKeyboard: { dismissKeyboard() })
+            SwipePadView(height: layout.padSize, onCommand: { send($0, haptic: $1) }, onRepeatCommand: { sendRepeat($0, haptic: $1) }, onCancelRepeats: { session.cancelRepeats() }, isKeyboardOpen: showKeyboard, onDismissKeyboard: { dismissKeyboard() }, showZones: showZones)
                 .padding(.horizontal)
 
             bottomRow(layout: layout)
@@ -668,6 +672,22 @@ private struct RemoteView: View {
                 .foregroundStyle(.primary)
                 .lineLimit(1)
             Spacer()
+            // Zone overlay toggle (v1.0.56): shows the faint
+            // zone lines + icons on the pad, so the double-tap
+            // zones are visible while learning them. Same circle
+            // treatment as the power button; the accent ring +
+            // tinted icon mark it on, like the keyboard button.
+            Button { showZones.toggle() } label: {
+                Image(systemName: "rectangle.split.2x2")
+                    .font(.headline.bold())
+                    .foregroundStyle(showZones ? remoteAccent : .primary)
+                    .frame(width: layout.topBarButton, height: layout.topBarButton)
+                    .background(surfaceFill, in: Circle())
+                    .overlay(Circle().stroke(showZones ? remoteAccent : Color.primary.opacity(0.08), lineWidth: showZones ? 2 : 1))
+                    .shadow(color: surfaceShadow, radius: 6, y: 2)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Show pad zones")
             // No ? button here (v1.0.44): the pad-controls sheet
             // opens only from the devices page — the remote's top
             // bar is just the TV name and power.
@@ -895,23 +915,19 @@ private struct SettingsSheet: View {
     @AppStorage("trailStyle") private var trailStyleRaw = "glow"
     @AppStorage("appearance") private var appearanceRaw = "system"
     @AppStorage("padCoverVersion") private var coverVersion = 0
-    /// One sheet for the whole cover flow (v1.0.51): picker and
-    /// cropper are one sheet whose content swaps, so picking a
-    /// photo opens the cropper at once — the old two-sheet dance
-    /// (dismiss picker, wait 0.5s, present cropper) dropped the
-    /// cropper whenever the dismiss ran long, so the photo looked
-    /// unselected.
-    private enum CoverSheet: Identifiable {
-        case picker
-        case cropper(UIImage)
-        var id: String {
-            switch self {
-            case .picker: return "picker"
-            case .cropper: return "cropper"
-            }
-        }
-    }
-    @State private var coverSheet: CoverSheet?
+    /// Cover flow sheets (v1.0.56): the picker and the cropper
+    /// are sequential sheets, not one sheet with swapped
+    /// content. The swap (v1.0.51–v1.0.55) raced the picker's
+    /// teardown and left the cropper's buttons dead — toolbar
+    /// taps fell through to the image's double-tap reset. The
+    /// picker dismisses first; its onDismiss presents the
+    /// cropper from the picked image, so there's no timing
+    /// guesswork and no dropped cropper.
+    @State private var showPicker = false
+    /// The picked photo, waiting for the picker sheet to finish
+    /// dismissing before the cropper presents.
+    @State private var pendingCropImage: UIImage?
+    @State private var cropTarget: CropTarget?
     @State private var showRemoveCoverAlert = false
 
     var body: some View {
@@ -978,13 +994,13 @@ private struct SettingsSheet: View {
                             // label, each button's full padded frame
                             // is its tap target.
                             HStack(spacing: 16) {
-                                Button { coverSheet = .picker } label: {
+                                Button { showPicker = true } label: {
                                     Text("Change photo")
                                         .padding(.vertical, 8)
                                         .contentShape(Rectangle())
                                 }
                                 Button {
-                                    coverSheet = .cropper(PadCoverStore.loadOriginal() ?? cover)
+                                    cropTarget = CropTarget(image: PadCoverStore.loadOriginal() ?? cover)
                                 } label: {
                                     Text("Adjust crop")
                                         .padding(.vertical, 8)
@@ -999,7 +1015,7 @@ private struct SettingsSheet: View {
                             }
                             .font(.subheadline)
                         } else {
-                            Button { coverSheet = .picker } label: {
+                            Button { showPicker = true } label: {
                                 HStack {
                                     Image(systemName: "photo")
                                     Text("Choose a photo")
@@ -1040,26 +1056,38 @@ private struct SettingsSheet: View {
         // the sheet's own @AppStorage, flips it the moment the
         // picker changes.
         .preferredColorScheme((AppAppearance(rawValue: appearanceRaw) ?? .system).scheme)
-        .sheet(item: $coverSheet) { sheet in
-            switch sheet {
-            case .picker:
-                PadCoverPicker(
-                    onPick: { image in coverSheet = .cropper(image) },
-                    onCancel: { coverSheet = nil }
-                )
-            case .cropper(let image):
-                PadCoverCropView(
-                    image: image,
-                    onSaved: {
-                        // The cropper already saved (v1.0.53): bump
-                        // the version so the pad re-reads the cover,
-                        // then dismiss.
-                        coverVersion += 1
-                        coverSheet = nil
-                    },
-                    onCancel: { coverSheet = nil }
-                )
+        .sheet(isPresented: $showPicker, onDismiss: {
+            // The picker is fully gone here — present the cropper
+            // now, from the picked image (v1.0.56). Presenting
+            // from onDismiss instead of a fixed delay means the
+            // cropper can't be dropped by a long dismiss, and the
+            // cropper gets a clean presentation context, so its
+            // buttons work on the first tap.
+            if let image = pendingCropImage {
+                cropTarget = CropTarget(image: image)
+                pendingCropImage = nil
             }
+        }) {
+            PadCoverPicker(
+                onPick: { image in
+                    pendingCropImage = image
+                    showPicker = false
+                },
+                onCancel: { showPicker = false }
+            )
+        }
+        .sheet(item: $cropTarget) { target in
+            PadCoverCropView(
+                image: target.image,
+                onSaved: {
+                    // The cropper already saved (v1.0.53): bump
+                    // the version so the pad re-reads the cover,
+                    // then dismiss.
+                    coverVersion += 1
+                    cropTarget = nil
+                },
+                onCancel: { cropTarget = nil }
+            )
         }
         .alert("Remove pad cover?", isPresented: $showRemoveCoverAlert) {
             Button("Remove cover", role: .destructive) {

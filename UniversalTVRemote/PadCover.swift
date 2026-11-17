@@ -123,6 +123,16 @@ struct PadCoverPicker: UIViewControllerRepresentable {
     }
 }
 
+/// The cropper's sheet item (v1.0.56): the picker and the
+/// cropper are sequential sheets, not one sheet with swapped
+/// content — swapping raced the picker's teardown and left the
+/// cropper's buttons dead (see SettingsSheet). Identifiable so
+/// it can drive a `.sheet(item:)`.
+struct CropTarget: Identifiable {
+    let id = UUID()
+    let image: UIImage
+}
+
 /// Crop a photo to the pad's shape (v1.0.50): drag to move, pinch
 /// to zoom, double-tap to reset. The frame is the pad — same
 /// aspect, same rounded corners — so what you see is what the pad
@@ -141,7 +151,14 @@ struct PadCoverCropView: View {
     /// below, so SettingsSheet in ContentView.swift needs this to
     /// construct the cropper.
     init(image: UIImage, onSaved: @escaping () -> Void, onCancel: @escaping () -> Void) {
-        self.image = image
+        // Normalize orientation up front (v1.0.56): the display
+        // fit math and the crop math both use image.size, and
+        // for a portrait photo from the camera the raw size
+        // doesn't match the rendered pixels — the photo came out
+        // letterboxed in the frame instead of filling it. With
+        // orientation baked in, size == rendered pixels
+        // everywhere, display and crop alike.
+        self.image = image.normalizedOrientation()
         self.onSaved = onSaved
         self.onCancel = onCancel
     }
@@ -181,9 +198,11 @@ struct PadCoverCropView: View {
             HStack {
                 Button { onCancel() } label: {
                     Text("Cancel")
-                        .padding(.vertical, 8)
+                        .padding(.vertical, 10)
+                        .padding(.horizontal, 12)
                         .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
                 .disabled(isSaving)
                 Spacer()
                 Text("Crop pad cover")
@@ -191,9 +210,11 @@ struct PadCoverCropView: View {
                 Spacer()
                 Button { confirmCover() } label: {
                     Text(isSaving ? "Saving…" : "Set cover")
-                        .padding(.vertical, 8)
+                        .padding(.vertical, 10)
+                        .padding(.horizontal, 12)
                         .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
                 .font(.headline)
                 .disabled(isSaving)
             }
@@ -201,10 +222,18 @@ struct PadCoverCropView: View {
             .padding(.vertical, 14)
             Spacer()
             ZStack {
+                // Cover, by construction (v1.0.56): scaledToFill
+                // sizes the image from its rendered aspect, so
+                // the photo always fills the frame — the old
+                // manual frame (image.size × totalScale) letter-
+                // boxed portrait photos instead of filling it.
+                // The drag / pinch / clamp / crop math is
+                // unchanged: scaledToFill's cover scale IS
+                // fitScale, and the offset moves the same window.
                 Image(uiImage: image)
                     .resizable()
-                    .frame(width: image.size.width * totalScale,
-                           height: image.size.height * totalScale)
+                    .scaledToFill()
+                    .frame(width: frameSize.width, height: frameSize.height)
                     .offset(offset)
             }
             .frame(width: frameSize.width, height: frameSize.height)
@@ -289,7 +318,8 @@ struct PadCoverCropView: View {
     /// its inputs, so the confirm path can run it off the main
     /// thread. The render uses UIGraphicsImageRenderer + Core
     /// Graphics, both safe off the main thread for offscreen work.
-    private static func crop(image: UIImage, scale: CGFloat, offset: CGSize, frameSize: CGSize) -> UIImage {
+    /// Internal (not private) so tests can drive the geometry.
+    static func crop(image: UIImage, scale: CGFloat, offset: CGSize, frameSize: CGSize) -> UIImage {
         let normalized = image.normalizedOrientation()
         let fitScale = max(frameSize.width / image.size.width, frameSize.height / image.size.height)
         let ts = fitScale * scale
