@@ -9,65 +9,67 @@ import Security
 /// Offline: no TV, no network. Key generation uses SecKeyCreateRandomKey
 /// with non-permanent keys, except ClientIdentity's own mint/reset test
 /// (which uses a throwaway slot). Both clean up after themselves.
-final class DERAndIdentityTests: XCTestCase {
-
-    /// Mint a self-signed certificate with the DER helpers, as
-    /// ClientIdentity does — but with a non-permanent key, so nothing
-    /// touches the Keychain. When a signing key is supplied, the cert is
-    /// minted with that key (so a test can compare the certificate's
-    /// components against the key it already holds); otherwise a fresh
-    /// throwaway key is generated.
-    private func makeTestCertDER(commonName: String, signingKey: SecKey? = nil) throws -> Data {
-        let privateKey: SecKey
-        if let signingKey {
-            privateKey = signingKey
-        } else {
-            let attributes: [String: Any] = [
-                kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
-                kSecAttrKeySizeInBits as String: 2048,
-            ]
-            privateKey = try XCTUnwrap(SecKeyCreateRandomKey(attributes as CFDictionary, nil))
-        }
-        let publicKey = try XCTUnwrap(SecKeyCopyPublicKey(privateKey))
-        let publicDER = try XCTUnwrap(SecKeyCopyExternalRepresentation(publicKey, nil) as Data?)
-
-        let signatureAlgorithm = DER.sequence([DER.oid("1.2.840.113549.1.1.11"), DER.null])
-        let name = DER.sequence([DER.set([DER.sequence([DER.oid("2.5.4.3"), DER.utf8(commonName)])])])
-        let now = Date()
-        let validity = DER.sequence([DER.time(now.addingTimeInterval(-86_400)),
-                                     DER.time(now.addingTimeInterval(20 * 365 * 86_400))])
-        let spki = DER.sequence([
-            DER.sequence([DER.oid("1.2.840.113549.1.1.1"), DER.null]),
-            DER.bitString(Array(publicDER)),
-        ])
-        let basicConstraints = DER.sequence([
-            DER.oid("2.5.29.19"),
-            DER.octetString(DER.sequence([DER.boolean(true), DER.integer(0)])),
-        ])
-        let subjectAltName = DER.sequence([
-            DER.oid("2.5.29.17"),
-            DER.octetString(DER.sequence([DER.tlv(0x82, Array(commonName.utf8))])),
-        ])
-        var serial = [UInt8](repeating: 0, count: 8)
-        _ = SecRandomCopyBytes(kSecRandomDefault, serial.count, &serial)
-        serial[0] &= 0x7F
-        let tbs = DER.sequence([
-            DER.explicit(0, DER.integer(2)),
-            DER.integer(serial),
-            signatureAlgorithm,
-            name,
-            validity,
-            name,
-            spki,
-            DER.explicit(3, DER.sequence([basicConstraints, subjectAltName])),
-        ])
-        var error: Unmanaged<CFError>?
-        guard let signature = SecKeyCreateSignature(privateKey, .rsaSignatureMessagePKCS1v15SHA256,
-                                                    Data(tbs) as CFData, &error) as Data? else {
-            throw error!.takeRetainedValue() as Error
-        }
-        return Data(DER.sequence([tbs, signatureAlgorithm, DER.bitString(Array(signature))]))
+/// Mint a self-signed certificate with the DER helpers, as
+/// ClientIdentity does — but with a non-permanent key, so nothing
+/// touches the Keychain. When a signing key is supplied, the cert is
+/// minted with that key (so a test can compare the certificate's
+/// components against the key it already holds); otherwise a fresh
+/// throwaway key is generated. Shared by DERAndIdentityTests and
+/// PairingSecretTests (v1.0.53) — one helper, not one copy per class.
+func makeTestCertDER(commonName: String, signingKey: SecKey? = nil) throws -> Data {
+    let privateKey: SecKey
+    if let signingKey {
+        privateKey = signingKey
+    } else {
+        let attributes: [String: Any] = [
+            kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
+            kSecAttrKeySizeInBits as String: 2048,
+        ]
+        privateKey = try XCTUnwrap(SecKeyCreateRandomKey(attributes as CFDictionary, nil))
     }
+    let publicKey = try XCTUnwrap(SecKeyCopyPublicKey(privateKey))
+    let publicDER = try XCTUnwrap(SecKeyCopyExternalRepresentation(publicKey, nil) as Data?)
+
+    let signatureAlgorithm = DER.sequence([DER.oid("1.2.840.113549.1.1.11"), DER.null])
+    let name = DER.sequence([DER.set([DER.sequence([DER.oid("2.5.4.3"), DER.utf8(commonName)])])])
+    let now = Date()
+    let validity = DER.sequence([DER.time(now.addingTimeInterval(-86_400)),
+                                 DER.time(now.addingTimeInterval(20 * 365 * 86_400))])
+    let spki = DER.sequence([
+        DER.sequence([DER.oid("1.2.840.113549.1.1.1"), DER.null]),
+        DER.bitString(Array(publicDER)),
+    ])
+    let basicConstraints = DER.sequence([
+        DER.oid("2.5.29.19"),
+        DER.octetString(DER.sequence([DER.boolean(true), DER.integer(0)])),
+    ])
+    let subjectAltName = DER.sequence([
+        DER.oid("2.5.29.17"),
+        DER.octetString(DER.sequence([DER.tlv(0x82, Array(commonName.utf8))])),
+    ])
+    var serial = [UInt8](repeating: 0, count: 8)
+    _ = SecRandomCopyBytes(kSecRandomDefault, serial.count, &serial)
+    serial[0] &= 0x7F
+    let tbs = DER.sequence([
+        DER.explicit(0, DER.integer(2)),
+        DER.integer(serial),
+        signatureAlgorithm,
+        name,
+        validity,
+        name,
+        spki,
+        DER.explicit(3, DER.sequence([basicConstraints, subjectAltName])),
+    ])
+    var error: Unmanaged<CFError>?
+    guard let signature = SecKeyCreateSignature(privateKey, .rsaSignatureMessagePKCS1v15SHA256,
+                                                Data(tbs) as CFData, &error) as Data? else {
+        throw error!.takeRetainedValue() as Error
+    }
+    return Data(DER.sequence([tbs, signatureAlgorithm, DER.bitString(Array(signature))]))
+}
+
+
+final class DERAndIdentityTests: XCTestCase {
 
     func testDERIntegerEncoding() {
         XCTAssertEqual(DER.integer([0x01, 0x00, 0x01]), [0x02, 0x03, 0x01, 0x00, 0x01])
@@ -193,55 +195,9 @@ final class DERAndIdentityTests: XCTestCase {
 
 final class PairingSecretTests: XCTestCase {
 
-    private func mintedCertDER(commonName: String) throws -> Data {
-        let attributes: [String: Any] = [
-            kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
-            kSecAttrKeySizeInBits as String: 2048,
-        ]
-        let privateKey = try XCTUnwrap(SecKeyCreateRandomKey(attributes as CFDictionary, nil))
-        let publicKey = try XCTUnwrap(SecKeyCopyPublicKey(privateKey))
-        let publicDER = try XCTUnwrap(SecKeyCopyExternalRepresentation(publicKey, nil) as Data?)
-        let signatureAlgorithm = DER.sequence([DER.oid("1.2.840.113549.1.1.11"), DER.null])
-        let name = DER.sequence([DER.set([DER.sequence([DER.oid("2.5.4.3"), DER.utf8(commonName)])])])
-        let now = Date()
-        let validity = DER.sequence([DER.time(now.addingTimeInterval(-86_400)),
-                                     DER.time(now.addingTimeInterval(20 * 365 * 86_400))])
-        let spki = DER.sequence([
-            DER.sequence([DER.oid("1.2.840.113549.1.1.1"), DER.null]),
-            DER.bitString(Array(publicDER)),
-        ])
-        let basicConstraints = DER.sequence([
-            DER.oid("2.5.29.19"),
-            DER.octetString(DER.sequence([DER.boolean(true), DER.integer(0)])),
-        ])
-        let subjectAltName = DER.sequence([
-            DER.oid("2.5.29.17"),
-            DER.octetString(DER.sequence([DER.tlv(0x82, Array(commonName.utf8))])),
-        ])
-        var serial = [UInt8](repeating: 0, count: 8)
-        _ = SecRandomCopyBytes(kSecRandomDefault, serial.count, &serial)
-        serial[0] &= 0x7F
-        let tbs = DER.sequence([
-            DER.explicit(0, DER.integer(2)),
-            DER.integer(serial),
-            signatureAlgorithm,
-            name,
-            validity,
-            name,
-            spki,
-            DER.explicit(3, DER.sequence([basicConstraints, subjectAltName])),
-        ])
-        var error: Unmanaged<CFError>?
-        guard let signature = SecKeyCreateSignature(privateKey, .rsaSignatureMessagePKCS1v15SHA256,
-                                                    Data(tbs) as CFData, &error) as Data? else {
-            throw error!.takeRetainedValue() as Error
-        }
-        return Data(DER.sequence([tbs, signatureAlgorithm, DER.bitString(Array(signature))]))
-    }
-
     func testPairingSecretKnownVector() throws {
-        let clientDER = try mintedCertDER(commonName: "UniversalTVRemote")
-        let serverDER = try mintedCertDER(commonName: "TestTV")
+        let clientDER = try makeTestCertDER(commonName: "UniversalTVRemote")
+        let serverDER = try makeTestCertDER(commonName: "TestTV")
         let clientCert = try XCTUnwrap(SecCertificateCreateWithData(nil, clientDER as CFData))
         let serverCert = try XCTUnwrap(SecCertificateCreateWithData(nil, serverDER as CFData))
         let clientKeys = try XCTUnwrap(ClientIdentity.rsaComponents(of: clientCert))
@@ -954,17 +910,17 @@ final class VolumePumpTests: XCTestCase {
     }
 
     func testSingleStepSendsOnce() async {
-        let pump = VolumePump()
+        let pump = CoalescingPump<Bool>()
         var sent: [Bool] = []
         pump.send = { up in sent.append(up) }
-        pump.enqueue(up: true)
+        pump.enqueue(true)
         await waitUntil { sent.count == 1 }
         XCTAssertEqual(sent, [true])
         XCTAssertFalse(pump.isPumping)
     }
 
     func testRapidStepsCoalesceToOnePending() async {
-        let pump = VolumePump()
+        let pump = CoalescingPump<Bool>()
         var sent: [Bool] = []
         // The first send is slow (throttle): three more steps land
         // while it is in flight and must collapse into ONE pending
@@ -973,31 +929,31 @@ final class VolumePumpTests: XCTestCase {
             try? await Task.sleep(nanoseconds: 150_000_000)
             sent.append(up)
         }
-        pump.enqueue(up: true)
+        pump.enqueue(true)
         // Let the first send start before piling on, so the later
         // steps genuinely arrive mid-send (a synchronous burst
         // would coalesce into the first send's own slot).
         try? await Task.sleep(nanoseconds: 50_000_000)
-        pump.enqueue(up: true)
-        pump.enqueue(up: true)
-        pump.enqueue(up: true)
+        pump.enqueue(true)
+        pump.enqueue(true)
+        pump.enqueue(true)
         await waitUntil { sent.count == 2 }
         XCTAssertEqual(sent, [true, true])
         XCTAssertFalse(pump.isPumping)
     }
 
     func testLatestDirectionWins() async {
-        let pump = VolumePump()
+        let pump = CoalescingPump<Bool>()
         var sent: [Bool] = []
         pump.send = { up in
             try? await Task.sleep(nanoseconds: 150_000_000)
             sent.append(up)
         }
-        pump.enqueue(up: true)
+        pump.enqueue(true)
         // A down step arrives while the up send is in flight: the
         // pending slot flips to down.
         try? await Task.sleep(nanoseconds: 50_000_000)
-        pump.enqueue(up: false)
+        pump.enqueue(false)
         await waitUntil { sent.count == 2 }
         XCTAssertEqual(sent, [true, false])
     }
@@ -1005,16 +961,16 @@ final class VolumePumpTests: XCTestCase {
     func testNoSendsAfterPumpDrains() async {
         // The v1.0.28 bug, as a test: hold, release, and the pump
         // must go quiet — nothing fires after the drain.
-        let pump = VolumePump()
+        let pump = CoalescingPump<Bool>()
         var sent: [Bool] = []
         pump.send = { up in
             try? await Task.sleep(nanoseconds: 100_000_000)
             sent.append(up)
         }
-        pump.enqueue(up: true)
+        pump.enqueue(true)
         try? await Task.sleep(nanoseconds: 50_000_000)
-        pump.enqueue(up: true)
-        pump.enqueue(up: true)
+        pump.enqueue(true)
+        pump.enqueue(true)
         await waitUntil { sent.count == 2 }
         // Released: wait well past another send cycle and assert
         // nothing more went out.
@@ -1024,15 +980,15 @@ final class VolumePumpTests: XCTestCase {
     }
 
     func testCancelDropsPendingStep() async {
-        let pump = VolumePump()
+        let pump = CoalescingPump<Bool>()
         var sent: [Bool] = []
         pump.send = { up in
             try? await Task.sleep(nanoseconds: 150_000_000)
             sent.append(up)
         }
-        pump.enqueue(up: true)
+        pump.enqueue(true)
         try? await Task.sleep(nanoseconds: 50_000_000)
-        pump.enqueue(up: true) // pending, waiting on the first send
+        pump.enqueue(true) // pending, waiting on the first send
         pump.cancel() // disconnect mid-send: the pending step dies
         await waitUntil { sent.count == 1 }
         try? await Task.sleep(nanoseconds: 300_000_000)
@@ -1041,12 +997,12 @@ final class VolumePumpTests: XCTestCase {
     }
 
     func testSequentialStepsEachSend() async {
-        let pump = VolumePump()
+        let pump = CoalescingPump<Bool>()
         var sent: [Bool] = []
         pump.send = { up in sent.append(up) }
-        pump.enqueue(up: true)
+        pump.enqueue(true)
         await waitUntil { sent.count == 1 }
-        pump.enqueue(up: false)
+        pump.enqueue(false)
         await waitUntil { sent.count == 2 }
         XCTAssertEqual(sent, [true, false])
     }
@@ -1067,7 +1023,7 @@ final class RepeatPumpTests: XCTestCase {
     }
 
     func testSingleRepeatSendsOnce() async {
-        let pump = RepeatPump()
+        let pump = CoalescingPump<RemoteCommand>()
         var sent: [RemoteCommand] = []
         pump.send = { command in sent.append(command) }
         pump.enqueue(.enter)
@@ -1077,7 +1033,7 @@ final class RepeatPumpTests: XCTestCase {
     }
 
     func testRapidRepeatsCoalesceToOnePending() async {
-        let pump = RepeatPump()
+        let pump = CoalescingPump<RemoteCommand>()
         var sent: [RemoteCommand] = []
         // The first send is slow (throttle): three more repeats
         // land while it is in flight and must collapse into ONE
@@ -1097,7 +1053,7 @@ final class RepeatPumpTests: XCTestCase {
     }
 
     func testLatestCommandWins() async {
-        let pump = RepeatPump()
+        let pump = CoalescingPump<RemoteCommand>()
         var sent: [RemoteCommand] = []
         pump.send = { command in
             try? await Task.sleep(nanoseconds: 150_000_000)
@@ -1113,7 +1069,7 @@ final class RepeatPumpTests: XCTestCase {
     }
 
     func testCancelDropsPendingRepeat() async {
-        let pump = RepeatPump()
+        let pump = CoalescingPump<RemoteCommand>()
         var sent: [RemoteCommand] = []
         pump.send = { command in
             try? await Task.sleep(nanoseconds: 150_000_000)
@@ -1132,7 +1088,7 @@ final class RepeatPumpTests: XCTestCase {
     func testNoRepeatsAfterPumpDrains() async {
         // The v1.0.34 bug, as a test: hold, release, and the pump
         // must go quiet — nothing fires after the drain.
-        let pump = RepeatPump()
+        let pump = CoalescingPump<RemoteCommand>()
         var sent: [RemoteCommand] = []
         pump.send = { command in
             try? await Task.sleep(nanoseconds: 100_000_000)

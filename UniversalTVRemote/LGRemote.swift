@@ -557,7 +557,10 @@ actor LGRemote {
                 }
                 throw LGError.pairingTimeout
             }
-            try await group.next()!
+            // group.next() is nil only if the group is empty — it
+            // never is here (two tasks), but a nil must not crash
+            // the pairing flow.
+            guard (try await group.next()) != nil else { throw LGError.pairingTimeout }
             group.cancelAll()
         }
     }
@@ -589,7 +592,10 @@ actor LGRemote {
                 }
                 throw LGError.timeout
             }
-            let result = try await group.next()!
+            // group.next() is nil only if the group is empty — it
+            // never is here (two tasks), but a nil must not crash
+            // the request path.
+            guard let result = try await group.next() else { throw LGError.timeout }
             group.cancelAll()
             return result
         }

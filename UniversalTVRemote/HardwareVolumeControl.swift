@@ -274,128 +274,69 @@ struct VolumeStepTracker {
     }
 }
 
-/// Coalescing volume pump (v1.0.28): hardware volume steps funnel
-/// through ONE pump instead of spawning one Task per step. The
-/// v1.0.23–v1.0.27 bug: every step spawned its own
+/// Coalescing pump (v1.0.53 — the v1.0.28 VolumePump and the
+/// v1.0.34 RepeatPump, merged: they were the same machine with a
+/// different payload). Hardware volume steps and pad repeat presses
+/// funnel through ONE pump each instead of spawning one Task per
+/// step/press. The bugs it fixes: every volume step spawned its own
 /// `Task { await session.send(...) }`, and Samsung's throttle
 /// reserves a 200 ms slot per call, so a 3 s hold queued seconds of
 /// slots that drained long after release — and every other key
-/// (which also throttles) queued behind them, so the remote did
-/// nothing until the volume finished. Roku's serial enqueue chain
-/// had the same backlog shape.
+/// queued behind them. The repeat loop had the same shape: a press
+/// every 0.12s, but each send takes longer than that to land, so
+/// presses piled up in flight and kept arriving for seconds after
+/// the finger lifted.
 ///
-/// The pump keeps exactly one pending step (the latest direction
-/// wins) plus one in-flight send. A hold therefore sends at the
-/// TV's own pace — one step per send — and the moment the finger
-/// lifts, no new step arrives, the in-flight send finishes, the
-/// loop finds nothing pending and stops: at most one step of
-/// overshoot, never a catch-up backlog. Non-volume commands never
-/// touch the pump, so a pad tap waits behind at most one volume
-/// send (~200 ms on Samsung), not a whole hold's worth.
+/// The pump keeps exactly one pending value (the latest wins) plus
+/// one in-flight send. A hold therefore sends at the TV's own pace
+/// — one step per send — and the moment the finger lifts, no new
+/// value arrives, the in-flight send finishes, the loop finds
+/// nothing pending and stops: at most one step of overshoot, never
+/// a catch-up backlog. Non-pumped commands never touch a pump, so
+/// a pad tap waits behind at most one pumped send, not a whole
+/// hold's worth.
 ///
 /// Pure enough to unit-test: the actual send is injected
-/// (RemoteSession wires it to `send(.volumeUp/.volumeDown)`).
+/// (RemoteSession wires the Bool pump to `send(.volumeUp/.volumeDown)`
+/// and the RemoteCommand pump to `send(_:)`).
 @MainActor
-final class VolumePump {
-    /// The actual send: one volume step to the TV. Nil until
+final class CoalescingPump<T> {
+    /// The actual send: one pumped value to the TV. Nil until
     /// RemoteSession wires it (tests set a fake).
-    var send: ((Bool) async -> Void)?
+    var send: ((T) async -> Void)?
 
-    private var pendingDirection: Bool?
+    private var pending: T?
     private var pumping = false
 
     /// True while a pump run is in progress (a send is in flight,
-    /// or a pending step is waiting on it).
+    /// or a pending value is waiting on it).
     var isPumping: Bool { pumping }
 
-    /// One hardware step: remember the latest direction and make
-    /// sure the pump is running. Steps arriving while a send is in
-    /// flight just overwrite the single pending slot — they never
-    /// spawn a task, never reserve a throttle slot.
-    func enqueue(up: Bool) {
-        pendingDirection = up
+    /// One step/press: remember the latest value and make sure the
+    /// pump is running. Values arriving while a send is in flight
+    /// just overwrite the single pending slot — they never spawn a
+    /// task, never reserve a throttle slot.
+    func enqueue(_ value: T) {
+        pending = value
         guard !pumping else { return }
         pumping = true
         Task { await run() }
     }
 
-    /// Drop the pending step, if any. The in-flight send (if one)
+    /// Drop the pending value, if any. The in-flight send (if one)
     /// still finishes — it is already on the wire — but nothing
-    /// further goes out. Called on disconnect, so no volume step
-    /// fires after the remote is gone.
-    func cancel() {
-        pendingDirection = nil
-    }
-
-    private func run() async {
-        while true {
-            if let direction = pendingDirection {
-                pendingDirection = nil
-                await send?(direction)
-            } else {
-                break
-            }
-        }
-        pumping = false
-    }
-}
-
-/// Coalescing pump for pad repeat streams (v1.0.34): double-tap-hold
-/// spam and swipe-and-hold repeats funnel through ONE pump instead
-/// of spawning one Task per press. The bug it fixes: the repeat loop
-/// fires a press every 0.12s, but each send takes longer than that
-/// to land (Samsung reserves a 200 ms throttle slot per key, Roku
-/// runs a serial press chain), so presses piled up in flight and
-/// kept arriving for seconds after the finger lifted. The pump
-/// keeps exactly one pending press (the latest wins) plus one
-/// in-flight send, and `cancel()` drops the pending press — so the
-/// moment the finger lifts, at most the one send already on the
-/// wire still lands, and nothing else follows. Discrete presses
-/// (a quick tap, a quick swipe, key down/up) never touch the pump,
-/// so they always land exactly once.
-///
-/// Pure enough to unit-test: the actual send is injected
-/// (RemoteSession wires it to `send(_:)`).
-@MainActor
-final class RepeatPump {
-    /// The actual send: one repeat press to the TV. Nil until
-    /// RemoteSession wires it (tests set a fake).
-    var send: ((RemoteCommand) async -> Void)?
-
-    private var pending: RemoteCommand?
-    private var pumping = false
-
-    /// True while a pump run is in progress (a send is in flight,
-    /// or a pending press is waiting on it).
-    var isPumping: Bool { pumping }
-
-    /// One repeat press: remember the latest command and make sure
-    /// the pump is running. Presses arriving while a send is in
-    /// flight just overwrite the single pending slot — they never
-    /// spawn a task, never reserve a throttle slot. Intermediate
-    /// repeats are dropped by design: the TV cannot consume them
-    /// faster than its own pace, and what matters is that the
-    /// stream stops dead on release.
-    func enqueue(_ command: RemoteCommand) {
-        pending = command
-        guard !pumping else { return }
-        pumping = true
-        Task { await run() }
-    }
-
-    /// Drop the pending press, if any. The in-flight send (if one)
-    /// still finishes — it is already on the wire — but nothing
-    /// further goes out. Called on finger lift, so no repeat press
-    /// fires after the remote is gone or the hold is over.
+    /// further goes out. Called on finger lift / disconnect, so no
+    /// step or press fires after the hold is over or the remote
+    /// is gone.
     func cancel() {
         pending = nil
     }
 
     private func run() async {
         while true {
-            if let command = pending {
+            if let value = pending {
                 pending = nil
-                await send?(command)
+                await send?(value)
             } else {
                 break
             }
@@ -411,13 +352,25 @@ final class RepeatPump {
 /// lives in the remote view's background so it takes no layout space.
 /// `onReady` fires once, on the main thread, after the view is in
 /// the hierarchy and the slider exists, so the anchor can be applied
-/// for real.
+/// for real. The coordinator's flag is what makes it once: the view
+/// can be recreated (state changes re-evaluate the background), and
+/// every makeUIView would otherwise re-fire the anchor.
 struct HiddenVolumeView: UIViewRepresentable {
     let volumeView: MPVolumeView
     var onReady: (() -> Void)?
 
+    final class Coordinator {
+        var fired = false
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
     func makeUIView(context: Context) -> MPVolumeView {
-        DispatchQueue.main.async { onReady?() }
+        DispatchQueue.main.async {
+            guard !context.coordinator.fired else { return }
+            context.coordinator.fired = true
+            onReady?()
+        }
         return volumeView
     }
     func updateUIView(_ uiView: MPVolumeView, context: Context) {}

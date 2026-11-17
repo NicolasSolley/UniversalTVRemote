@@ -2060,6 +2060,11 @@ private struct SwipePadView: View {
     /// never tilted and the mute zone never matched a tap. The size
     /// is also remembered for the cover cropper (v1.0.50).
     private func setPadSize(_ size: CGSize) {
+        // Only write on change: onAppear fires on every appear and
+        // the geometry fires on every layout pass, so an unconditional
+        // write churned UserDefaults (and re-rendered the pad) for
+        // the same size.
+        guard size != padSize else { return }
         padSize = size
         UserDefaults.standard.set(size.width, forKey: "padMeasuredWidth")
         UserDefaults.standard.set(size.height, forKey: "padMeasuredHeight")
@@ -2394,38 +2399,30 @@ private struct SwipePadView: View {
     }
 
     /// Sends gesture outputs through the pad's callback. enterDown
-    /// buzzes once at onset; a key release never buzzes.
-    private func emit(_ outputs: [SwipePadGesture.Output]) {
+    /// buzzes once at onset; a key release never buzzes. With
+    /// `viaPump`, the same outputs enqueue on the session's
+    /// coalescing pump instead of sending directly (v1.0.34): spam
+    /// ticks and swipe repeats use the pump so the stream stops
+    /// dead on lift; discrete presses always go direct.
+    private func emit(_ outputs: [SwipePadGesture.Output], viaPump: Bool = false) {
         for output in outputs {
             switch output {
-            case .enter(let haptic): onCommand(.enter, haptic)
-            case .enterDown: onCommand(.enterDown, true)
-            case .enterUp: onCommand(.enterUp, false)
-            case .mute(let haptic): onCommand(.mute, haptic)
-            case .up(let haptic): onCommand(.up, haptic)
-            case .down(let haptic): onCommand(.down, haptic)
-            case .left(let haptic): onCommand(.left, haptic)
-            case .right(let haptic): onCommand(.right, haptic)
-            }
-        }
-    }
-
-    /// Sends repeat outputs through the pump path (v1.0.34): the
-    /// same outputs as emit, but they enqueue on the session's
-    /// coalescing pump instead of spawning one send Task each, so
-    /// the stream stops dead on lift. Only spam ticks and swipe
-    /// repeats use this — discrete presses always use emit.
-    private func emitRepeat(_ outputs: [SwipePadGesture.Output]) {
-        for output in outputs {
-            switch output {
-            case .enter(let haptic): onRepeatCommand(.enter, haptic)
-            case .enterDown: onRepeatCommand(.enterDown, true)
-            case .enterUp: onRepeatCommand(.enterUp, false)
-            case .mute(let haptic): onRepeatCommand(.mute, haptic)
-            case .up(let haptic): onRepeatCommand(.up, haptic)
-            case .down(let haptic): onRepeatCommand(.down, haptic)
-            case .left(let haptic): onRepeatCommand(.left, haptic)
-            case .right(let haptic): onRepeatCommand(.right, haptic)
+            case .enter(let haptic):
+                if viaPump { onRepeatCommand(.enter, haptic) } else { onCommand(.enter, haptic) }
+            case .enterDown:
+                if viaPump { onRepeatCommand(.enterDown, true) } else { onCommand(.enterDown, true) }
+            case .enterUp:
+                if viaPump { onRepeatCommand(.enterUp, false) } else { onCommand(.enterUp, false) }
+            case .mute(let haptic):
+                if viaPump { onRepeatCommand(.mute, haptic) } else { onCommand(.mute, haptic) }
+            case .up(let haptic):
+                if viaPump { onRepeatCommand(.up, haptic) } else { onCommand(.up, haptic) }
+            case .down(let haptic):
+                if viaPump { onRepeatCommand(.down, haptic) } else { onCommand(.down, haptic) }
+            case .left(let haptic):
+                if viaPump { onRepeatCommand(.left, haptic) } else { onCommand(.left, haptic) }
+            case .right(let haptic):
+                if viaPump { onRepeatCommand(.right, haptic) } else { onCommand(.right, haptic) }
             }
         }
     }
@@ -2445,14 +2442,14 @@ private struct SwipePadView: View {
             // stream can be dropped on lift. A hold onset and the
             // first spam press are discrete and go direct.
             if gesture.isSwiping {
-                emitRepeat(gesture.onsetTimerFired())
+                emit(gesture.onsetTimerFired(), viaPump: true)
             } else {
                 emit(gesture.onsetTimerFired())
             }
             while gesture.isSpamming || gesture.isSwiping, !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: Self.holdInterval)
                 guard !Task.isCancelled else { return }
-                emitRepeat(gesture.isSpamming ? gesture.spamTick() : gesture.swipeTick())
+                emit(gesture.isSpamming ? gesture.spamTick() : gesture.swipeTick(), viaPump: true)
             }
             holdTask = nil
         }
@@ -2468,7 +2465,7 @@ private struct SwipePadView: View {
             while gesture.isSwiping, !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: Self.holdInterval)
                 guard !Task.isCancelled else { return }
-                emitRepeat(gesture.swipeTick())
+                emit(gesture.swipeTick(), viaPump: true)
             }
             holdTask = nil
         }

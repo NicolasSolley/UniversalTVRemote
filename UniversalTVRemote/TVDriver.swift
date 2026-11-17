@@ -2,7 +2,10 @@
 //
 // Ported from open-tv-remote (https://github.com/iamnbutler/open-tv-remote),
 // MIT License, Copyright (c) 2026 Nathan Butler. The protocol, the state
-// enums, TVApp and TVBrand are the fork's code verbatim. ONE mechanical
+// enums, TVApp and TVBrand are the fork's code verbatim — except the
+// fork's unused `TVApp.extra` and `AndroidTVDevice`'s
+// `withoutCredentials`/`hasCredentials`, deleted in v1.0.53 (nothing
+// referenced them; the fork's driver never reads them). ONE mechanical
 // rename: the fork's `TVDevice` struct is `AndroidTVDevice` here, because
 // this app already has a discovery model called `TVDevice`
 // (TVDevice.swift); the fields are unchanged. `RemoteInputRequest` is the
@@ -46,8 +49,6 @@ struct TVApp: Identifiable, Hashable, Sendable {
     /// Driver-specific: Roku channel ID, Samsung/LG app ID, or Android TV app link.
     let launchID: String
     var iconURL: URL?
-    /// Samsung needs to know whether an app launches as a deep link or native app.
-    var extra: String?
 }
 
 @MainActor
@@ -178,20 +179,4 @@ struct AndroidTVDevice: Codable, Identifiable, Hashable, Sendable {
     var isPaired: Bool = false
     /// Samsung: Wi-Fi/Ethernet MAC, so we can wake the TV with a Wake-on-LAN packet.
     var macAddress: String?
-
-    /// What another device may know about this TV: pairing is between one device and the TV.
-    var withoutCredentials: AndroidTVDevice {
-        var shared = self
-        shared.token = nil
-        shared.isPaired = false
-        return shared
-    }
-
-    var hasCredentials: Bool {
-        switch brand {
-        case .roku: true
-        case .androidTV: isPaired
-        case .samsung, .lg: token != nil
-        }
-    }
 }

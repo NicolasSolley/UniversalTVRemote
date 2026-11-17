@@ -23,7 +23,11 @@ final class TLSChannel {
     private var framer = ProtoFramer()
     private var closed = false
 
-    init(host: String, port: UInt16, identity: SecIdentity) {
+    /// Failable: port 0 is the only invalid UInt16 port, and
+    /// NWEndpoint.Port traps on it — the callers pass the Android
+    /// TV ports (6466/6467), so a nil here means a programming
+    /// error upstream, surfaced as a failed state instead of a crash.
+    init?(host: String, port: UInt16, identity: SecIdentity) {
         let tls = NWProtocolTLS.Options()
         let sec = tls.securityProtocolOptions
         if let secIdentity = sec_identity_create(identity) {
@@ -42,7 +46,8 @@ final class TLSChannel {
         tcp.connectionTimeout = 6
         tcp.noDelay = true
         let params = NWParameters(tls: tls, tcp: tcp)
-        connection = NWConnection(host: NWEndpoint.Host(host), port: NWEndpoint.Port(rawValue: port)!, using: params)
+        guard let endpointPort = NWEndpoint.Port(rawValue: port) else { return nil }
+        connection = NWConnection(host: NWEndpoint.Host(host), port: endpointPort, using: params)
 
         connection.stateUpdateHandler = { [weak self] state in
             MainActor.assumeIsolated {

@@ -163,7 +163,10 @@ final class AndroidTVDriver: TVDriver {
             return
         }
         state = .connecting
-        let channel = TLSChannel(host: device.host, port: 6466, identity: identity.identity)
+        guard let channel = TLSChannel(host: device.host, port: 6466, identity: identity.identity) else {
+            state = .failed("Couldn't open the connection to the TV.")
+            return
+        }
         channel.onMessage = { [weak self] in self?.handleRemote($0) }
         channel.onClose = { [weak self] error, tlsRejected in
             guard let self else { return }
@@ -282,7 +285,10 @@ final class AndroidTVDriver: TVDriver {
             state = .failed(error.localizedDescription)
             return
         }
-        let channel = TLSChannel(host: device.host, port: 6467, identity: identity.identity)
+        guard let channel = TLSChannel(host: device.host, port: 6467, identity: identity.identity) else {
+            state = .failed("Couldn't open the pairing connection to the TV.")
+            return
+        }
         channel.onReady = { [weak self] in
             self?.sendPairing { m in
                 m.message(10) { r in
@@ -374,10 +380,7 @@ final class AndroidTVDriver: TVDriver {
             state = .failed("Lost the pairing connection. Start pairing again.")
             return
         }
-        let codeBytes = stride(from: 0, to: 6, by: 2).map { i -> UInt8 in
-            let start = code.index(code.startIndex, offsetBy: i)
-            return UInt8(code[start..<code.index(start, offsetBy: 2)], radix: 16)!
-        }
+        let codeBytes = Self.pairingCodeBytes(code)
         var hash = SHA256()
         hash.update(data: client.modulus)
         hash.update(data: client.exponent)
@@ -394,6 +397,17 @@ final class AndroidTVDriver: TVDriver {
         sendPairing { m in m.message(40) { $0.data(1, secret) } }
     }
 
+    /// The 6 hex chars of a pairing code as 3 bytes (pairs of hex
+    /// digits). Callers guard the code is 6 hex chars first, so
+    /// each pair parses — the `?? 0` is a belt-and-braces default,
+    /// never a live path, and keeps the force-unwrap out.
+    private nonisolated static func pairingCodeBytes(_ code: String) -> [UInt8] {
+        stride(from: 0, to: 6, by: 2).map { i in
+            let start = code.index(code.startIndex, offsetBy: i)
+            return UInt8(code[start..<code.index(start, offsetBy: 2)], radix: 16) ?? 0
+        }
+    }
+
     /// The pairing secret: SHA-256 over the minimal big-endian bytes of
     /// client modulus, client exponent, server modulus, server exponent,
     /// then the code's last 4 hex chars (bytes 2–3) as bytes. Returns nil
@@ -407,10 +421,7 @@ final class AndroidTVDriver: TVDriver {
         guard code.count == 6, code.allSatisfy(\.isHexDigit),
               let client = ClientIdentity.rsaComponents(of: clientCertificate),
               let server = ClientIdentity.rsaComponents(of: serverCertificate) else { return nil }
-        let codeBytes = stride(from: 0, to: 6, by: 2).map { i -> UInt8 in
-            let start = code.index(code.startIndex, offsetBy: i)
-            return UInt8(code[start..<code.index(start, offsetBy: 2)], radix: 16)!
-        }
+        let codeBytes = pairingCodeBytes(code)
         var hash = SHA256()
         hash.update(data: client.modulus)
         hash.update(data: client.exponent)

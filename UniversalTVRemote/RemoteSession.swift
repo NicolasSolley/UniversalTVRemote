@@ -163,13 +163,13 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
     /// (v1.0.28) instead of spawning one Task per step — a hold
     /// stops the instant the finger lifts and never blocks other
     /// keys behind a throttle backlog. Wired in init.
-    private let volumePump = VolumePump()
+    private let volumePump = CoalescingPump<Bool>()
     /// Pad repeat streams (double-tap-hold spam, swipe-and-hold)
     /// funnel through one coalescing pump (v1.0.34) instead of
     /// spawning one Task per press — otherwise presses pile up in
     /// flight and keep arriving after the finger lifts. Wired in
     /// init, alongside the volume pump.
-    private let repeatPump = RepeatPump()
+    private let repeatPump = CoalescingPump<RemoteCommand>()
     /// Audio chunks flow capture -> continuation -> pump -> TV, in
     /// order: the AsyncStream preserves chunk order, so speech cannot
     /// arrive scrambled.
@@ -534,7 +534,7 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
     /// waits behind at most one volume send, never a backlog.
     /// Non-volume commands use `send(_:)` and never touch the pump.
     func sendVolume(up: Bool) {
-        volumePump.enqueue(up: up)
+        volumePump.enqueue(up)
     }
 
     /// One pad repeat press (v1.0.34): double-tap-hold spam and
@@ -555,7 +555,17 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
     }
 
     func send(_ command: RemoteCommand) async {
-        guard supportsControl, let host = device.host else { return }
+        // A send that cannot go out says so in the status instead
+        // of returning silently (v1.0.53): a dead button with no
+        // explanation reads as a broken remote.
+        guard supportsControl else {
+            status = "This device was found, but there's no public way to control it from an app."
+            return
+        }
+        guard let host = device.host else {
+            status = "Still waiting for this TV's address — try scanning again."
+            return
+        }
         do {
             switch device.brand {
             case .roku:

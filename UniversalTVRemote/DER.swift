@@ -33,12 +33,16 @@ enum DER {
     /// Big-endian unsigned integer bytes → DER INTEGER (adds a 0x00 pad when the high bit is set).
     static func integer(_ magnitude: [UInt8]) -> [UInt8] {
         var b = Array(magnitude.drop { $0 == 0 })
-        if b.isEmpty { b = [0] }
+        guard !b.isEmpty else { return tlv(0x02, [0]) }
         if b[0] & 0x80 != 0 { b.insert(0, at: 0) }
         return tlv(0x02, b)
     }
 
     static func integer(_ n: Int) -> [UInt8] {
+        // DER INTEGERs here are counts and serials — never negative.
+        // A negative input has no valid encoding; encode 0 instead
+        // of producing garbage bytes.
+        guard n >= 0 else { return integer(0) }
         var bytes: [UInt8] = []
         var v = n
         repeat {
@@ -50,6 +54,13 @@ enum DER {
 
     static func oid(_ dotted: String) -> [UInt8] {
         let parts = dotted.split(separator: ".").compactMap { UInt64($0) }
+        // An OID needs at least two arcs, the first 0–2, and the
+        // combined first byte must fit in one byte. Callers pass
+        // literals, so an invalid string here is a programming
+        // error — encode an empty OID rather than crashing on the
+        // force-index below.
+        guard parts.count >= 2, parts[0] <= 2, parts[1] <= 0xFF,
+              parts[0] * 40 + parts[1] <= 0xFF else { return tlv(0x06, []) }
         var out: [UInt8] = [UInt8(parts[0] * 40 + parts[1])]
         for p in parts.dropFirst(2) {
             var chunk: [UInt8] = [UInt8(p & 0x7F)]

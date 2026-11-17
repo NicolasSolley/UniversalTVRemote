@@ -83,7 +83,8 @@ struct ProtoMessage {
                 i += 8
                 fields[field, default: []].append(.fixed(v))
             case 2:
-                guard let len = Self.readVarint(bytes, &i), i + Int(len) <= bytes.count else { return nil }
+                guard let len = Self.readVarint(bytes, &i), len <= UInt64(bytes.count),
+                      i + Int(len) <= bytes.count else { return nil }
                 fields[field, default: []].append(.bytes(Array(bytes[i..<i + Int(len)])))
                 i += Int(len)
             case 5:
@@ -134,14 +135,39 @@ struct ProtoMessage {
 }
 
 /// Splits a byte stream into varint-length-prefixed frames.
+/// Bounded (v1.0.53): a corrupt length prefix used to grow the buffer
+/// without bound — a huge declared length never completes, so bytes
+/// accumulated forever — and `Int(len)` trapped outright past
+/// Int.max. Frames here are kilobytes; anything over 1 MB is a
+/// corrupt prefix, so the buffer is dropped and framing resyncs on
+/// the next message.
 struct ProtoFramer {
+    /// Largest single frame accepted (1 MB).
+    static let maxFrameLength: UInt64 = 1_048_576
+    /// Largest buffered partial data (1 MB).
+    static let maxBufferLength = 1_048_576
+
     private var buffer: [UInt8] = []
 
-    mutating func append(_ data: Data) { buffer += data }
+    mutating func append(_ data: Data) {
+        buffer += data
+        if buffer.count > Self.maxBufferLength {
+            // A length prefix that never completes would grow the
+            // buffer without bound; drop it all and resync.
+            buffer.removeAll()
+        }
+    }
 
     mutating func next() -> [UInt8]? {
         var i = 0
-        guard let len = ProtoMessage.readVarint(buffer, &i), buffer.count - i >= Int(len) else { return nil }
+        guard let len = ProtoMessage.readVarint(buffer, &i) else { return nil }
+        // Check the length BEFORE converting to Int: a varint past
+        // Int.max traps on Int(len).
+        guard len <= Self.maxFrameLength else {
+            buffer.removeAll()
+            return nil
+        }
+        guard buffer.count - i >= Int(len) else { return nil }
         let frame = Array(buffer[i..<i + Int(len)])
         buffer.removeFirst(i + Int(len))
         return frame
