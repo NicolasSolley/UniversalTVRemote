@@ -1340,6 +1340,12 @@ private struct PadHelpSheet: View {
 /// style, and light/dark mode. Everything persists in UserDefaults
 /// and applies at once; the pad keeps its own theme gradient in
 /// both appearances.
+/// Settings, rebuilt the Apple way (v1.0.49): the old sheet stacked
+/// three segmented pickers and a row of color circles, which read
+/// like a homemade control panel. Real Settings screens are an
+/// inset-grouped list where each row drills into a sub-list with a
+/// checkmark on the current choice — label on the left, current
+/// value in gray on the right. That's what this is now.
 private struct SettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("padTheme") private var padThemeRaw = "blue"
@@ -1349,65 +1355,64 @@ private struct SettingsSheet: View {
 
     var body: some View {
         NavigationView {
-            Form {
+            List {
                 Section("Pad color") {
-                    HStack(spacing: 16) {
-                        ForEach(PadTheme.allCases, id: \.self) { theme in
-                            Button { padThemeRaw = theme.rawValue } label: {
-                                ZStack {
-                                    Circle()
-                                        .fill(LinearGradient(colors: [theme.top, theme.bottom], startPoint: .top, endPoint: .bottom))
-                                        .frame(width: 40, height: 40)
-                                    if padThemeRaw == theme.rawValue {
-                                        Image(systemName: "checkmark")
-                                            .font(.subheadline.bold())
-                                            .foregroundStyle(.white)
-                                    }
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel(theme.name)
-                        }
+                    NavigationLink {
+                        SettingsOptionList(
+                            title: "Pad Color",
+                            options: PadTheme.allCases.map { theme in
+                                SettingsOption(value: theme.rawValue, name: theme.name, top: theme.top, bottom: theme.bottom)
+                            },
+                            selection: $padThemeRaw
+                        )
+                    } label: {
+                        SettingsRow(label: "Color", value: (PadTheme(rawValue: padThemeRaw) ?? .blue).name)
                     }
-                    .frame(maxWidth: .infinity)
-                    Text((PadTheme(rawValue: padThemeRaw) ?? .blue).name)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .center)
                 }
-                Section("Pad border") {
-                    Picker("Border", selection: $padBorderRaw) {
-                        ForEach(PadBorder.allCases, id: \.self) { effect in
-                            Text(effect.name).tag(effect.rawValue)
-                        }
+                Section {
+                    NavigationLink {
+                        SettingsOptionList(
+                            title: "Pad Border",
+                            options: PadBorder.allCases.map { SettingsOption(value: $0.rawValue, name: $0.name) },
+                            selection: $padBorderRaw
+                        )
+                    } label: {
+                        SettingsRow(label: "Border", value: (PadBorder(rawValue: padBorderRaw) ?? .off).name)
                     }
-                    .pickerStyle(.segmented)
+                } header: {
+                    Text("Pad border")
+                } footer: {
                     Text("Flow runs a light around the pad, like an LED keyboard.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
                 }
-                Section("Trail") {
-                    Picker("Trail", selection: $trailStyleRaw) {
-                        ForEach(TrailStyle.allCases, id: \.self) { style in
-                            Text(style.name).tag(style.rawValue)
-                        }
+                Section {
+                    NavigationLink {
+                        SettingsOptionList(
+                            title: "Trail",
+                            options: TrailStyle.allCases.map { SettingsOption(value: $0.rawValue, name: $0.name) },
+                            selection: $trailStyleRaw
+                        )
+                    } label: {
+                        SettingsRow(label: "Trail", value: (TrailStyle(rawValue: trailStyleRaw) ?? .glow).name)
                     }
-                    .pickerStyle(.segmented)
+                } header: {
+                    Text("Trail")
+                } footer: {
                     Text("How the swipe trail looks on the pad.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
                 }
                 Section("Appearance") {
-                    Picker("Appearance", selection: $appearanceRaw) {
-                        ForEach(AppAppearance.allCases, id: \.self) { appearance in
-                            Text(appearance.name).tag(appearance.rawValue)
-                        }
+                    NavigationLink {
+                        SettingsOptionList(
+                            title: "Appearance",
+                            options: AppAppearance.allCases.map { SettingsOption(value: $0.rawValue, name: $0.name) },
+                            selection: $appearanceRaw
+                        )
+                    } label: {
+                        SettingsRow(label: "Appearance", value: (AppAppearance(rawValue: appearanceRaw) ?? .dark).name)
                     }
-                    .pickerStyle(.segmented)
                 }
             }
+            .listStyle(.insetGrouped)
             .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
@@ -1422,6 +1427,75 @@ private struct SettingsSheet: View {
         // the sheet's own @AppStorage, flips it the moment the
         // picker changes.
         .preferredColorScheme((AppAppearance(rawValue: appearanceRaw) ?? .dark).scheme)
+    }
+}
+
+/// One Settings-style row: label on the left, current value in gray
+/// on the right, chevron added by the NavigationLink.
+private struct SettingsRow: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack {
+            Text(label)
+            Spacer()
+            Text(value)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// One option in a Settings sub-list: name, optional color swatch,
+/// checkmark on the current choice.
+private struct SettingsOption {
+    let value: String
+    let name: String
+    let top: Color?
+    let bottom: Color?
+
+    init(value: String, name: String, top: Color? = nil, bottom: Color? = nil) {
+        self.value = value
+        self.name = name
+        self.top = top
+        self.bottom = bottom
+    }
+}
+
+/// A sub-list of choices, the way Settings drills down: tap a row
+/// to pick it, checkmark shows the current one.
+private struct SettingsOptionList: View {
+    let title: String
+    let options: [SettingsOption]
+    @Binding var selection: String
+
+    var body: some View {
+        List {
+            ForEach(options, id: \.value) { option in
+                Button {
+                    selection = option.value
+                } label: {
+                    HStack {
+                        if let top = option.top, let bottom = option.bottom {
+                            Circle()
+                                .fill(LinearGradient(colors: [top, bottom], startPoint: .top, endPoint: .bottom))
+                                .frame(width: 22, height: 22)
+                        }
+                        Text(option.name)
+                        Spacer()
+                        if selection == option.value {
+                            Image(systemName: "checkmark")
+                                .font(.body.bold())
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                    .foregroundStyle(.primary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle(title)
     }
 }
 
