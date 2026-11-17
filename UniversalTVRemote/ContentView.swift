@@ -173,6 +173,62 @@ private enum AppBackground {
     }
 }
 
+/// Page background with a glass wash (v1.0.53): the flat page color
+/// plus soft radial glows in the theme accent — LIGHT MODE ONLY. A
+/// thin material over a flat solid background shows almost no frost,
+/// so the wash gives the glass cards something to blur and the frost
+/// actually reads. Dark mode keeps the flat Chrome gray, exactly as
+/// before.
+private struct GlassWashBackground: View {
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        ZStack {
+            AppBackground.color(for: colorScheme)
+            if colorScheme == .light {
+                let accent = PadTheme.current.accent
+                Rectangle()
+                    .fill(RadialGradient(
+                        colors: [accent.opacity(0.22), .clear],
+                        center: .topLeading, startRadius: 10, endRadius: 340))
+                Rectangle()
+                    .fill(RadialGradient(
+                        colors: [accent.opacity(0.18), .clear],
+                        center: .bottomTrailing, startRadius: 10, endRadius: 380))
+            }
+        }
+        .ignoresSafeArea()
+    }
+}
+
+/// Frosted-glass surface for a card, pill, or round button (v1.0.53):
+/// dark mode keeps the translucent primary fill exactly as before;
+/// light mode is ultraThinMaterial over the glow wash with a soft
+/// gray veil, so the surface reads as gray glass instead of flat
+/// white — the TV list box and the remote pills were too much white
+/// overall. The veil sits above the material: the blur still shows
+/// through, just grayed.
+private struct GlassSurface<S: Shape>: View {
+    let shape: S
+    @Environment(\.colorScheme) private var colorScheme
+
+    var body: some View {
+        if colorScheme == .light {
+            shape.fill(.ultraThinMaterial)
+                .overlay(shape.fill(Color.glassVeil))
+        } else {
+            shape.fill(Color.primary.opacity(0.10))
+        }
+    }
+}
+
+/// The gray veil over light-mode glass (v1.0.53): shared by the
+/// surfaces above and the glass cards below, so every frosted
+/// element reads the same gray.
+private extension Color {
+    static var glassVeil: Color { Color(white: 0.88).opacity(0.5) }
+}
+
 struct ContentView: View {
     @StateObject private var discovery = DiscoveryManager()
     @State private var session: RemoteSession?
@@ -245,14 +301,9 @@ private struct DiscoveryListView: View {
     /// from it, so System follows the phone.
     @Environment(\.colorScheme) private var colorScheme
 
-    /// Card/button surface (v1.0.52): dark mode keeps the
-    /// translucent primary fill; light mode uses solid white with
-    /// a soft shadow, so the list card and the round buttons read
-    /// against the bright page instead of washing out into it.
-    /// Same treatment as the remote page's pills (v1.0.51).
-    private var surfaceFill: Color {
-        colorScheme == .light ? .white : Color.primary.opacity(0.10)
-    }
+    /// Card/button surface (v1.0.53, light-mode glass): the surfaces
+    /// are GlassSurface now — frosted material with a gray veil in
+    /// light mode, the translucent primary fill in dark mode.
     private var surfaceShadow: Color {
         colorScheme == .light ? .black.opacity(0.07) : .clear
     }
@@ -296,7 +347,7 @@ private struct DiscoveryListView: View {
                                 .font(.subheadline.bold())
                                 .foregroundStyle(.primary)
                                 .frame(width: 30, height: 30)
-                                .background(surfaceFill, in: Circle())
+                                .background { GlassSurface(shape: Circle()) }
                                 .shadow(color: surfaceShadow, radius: 6, y: 2)
                         }
                         .buttonStyle(.plain)
@@ -307,7 +358,7 @@ private struct DiscoveryListView: View {
                                 .font(.subheadline.bold())
                                 .foregroundStyle(.primary)
                                 .frame(width: 30, height: 30)
-                                .background(surfaceFill, in: Circle())
+                                .background { GlassSurface(shape: Circle()) }
                                 .shadow(color: surfaceShadow, radius: 6, y: 2)
                         }
                         .buttonStyle(.plain)
@@ -332,7 +383,7 @@ private struct DiscoveryListView: View {
                     }
                 }
                 .padding(.vertical, 6)
-                .background(surfaceFill, in: RoundedRectangle(cornerRadius: 20))
+                .background { GlassSurface(shape: RoundedRectangle(cornerRadius: 20)) }
                 .shadow(color: surfaceShadow, radius: 8, y: 2)
                 .padding(.horizontal)
 
@@ -355,9 +406,10 @@ private struct DiscoveryListView: View {
         .onChange(of: discovery.isScanning) { scanning in
             if !scanning { hasCompletedScan = true }
         }
-        // Page background (v1.0.48): Chrome dark gray / soft light
-        // gray, not the system black/white extremes.
-        .background(AppBackground.color(for: colorScheme).ignoresSafeArea())
+        // Page background (v1.0.48, glass wash in v1.0.53): Chrome
+        // dark gray / soft light gray with an accent glow in light
+        // mode, not the system black/white extremes.
+        .background(GlassWashBackground())
         .sheet(isPresented: $showPadHelp) { PadHelpSheet() }
         .sheet(isPresented: $showSettings) { SettingsSheet() }
     }
@@ -610,13 +662,9 @@ private struct RemoteView: View {
     /// Resolved color scheme (v1.0.48): the page background comes
     /// from it, so System follows the phone.
     @Environment(\.colorScheme) private var colorScheme
-    /// Pill/card surface (v1.0.51): dark mode keeps the translucent
-    /// primary fill; light mode uses solid white with a soft shadow,
-    /// so the controls read as buttons on the tinted page instead
-    /// of washed-out gray blobs.
-    private var surfaceFill: Color {
-        colorScheme == .light ? .white : Color.primary.opacity(0.10)
-    }
+    /// Pill/card surface (v1.0.53, light-mode glass): the surfaces
+    /// are GlassSurface now — frosted material with a gray veil in
+    /// light mode, the translucent primary fill in dark mode.
     private var surfaceShadow: Color {
         colorScheme == .light ? .black.opacity(0.07) : .clear
     }
@@ -636,9 +684,16 @@ private struct RemoteView: View {
                 isLG: session.device.brand == .lg)
             remoteContent(layout: layout)
         }
-        // Page background (v1.0.48): Chrome dark gray / soft light
-        // gray, not the system black/white extremes.
-        .background(AppBackground.color(for: colorScheme).ignoresSafeArea())
+        // Page background (v1.0.48, glass wash in v1.0.53): Chrome
+        // dark gray / soft light gray with an accent glow in light
+        // mode, not the system black/white extremes.
+        .background(GlassWashBackground())
+        // Tap-to-dismiss (v1.0.53): a tap on empty space (or any
+        // non-button area) with the keyboard open just closes the
+        // keyboard. Buttons and the pad handle it themselves — a
+        // Button wins over this tap, and the pad swallows its own
+        // touches — so the dismissing tap never also acts.
+        .onTapGesture { _ = dismissKeyboardIfOpen() }
         .task { await session.connect() }
         .onChange(of: session.tvTextFieldFocused) { focused in
             // Auto keyboard (v1.0.34): the TV announced a focused
@@ -699,7 +754,7 @@ private struct RemoteView: View {
             // Navigation: the swipe pad is the one and only
             // navigation control — no D-pad, no toggle. It sizes
             // from the layout so the page fits without scrolling.
-            SwipePadView(height: layout.padSize, onCommand: { send($0, haptic: $1) }, onRepeatCommand: { sendRepeat($0, haptic: $1) }, onCancelRepeats: { session.cancelRepeats() })
+            SwipePadView(height: layout.padSize, onCommand: { send($0, haptic: $1) }, onRepeatCommand: { sendRepeat($0, haptic: $1) }, onCancelRepeats: { session.cancelRepeats() }, isKeyboardOpen: showKeyboard, onDismissKeyboard: { dismissKeyboard() })
                 .padding(.horizontal)
 
             // Back / Home / Exit pill row — icons only, no labels.
@@ -799,7 +854,7 @@ private struct RemoteView: View {
                 }
             }
             .padding(layout.pairingCardPadding)
-            .background(surfaceFill, in: RoundedRectangle(cornerRadius: 16))
+            .background { GlassSurface(shape: RoundedRectangle(cornerRadius: 16)) }
             .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.primary.opacity(0.08), lineWidth: 1))
             .shadow(color: surfaceShadow, radius: 8, y: 2)
             .padding(.horizontal)
@@ -813,6 +868,10 @@ private struct RemoteView: View {
     private func topBar(_ layout: RemoteLayout) -> some View {
         HStack(spacing: 10) {
             Button {
+                // Tap-to-dismiss (v1.0.53): with the keyboard open
+                // this tap just closes it instead of leaving the
+                // remote.
+                if dismissKeyboardIfOpen() { return }
                 session.disconnect()
                 onBack()
             } label: {
@@ -821,7 +880,7 @@ private struct RemoteView: View {
                     .foregroundStyle(remoteAccent)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .background(surfaceFill, in: Capsule())
+                    .background { GlassSurface(shape: Capsule()) }
                     .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
                     .shadow(color: surfaceShadow, radius: 6, y: 2)
             }
@@ -841,7 +900,7 @@ private struct RemoteView: View {
                     .font(.headline.bold())
                     .foregroundStyle(.red)
                     .frame(width: layout.topBarButton, height: layout.topBarButton)
-                    .background(surfaceFill, in: Circle())
+                    .background { GlassSurface(shape: Circle()) }
                     .shadow(color: surfaceShadow, radius: 6, y: 2)
             }
             .buttonStyle(.plain)
@@ -872,7 +931,7 @@ private struct RemoteView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
-        .background(surfaceFill, in: Capsule())
+        .background { GlassSurface(shape: Capsule()) }
         .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
         .shadow(color: surfaceShadow, radius: 6, y: 2)
     }
@@ -915,6 +974,29 @@ private struct RemoteView: View {
         session.supportsControl && session.isBusy
     }
 
+    /// The keyboard's own dismiss path (v1.0.53): the × button's
+    /// action, extracted so every dismiss goes through the same
+    /// three lines — clear the text, hide the row, unfocus (which
+    /// is what actually drops the iOS keyboard). Send uses it too,
+    /// after reading the text.
+    private func dismissKeyboard() {
+        keyboardText = ""
+        showKeyboard = false
+        keyboardFocused = false
+    }
+
+    /// The tap-to-dismiss gate (v1.0.53): when the keyboard is open,
+    /// a tap anywhere on the remote UI dismisses it instead of
+    /// acting — the dismissing tap sends nothing, exactly as if
+    /// the × button was tapped. Returns true when it dismissed, so
+    /// callers can bail out before doing anything else.
+    @discardableResult
+    private func dismissKeyboardIfOpen() -> Bool {
+        guard showKeyboard else { return false }
+        dismissKeyboard()
+        return true
+    }
+
     /// `haptic` defaults to true — every tap buzzes once. (The
     /// volume rocker used to pass false for repeat steps of a hold;
     /// the rocker is gone in v1.0.23. The hardware volume buttons
@@ -922,6 +1004,9 @@ private struct RemoteView: View {
     /// (the pump). Mute comes from the pad's middle-right
     /// double-tap (v1.0.34), not a button anymore.)
     private func send(_ command: RemoteCommand, haptic: Bool = true) {
+        // Tap-to-dismiss (v1.0.53): a tap with the keyboard open
+        // just closes the keyboard — no command, no buzz.
+        if dismissKeyboardIfOpen() { return }
         if haptic { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
         Task { await session.send(command) }
     }
@@ -930,6 +1015,9 @@ private struct RemoteView: View {
     /// coalescing pump instead of spawning a send Task, so repeats
     /// stop dead on lift. Same buzz rule as send.
     private func sendRepeat(_ command: RemoteCommand, haptic: Bool = true) {
+        // Tap-to-dismiss (v1.0.53): same gate as send — a repeat
+        // that fires while the keyboard is open just closes it.
+        if dismissKeyboardIfOpen() { return }
         if haptic { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
         session.sendRepeat(command)
     }
@@ -938,10 +1026,11 @@ private struct RemoteView: View {
     /// on its own when the TV announces a focused text field
     /// (v1.0.34 auto keyboard). Send closes it (v1.0.34): the text
     /// is on the TV, so there is nothing left to type. The ×
-    /// dismisses without sending — the only way to close it on a
-    /// TV where the button hides, and the escape hatch everywhere
-    /// else. A separate view so the body stays small enough for
-    /// the compiler to type-check.
+    /// dismisses without sending — and so does a tap anywhere else
+    /// on the remote UI (v1.0.53 tap-to-dismiss): the dismissing
+    /// tap sends nothing, exactly as if the × was tapped. A
+    /// separate view so the body stays small enough for the
+    /// compiler to type-check.
     @ViewBuilder
     private var keyboardInputRow: some View {
         if showKeyboard, session.capabilities.supportsTextInput {
@@ -954,17 +1043,13 @@ private struct RemoteView: View {
                 Button("Send") {
                     let text = keyboardText
                     guard !text.isEmpty else { return }
-                    keyboardText = ""
-                    showKeyboard = false
-                    keyboardFocused = false
+                    dismissKeyboard()
                     Task { await session.send(.text(text)) }
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(keyboardText.isEmpty)
                 Button {
-                    keyboardText = ""
-                    showKeyboard = false
-                    keyboardFocused = false
+                    dismissKeyboard()
                 } label: {
                     Image(systemName: "xmark")
                         .font(.subheadline.bold())
@@ -997,14 +1082,13 @@ private struct RemoteView: View {
                 Button { showKeyboard.toggle() } label: {
                     ZStack {
                         Circle()
-                            .fill(surfaceFill)
-                        Circle()
                             .stroke(showKeyboard ? remoteAccent : Color.primary.opacity(0.08), lineWidth: 2.5)
                         Image(systemName: "keyboard")
                             .font(.title)
                             .foregroundStyle(.primary)
                     }
                     .frame(width: layout.circleSize, height: layout.circleSize)
+                    .background { GlassSurface(shape: Circle()) }
                     .shadow(color: surfaceShadow, radius: 8, y: 2)
                 }
                 .buttonStyle(.plain)
@@ -1027,7 +1111,7 @@ private struct RemoteView: View {
                 .font(.title2.bold())
                 .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, minHeight: height)
-                .background(surfaceFill, in: RoundedRectangle(cornerRadius: 28))
+                .background { GlassSurface(shape: RoundedRectangle(cornerRadius: 28)) }
                 .overlay(RoundedRectangle(cornerRadius: 28).stroke(Color.primary.opacity(0.08), lineWidth: 1))
                 .shadow(color: surfaceShadow, radius: 6, y: 2)
         }
@@ -1348,7 +1432,7 @@ private struct PadHelpSheet: View {
         // Same background as the home screen (v1.0.48): the
         // sheet was showing the system black/white while the
         // home screen uses the Chrome gray / soft gray.
-        .background(AppBackground.color(for: colorScheme).ignoresSafeArea())
+        .background(GlassWashBackground())
     }
 
     /// One gesture card: colored icon tile, name + what it does.
@@ -1387,9 +1471,23 @@ private struct PadHelpSheet: View {
 /// adapts to light and dark on its own, so the same card reads
 /// as glass on both appearances.
 private struct GlassCardBackground: View {
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         RoundedRectangle(cornerRadius: 28)
             .fill(.ultraThinMaterial)
+            .overlay(
+                // Light mode only (v1.0.53): the same gray veil as
+                // the glass surfaces, so the card reads gray glass
+                // instead of flat white. Dark mode keeps the bare
+                // material exactly as before.
+                Group {
+                    if colorScheme == .light {
+                        RoundedRectangle(cornerRadius: 28)
+                            .fill(Color.glassVeil)
+                    }
+                }
+            )
             .overlay(
                 RoundedRectangle(cornerRadius: 28)
                     .stroke(Color.primary.opacity(0.10), lineWidth: 1)
@@ -1404,10 +1502,21 @@ private struct GlassHeaderPill: View {
     let title: String
     var onDone: () -> Void
 
+    @Environment(\.colorScheme) private var colorScheme
+
     var body: some View {
         ZStack {
             Capsule()
                 .fill(.ultraThinMaterial)
+                .overlay(
+                    // Light mode only (v1.0.53): the gray veil, as
+                    // on the cards — the pill read as flat white.
+                    Group {
+                        if colorScheme == .light {
+                            Capsule().fill(Color.glassVeil)
+                        }
+                    }
+                )
                 .overlay(
                     Capsule()
                         .stroke(Color.primary.opacity(0.12), lineWidth: 1)
@@ -1618,7 +1727,7 @@ private struct SettingsSheet: View {
                 .padding(.bottom, 24)
             }
         }
-        .background(AppBackground.color(for: colorScheme).ignoresSafeArea())
+        .background(GlassWashBackground())
         // Live appearance (v1.0.48): a sheet's color scheme is
         // frozen at presentation — the root view's
         // preferredColorScheme flips the app behind it, but the
@@ -2007,6 +2116,22 @@ private struct SwipePadView: View {
     /// Called on finger lift (and when the pad goes away): drops
     /// the pump's pending repeat press, if any.
     var onCancelRepeats: () -> Void
+    /// True while the iOS keyboard is up (v1.0.53): a touch that
+    /// lands then is a keyboard dismiss, not a command — the pad
+    /// swallows the whole touch and reports it through
+    /// onDismissKeyboard instead.
+    var isKeyboardOpen: Bool
+    /// The keyboard-dismiss path (v1.0.53): the same dismiss the
+    /// keyboard's own × button runs — clear the text, hide the row,
+    /// unfocus. The pad calls this for a touch that landed while
+    /// the keyboard was open; the touch itself sends nothing.
+    var onDismissKeyboard: () -> Void
+    /// A touch that landed while the keyboard was open (v1.0.53):
+    /// the whole touch stays consumed as a dismiss even if the
+    /// finger is still down when the keyboard finishes closing and
+    /// isKeyboardOpen flips back to false mid-touch — otherwise the
+    /// hold onset would fire a key press from the dismissing tap.
+    @State private var dismissedTouch = false
 
     @State private var gesture = SwipePadGesture()
     @State private var holdTask: Task<Void, Never>?
@@ -2249,6 +2374,15 @@ private struct SwipePadView: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
+                        if isKeyboardOpen || dismissedTouch {
+                            // The dismissing touch sends nothing —
+                            // not even a key hold if the finger
+                            // stays down past the onset.
+                            dismissedTouch = true
+                            abortTouch()
+                            onDismissKeyboard()
+                            return
+                        }
                         isPressed = true
                         pressLocation = value.location
                         addTrailPoint(value.location)
@@ -2281,6 +2415,12 @@ private struct SwipePadView: View {
                         }
                     }
                     .onEnded { value in
+                        if isKeyboardOpen || dismissedTouch {
+                            dismissedTouch = false
+                            abortTouch()
+                            onDismissKeyboard()
+                            return
+                        }
                         isPressed = false
                         pressLocation = nil
                         trailStrokeOpen = false
@@ -2295,23 +2435,31 @@ private struct SwipePadView: View {
                     }
             )
             .onDisappear {
-                // Safety: never leave a key stuck down if the pad
-                // goes away mid-hold.
-                if gesture.isKeyHeldDown {
-                    onCommand(.enterUp, false)
-                }
-                isPressed = false
-                pressLocation = nil
-                trailStrokeOpen = false
-                trailFadeTask?.cancel()
-                trailFadeTask = nil
-                trail.removeAll()
-                trailOpacity = 1
-                cancelHoldTask()
-                onCancelRepeats()
-                cancelWindowTask()
-                gesture.reset()
+                abortTouch()
             }
+    }
+
+    /// Aborts the touch in flight (v1.0.53): releases a held key,
+    /// drops the trail and any timers, and resets the gesture — the
+    /// shared cleanup for the pad going away and for a touch
+    /// consumed as a keyboard dismiss (a dismiss that swallows a
+    /// touch which already held a key down must still release it,
+    /// or the key sticks on the TV).
+    private func abortTouch() {
+        if gesture.isKeyHeldDown {
+            onCommand(.enterUp, false)
+        }
+        isPressed = false
+        pressLocation = nil
+        trailStrokeOpen = false
+        trailFadeTask?.cancel()
+        trailFadeTask = nil
+        trail.removeAll()
+        trailOpacity = 1
+        cancelHoldTask()
+        onCancelRepeats()
+        cancelWindowTask()
+        gesture.reset()
     }
 
     /// Records one finger position for the trail (v1.0.44): points
