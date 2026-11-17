@@ -123,11 +123,14 @@ struct PadCoverPicker: UIViewControllerRepresentable {
     }
 }
 
-/// The cropper's sheet item (v1.0.56): the picker and the
-/// cropper are sequential sheets, not one sheet with swapped
-/// content — swapping raced the picker's teardown and left the
-/// cropper's buttons dead (see SettingsSheet). Identifiable so
-/// it can drive a `.sheet(item:)`.
+/// The cropper's overlay item (v1.0.57): the cropper is no
+/// longer a sheet — two sheet-based presentations failed on
+/// device (v1.0.53's picker→cropper content swap, v1.0.56's
+/// sequential sheets), both leaving Cancel / Set cover dead.
+/// It now renders as an in-place overlay inside the Settings
+/// sheet (see SettingsSheet), so there is no second
+/// presentation to race or corrupt. Identifiable so the
+/// overlay can show it conditionally.
 struct CropTarget: Identifiable {
     let id = UUID()
     let image: UIImage
@@ -237,6 +240,20 @@ struct PadCoverCropView: View {
                     .offset(offset)
             }
             .frame(width: frameSize.width, height: frameSize.height)
+            // Gesture scope (v1.0.57): the drag / pinch /
+            // double-tap gestures belong ONLY to this frame.
+            // The photo is offset by dragging, and an offset
+            // photo's hit area extends past the frame — on
+            // device, taps on Cancel / Set cover landed on the
+            // photo instead of the buttons (single taps did
+            // nothing, double-taps reset the crop). .clipped()
+            // confines the photo's hit area to the frame, and
+            // .contentShape(Rectangle()) makes the frame itself
+            // the exact hit area — so double-tap to reset fires
+            // only inside the cropped square, never on the
+            // toolbar or outside the frame.
+            .contentShape(Rectangle())
+            .clipped()
             .clipShape(RoundedRectangle(cornerRadius: 24))
             .overlay(
                 RoundedRectangle(cornerRadius: 24)
@@ -272,6 +289,12 @@ struct PadCoverCropView: View {
                 .padding(.bottom, 24)
         }
         .background(Color.black.ignoresSafeArea())
+        // Touch boundary (v1.0.57): the cropper is an overlay
+        // on top of the Settings sheet — the whole overlay
+        // rect is hit-testable, so taps on empty black space
+        // are swallowed here instead of falling through to
+        // the Settings controls underneath.
+        .contentShape(Rectangle())
         .alert("Couldn't save the cover", isPresented: $saveFailed) {
             Button("OK", role: .cancel) {}
         } message: {

@@ -915,14 +915,16 @@ private struct SettingsSheet: View {
     @AppStorage("trailStyle") private var trailStyleRaw = "glow"
     @AppStorage("appearance") private var appearanceRaw = "system"
     @AppStorage("padCoverVersion") private var coverVersion = 0
-    /// Cover flow sheets (v1.0.56): the picker and the cropper
-    /// are sequential sheets, not one sheet with swapped
-    /// content. The swap (v1.0.51–v1.0.55) raced the picker's
-    /// teardown and left the cropper's buttons dead — toolbar
-    /// taps fell through to the image's double-tap reset. The
-    /// picker dismisses first; its onDismiss presents the
-    /// cropper from the picked image, so there's no timing
-    /// guesswork and no dropped cropper.
+    /// Cover flow (v1.0.57): the picker is still a sheet, but
+    /// the cropper is NOT — two sheet-based cropper
+    /// presentations failed on device (v1.0.53's picker→cropper
+    /// content swap, v1.0.56's sequential sheets), both leaving
+    /// Cancel / Set cover dead. The cropper now renders as an
+    /// in-place overlay on top of the Settings content (see the
+    /// .overlay in body), so there is no second presentation
+    /// to race or corrupt. The picker dismisses first; its
+    /// onDismiss sets cropTarget from the picked image and the
+    /// overlay appears.
     @State private var showPicker = false
     /// The picked photo, waiting for the picker sheet to finish
     /// dismissing before the cropper presents.
@@ -1048,6 +1050,31 @@ private struct SettingsSheet: View {
             }
         }
         .background(AppBackground.color(for: colorScheme).ignoresSafeArea())
+        // Cropper overlay (v1.0.57): the cropper renders here,
+        // on top of the Settings content — NOT as a second
+        // sheet. Two sheet-based cropper presentations failed
+        // on device (v1.0.53's content swap, v1.0.56's
+        // sequential sheets), both leaving Cancel / Set cover
+        // dead on the first tap. An overlay is just a state
+        // change in this same hierarchy, so there is no
+        // presentation to race or corrupt — the buttons are
+        // plain buttons in a hierarchy that already works.
+        .overlay {
+            if let target = cropTarget {
+                PadCoverCropView(
+                    image: target.image,
+                    onSaved: {
+                        // The cropper already saved (v1.0.53):
+                        // bump the version so the pad re-reads
+                        // the cover, then hide the overlay.
+                        coverVersion += 1
+                        cropTarget = nil
+                    },
+                    onCancel: { cropTarget = nil }
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
         // Live appearance (v1.0.48): a sheet's color scheme is
         // frozen at presentation — the root view's
         // preferredColorScheme flips the app behind it, but the
@@ -1057,12 +1084,11 @@ private struct SettingsSheet: View {
         // picker changes.
         .preferredColorScheme((AppAppearance(rawValue: appearanceRaw) ?? .system).scheme)
         .sheet(isPresented: $showPicker, onDismiss: {
-            // The picker is fully gone here — present the cropper
-            // now, from the picked image (v1.0.56). Presenting
-            // from onDismiss instead of a fixed delay means the
-            // cropper can't be dropped by a long dismiss, and the
-            // cropper gets a clean presentation context, so its
-            // buttons work on the first tap.
+            // The picker is fully gone here — show the cropper
+            // overlay now, from the picked image (v1.0.57).
+            // Showing an overlay is just a state change, so
+            // there's no presentation to race with the
+            // picker's teardown.
             if let image = pendingCropImage {
                 cropTarget = CropTarget(image: image)
                 pendingCropImage = nil
@@ -1074,19 +1100,6 @@ private struct SettingsSheet: View {
                     showPicker = false
                 },
                 onCancel: { showPicker = false }
-            )
-        }
-        .sheet(item: $cropTarget) { target in
-            PadCoverCropView(
-                image: target.image,
-                onSaved: {
-                    // The cropper already saved (v1.0.53): bump
-                    // the version so the pad re-reads the cover,
-                    // then dismiss.
-                    coverVersion += 1
-                    cropTarget = nil
-                },
-                onCancel: { cropTarget = nil }
             )
         }
         .alert("Remove pad cover?", isPresented: $showRemoveCoverAlert) {
