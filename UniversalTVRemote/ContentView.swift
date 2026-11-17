@@ -2092,6 +2092,16 @@ private struct SwipePadView: View {
     private var theme: PadTheme { PadTheme(rawValue: padThemeRaw) ?? .midnight }
     private var borderEffect: PadBorder { PadBorder(rawValue: padBorderRaw) ?? .off }
     private var trailStyle: TrailStyle { TrailStyle(rawValue: trailStyleRaw) ?? .glow }
+    /// Glass tint over a cover photo (v1.0.52): the pad's own
+    /// gradient colors at low opacity, so the frosted photo still
+    /// ties to the theme — dark gradient in dark mode, light
+    /// gradient in light mode.
+    private var coverTint: (top: Color, bottom: Color) {
+        if colorScheme == .light {
+            return (theme.lightTop.opacity(0.30), theme.lightBottom.opacity(0.30))
+        }
+        return (theme.top.opacity(0.30), theme.bottom.opacity(0.30))
+    }
     /// Resolved color scheme (v1.0.51): the pad follows the page —
     /// a light pad in light mode, dark in dark mode.
     @Environment(\.colorScheme) private var colorScheme
@@ -2148,43 +2158,47 @@ private struct SwipePadView: View {
         return (x: -dy, y: dx, z: 0)
     }
 
-    /// The pad's border (v1.0.46, Flow fixed in v1.0.51): off is the
-    /// plain static stroke; glow adds a soft halo in the theme
-    /// color; flow runs a bright segment around the border,
-    /// LED-keyboard style — a trimmed stroke whose trim window
-    /// slides along the path, driven by a TimelineView so it stays
-    /// smooth with no timer to manage. The segment must follow the
-    /// path: the first version rotated the trimmed shape around
-    /// the center instead, and on a rounded rectangle (not a
+    /// The pad's border (v1.0.46, Flow fixed in v1.0.51, inset in
+    /// v1.0.52): off is the plain static stroke; glow adds a soft
+    /// halo in the theme color; flow runs a bright segment around
+    /// the border, LED-keyboard style — a trimmed stroke whose
+    /// trim window slides along the path, driven by a TimelineView
+    /// so it stays smooth with no timer to manage. The segment must
+    /// follow the path: the first version rotated the trimmed shape
+    /// around the center instead, and on a rounded rectangle (not a
     /// circle) that swings the piece off the border, flinging
     /// around detached. Sliding the trim keeps it glued to the
     /// border the whole way around, with a second segment covering
-    /// the wrap past the end of the path.
+    /// the wrap past the end of the path. All strokes are inset
+    /// (strokeBorder): a centered stroke hangs half its width past
+    /// the pad's edge, so against a cover photo it read as a line
+    /// that didn't line up with the image — inset, the border's
+    /// outer edge is exactly the photo's edge.
     @ViewBuilder
     private var padBorder: some View {
         switch borderEffect {
         case .off:
             RoundedRectangle(cornerRadius: 24)
-                .stroke(theme.accent.opacity(0.55), lineWidth: 1.5)
+                .strokeBorder(theme.accent.opacity(0.55), lineWidth: 1.5)
         case .glow:
             RoundedRectangle(cornerRadius: 24)
-                .stroke(theme.accent, lineWidth: 2)
+                .strokeBorder(theme.accent, lineWidth: 2)
                 .shadow(color: theme.accent.opacity(0.8), radius: 14)
         case .flow:
             ZStack {
                 RoundedRectangle(cornerRadius: 24)
-                    .stroke(theme.accent.opacity(0.25), lineWidth: 2)
+                    .strokeBorder(theme.accent.opacity(0.25), lineWidth: 2)
                 TimelineView(.animation) { timeline in
                     let phase = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3) / 3
                     let end = phase + 0.15
                     RoundedRectangle(cornerRadius: 24)
                         .trim(from: phase, to: min(1, end))
-                        .stroke(theme.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .strokeBorder(theme.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                         .shadow(color: theme.accent.opacity(0.9), radius: 8)
                     if end > 1 {
                         RoundedRectangle(cornerRadius: 24)
                             .trim(from: 0, to: end - 1)
-                            .stroke(theme.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                            .strokeBorder(theme.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                             .shadow(color: theme.accent.opacity(0.9), radius: 8)
                     }
                 }
@@ -2205,13 +2219,26 @@ private struct SwipePadView: View {
             // Pad cover art (v1.0.50): a user photo cropped to the
             // pad's shape replaces the theme gradient. The border
             // and trail still draw on top, in the theme accent.
+            // Glass over the photo (v1.0.52): the bare photo read
+            // as a picture, not a pad — a frosted layer in the
+            // theme tint makes it feel like a pad surface, like
+            // the glass Settings cards, and keeps the trail
+            // readable over bright photos.
             .overlay(
                 Group {
                     if let cover = PadCoverStore.image(for: coverVersion) {
                         Image(uiImage: cover)
                             .resizable()
                             .scaledToFill()
-                            .overlay(Color.black.opacity(0.12))
+                            .overlay(
+                                Rectangle()
+                                    .fill(.ultraThinMaterial)
+                                    .overlay(
+                                        LinearGradient(
+                                            colors: [coverTint.top, coverTint.bottom],
+                                            startPoint: .top, endPoint: .bottom)
+                                    )
+                            )
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 24))
