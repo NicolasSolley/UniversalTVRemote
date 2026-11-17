@@ -15,15 +15,16 @@ import SwiftUI
 /// change. The v1.0.51 set is modern, popular colors — not a rainbow.
 /// Midnight is the default (the old blue, kept so existing installs
 /// look the same); the rest are muted, premium tones. An old stored
-/// value (blue/purple/teal/green/orange/pink) falls back to Midnight.
+/// value (blue/purple/green/orange/pink) falls back to Midnight.
+/// Teal replaced clay in v1.0.54 (Nick: clay looked brown/orange).
 enum PadTheme: String, CaseIterable {
-    case midnight, sage, clay, graphite, lavender, blush
+    case midnight, sage, teal, graphite, lavender, blush
 
     var name: String {
         switch self {
         case .midnight: return "Midnight"
         case .sage: return "Sage"
-        case .clay: return "Clay"
+        case .teal: return "Teal"
         case .graphite: return "Graphite"
         case .lavender: return "Lavender"
         case .blush: return "Blush"
@@ -34,7 +35,7 @@ enum PadTheme: String, CaseIterable {
         switch self {
         case .midnight: return Color(red: 0.10, green: 0.16, blue: 0.35)
         case .sage: return Color(red: 0.16, green: 0.24, blue: 0.20)
-        case .clay: return Color(red: 0.32, green: 0.16, blue: 0.10)
+        case .teal: return Color(red: 0.05, green: 0.32, blue: 0.35)
         case .graphite: return Color(red: 0.20, green: 0.21, blue: 0.24)
         case .lavender: return Color(red: 0.24, green: 0.20, blue: 0.38)
         case .blush: return Color(red: 0.34, green: 0.16, blue: 0.22)
@@ -44,7 +45,7 @@ enum PadTheme: String, CaseIterable {
         switch self {
         case .midnight: return Color(red: 0.05, green: 0.07, blue: 0.18)
         case .sage: return Color(red: 0.08, green: 0.13, blue: 0.10)
-        case .clay: return Color(red: 0.18, green: 0.08, blue: 0.05)
+        case .teal: return Color(red: 0.02, green: 0.18, blue: 0.20)
         case .graphite: return Color(red: 0.10, green: 0.10, blue: 0.12)
         case .lavender: return Color(red: 0.13, green: 0.10, blue: 0.22)
         case .blush: return Color(red: 0.19, green: 0.08, blue: 0.12)
@@ -57,7 +58,7 @@ enum PadTheme: String, CaseIterable {
         switch self {
         case .midnight: return Color(red: 0.85, green: 0.90, blue: 0.99)
         case .sage: return Color(red: 0.87, green: 0.92, blue: 0.88)
-        case .clay: return Color(red: 0.98, green: 0.89, blue: 0.84)
+        case .teal: return Color(red: 0.85, green: 0.95, blue: 0.94)
         case .graphite: return Color(red: 0.90, green: 0.91, blue: 0.93)
         case .lavender: return Color(red: 0.91, green: 0.88, blue: 0.99)
         case .blush: return Color(red: 0.99, green: 0.88, blue: 0.92)
@@ -67,7 +68,7 @@ enum PadTheme: String, CaseIterable {
         switch self {
         case .midnight: return Color(red: 0.74, green: 0.82, blue: 0.98)
         case .sage: return Color(red: 0.78, green: 0.88, blue: 0.80)
-        case .clay: return Color(red: 0.96, green: 0.80, blue: 0.71)
+        case .teal: return Color(red: 0.72, green: 0.90, blue: 0.89)
         case .graphite: return Color(red: 0.82, green: 0.83, blue: 0.87)
         case .lavender: return Color(red: 0.84, green: 0.78, blue: 0.98)
         case .blush: return Color(red: 0.98, green: 0.78, blue: 0.85)
@@ -83,7 +84,7 @@ enum PadTheme: String, CaseIterable {
         switch self {
         case .midnight: return Color(red: 0.89, green: 0.92, blue: 0.99)
         case .sage: return Color(red: 0.90, green: 0.93, blue: 0.91)
-        case .clay: return Color(red: 0.95, green: 0.91, blue: 0.89)
+        case .teal: return Color(red: 0.88, green: 0.94, blue: 0.93)
         case .graphite: return Color(red: 0.91, green: 0.92, blue: 0.94)
         case .lavender: return Color(red: 0.92, green: 0.90, blue: 0.98)
         case .blush: return Color(red: 0.97, green: 0.91, blue: 0.93)
@@ -94,7 +95,7 @@ enum PadTheme: String, CaseIterable {
         switch self {
         case .midnight: return Color(red: 0.15, green: 0.45, blue: 1.0)
         case .sage: return Color(red: 0.35, green: 0.65, blue: 0.45)
-        case .clay: return Color(red: 0.85, green: 0.45, blue: 0.30)
+        case .teal: return Color(red: 0.05, green: 0.60, blue: 0.62)
         case .graphite: return Color(red: 0.60, green: 0.65, blue: 0.80)
         case .lavender: return Color(red: 0.65, green: 0.55, blue: 1.0)
         case .blush: return Color(red: 0.95, green: 0.45, blue: 0.60)
