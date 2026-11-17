@@ -1359,7 +1359,7 @@ final class ProtoFramerTests: XCTestCase {
 
     func testWireTypeTwoValidBytesFieldParses() {
         var w = ProtoWriter()
-        w.data(field: 1, [0xAA, 0xBB])
+        w.data(1, [0xAA, 0xBB])
         guard let message = ProtoMessage(w.bytes) else {
             return XCTFail("valid bytes field should parse")
         }
