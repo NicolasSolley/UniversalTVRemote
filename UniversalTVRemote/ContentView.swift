@@ -1680,24 +1680,32 @@ private struct SettingsSheet: View {
                                 .frame(height: 120)
                                 .clipShape(RoundedRectangle(cornerRadius: 16))
                             // Text buttons only hit-test their words
-                            // (v1.0.52): the padding + contentShape
-                            // give each one a full-height tap target,
-                            // the same fix the Choose-a-photo row got
-                            // in v1.0.51 — without it, taps between
-                            // the words did nothing.
+                            // (v1.0.52, fixed in v1.0.53): the padding
+                            // + contentShape have to live on the LABEL,
+                            // like the Choose row — on the Button itself
+                            // they don't extend the hit area, so only
+                            // the words were tappable. With them on the
+                            // label, each button's full padded frame
+                            // is its tap target.
                             HStack(spacing: 16) {
-                                Button("Change photo") { coverSheet = .picker }
-                                    .padding(.vertical, 8)
-                                    .contentShape(Rectangle())
-                                Button("Adjust crop") {
-                                    coverSheet = .cropper(PadCoverStore.loadOriginal() ?? cover)
+                                Button { coverSheet = .picker } label: {
+                                    Text("Change photo")
+                                        .padding(.vertical, 8)
+                                        .contentShape(Rectangle())
                                 }
-                                .padding(.vertical, 8)
-                                .contentShape(Rectangle())
+                                Button {
+                                    coverSheet = .cropper(PadCoverStore.loadOriginal() ?? cover)
+                                } label: {
+                                    Text("Adjust crop")
+                                        .padding(.vertical, 8)
+                                        .contentShape(Rectangle())
+                                }
                                 Spacer()
-                                Button("Remove", role: .destructive) { showRemoveCoverAlert = true }
-                                    .padding(.vertical, 8)
-                                    .contentShape(Rectangle())
+                                Button(role: .destructive) { showRemoveCoverAlert = true } label: {
+                                    Text("Remove")
+                                        .padding(.vertical, 8)
+                                        .contentShape(Rectangle())
+                                }
                             }
                             .font(.subheadline)
                         } else {
@@ -1709,14 +1717,20 @@ private struct SettingsSheet: View {
                                     Image(systemName: "chevron.right")
                                         .foregroundStyle(.secondary)
                                 }
+                                // The whole row is the tap target
+                                // (v1.0.51, fixed in v1.0.53): the
+                                // contentShape has to live on the
+                                // LABEL, like the device rows — on
+                                // the Button itself it doesn't extend
+                                // the hit area, so only the words
+                                // were tappable. The maxWidth makes
+                                // the row span the card, so the
+                                // spacer's empty stretch is tappable
+                                // too.
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
-                            // The whole row is the tap target (v1.0.51):
-                            // without this, SwiftUI hit-tests only the
-                            // label's drawn content — the letters — so
-                            // taps on the empty space did nothing. Same
-                            // fix the device rows already use.
-                            .contentShape(Rectangle())
                             Text("Crop it to the pad and use it as the pad's cover art.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
