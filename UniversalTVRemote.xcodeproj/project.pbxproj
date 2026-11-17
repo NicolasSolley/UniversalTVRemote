@@ -18,6 +18,7 @@
 		D546F55F73E241329EE35BD9 /* RemoteSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38C67934C3434D1F94494DE7 /* RemoteSession.swift */; };
 		1EFF77A258A84BD982F8AC5E /* RokuRemote.swift in Sources */ = {isa = PBXBuildFile; fileRef = D73B4AB6E24F45E3ADA1872A /* RokuRemote.swift */; };
 		D3FC0157A2D34CA1BBD6994E /* SSDPDiscovery.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D65539DD7E44C289EB6C23A /* SSDPDiscovery.swift */; };
+		31F711F71729DDD720C3D265 /* SwipePad.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72815174EE23D20CCAD2A969 /* SwipePad.swift */; };
 		44D4062A836C40BABB739745 /* SamsungRemote.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D9FA26B157E48029FE78890 /* SamsungRemote.swift */; };
 		0A641D675E1380DCE6F12907 /* SubnetSweep.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A2A7AE1F572DF83190FC71D /* SubnetSweep.swift */; };
 		FF07ED2A82D64CC5A3D66B69 /* TVDevice.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7774389067A4C1C9F6ACCF6 /* TVDevice.swift */; };
@@ -49,6 +50,7 @@
 		38C67934C3434D1F94494DE7 /* RemoteSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSession.swift; sourceTree = "<group>"; };
 		D73B4AB6E24F45E3ADA1872A /* RokuRemote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RokuRemote.swift; sourceTree = "<group>"; };
 		0D65539DD7E44C289EB6C23A /* SSDPDiscovery.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSDPDiscovery.swift; sourceTree = "<group>"; };
+		72815174EE23D20CCAD2A969 /* SwipePad.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwipePad.swift; sourceTree = "<group>"; };
 		3D9FA26B157E48029FE78890 /* SamsungRemote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SamsungRemote.swift; sourceTree = "<group>"; };
 		5A2A7AE1F572DF83190FC71D /* SubnetSweep.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SubnetSweep.swift; sourceTree = "<group>"; };
 		D7774389067A4C1C9F6ACCF6 /* TVDevice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TVDevice.swift; sourceTree = "<group>"; };
@@ -116,6 +118,7 @@
 				38C67934C3434D1F94494DE7 /* RemoteSession.swift */,
 				D73B4AB6E24F45E3ADA1872A /* RokuRemote.swift */,
 				0D65539DD7E44C289EB6C23A /* SSDPDiscovery.swift */,
+				72815174EE23D20CCAD2A969 /* SwipePad.swift */,
 				3D9FA26B157E48029FE78890 /* SamsungRemote.swift */,
 				5A2A7AE1F572DF83190FC71D /* SubnetSweep.swift */,
 				A055354F469A4F6490EDA8B4 /* TLSChannel.swift */,
@@ -287,6 +290,7 @@
 				3B20C4BB31B041A783B1A4A1 /* TLSHandshakeRecorder.swift in Sources */,
 				872AF0FE11C84D3FB903AF66 /* VoiceInput.swift in Sources */,
 				749C8D3ED7D7E3480099517D /* PadTheme.swift in Sources */,
+				31F711F71729DDD720C3D265 /* SwipePad.swift in Sources */,
 				75A414E9689F4CBC9432185A /* TLSChannel.swift in Sources */,
 				5AF9BD0811EC404DA4C61FEC /* ClientIdentity.swift in Sources */,
 				BED832E1F6B84808AF16169E /* DER.swift in Sources */,
