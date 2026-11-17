@@ -334,19 +334,6 @@ enum PadZone: Equatable, Hashable {
     case mute, back, home, exit
 }
 
-/// A swipe direction, for the guide's direction hints (v1.0.58).
-enum PadDirection: CaseIterable, Hashable {
-    case up, down, left, right
-    var icon: String {
-        switch self {
-        case .up: return "chevron.up"
-        case .down: return "chevron.down"
-        case .left: return "chevron.left"
-        case .right: return "chevron.right"
-        }
-    }
-}
-
 /// Pure pad geometry (v1.0.53): the tilt and mute-zone math as
 /// functions of the pad size and the press location — no SwiftUI, so
 /// unit tests can drive it directly. Extracted from SwipePadView
@@ -368,10 +355,6 @@ struct PadGeometry {
     static let bottomZoneMinY: CGFloat = 0.75
     static let backZoneMaxX: CGFloat = 1 / 3
     static let homeZoneMaxX: CGFloat = 2 / 3
-    /// Direction-hint cluster (v1.0.58): the guide's swipe arrows
-    /// sit this far from the pad center in each direction; the
-    /// tap-OK spot is the center itself.
-    static let directionHintOffset: CGFloat = 55
 
     let size: CGSize
 
@@ -405,19 +388,6 @@ struct PadGeometry {
         case .exit:
             return CGPoint(x: (Self.homeZoneMaxX + 1) / 2 * size.width,
                            y: (Self.bottomZoneMinY + 1) / 2 * size.height)
-        }
-    }
-
-    /// A direction hint's center (v1.0.58): the swipe arrow for a
-    /// direction sits directionHintOffset from the pad center,
-    /// pointing outward. The tap-OK spot is the center itself.
-    func directionArrowCenter(_ direction: PadDirection) -> CGPoint {
-        let center = CGPoint(x: size.width / 2, y: size.height / 2)
-        switch direction {
-        case .up: return CGPoint(x: center.x, y: center.y - Self.directionHintOffset)
-        case .down: return CGPoint(x: center.x, y: center.y + Self.directionHintOffset)
-        case .left: return CGPoint(x: center.x - Self.directionHintOffset, y: center.y)
-        case .right: return CGPoint(x: center.x + Self.directionHintOffset, y: center.y)
         }
     }
 
@@ -497,8 +467,15 @@ struct PadGeometry {
 }
 
 /// One finger position on the trail (v1.0.44): where the finger
-/// was, and when — the trail drops points older than 0.8s.
+/// was, and when. Points live 0.25s (v1.0.59, was 0.8s): a short
+/// tail right behind the finger, like the iOS keyboard swipe
+/// trail — visible while swiping, decaying as time goes on even
+/// mid-drag, and gone almost immediately after lift.
 struct TrailPoint {
+    /// How long a trail point lives. The single lifetime for
+    /// both styles: Line's tail shortens as points age out,
+    /// and Dots fade/shrink to nothing within it.
+    static let lifetime: TimeInterval = 0.25
     var point: CGPoint
     var time: Date
 }
@@ -609,7 +586,7 @@ struct PadTrailOverlay: View {
                 // its two ends: thin, smooth, continuous, no
                 // dots. The soft under-stroke gives it the faint
                 // glow; the tail still fades because points age
-                // out after 0.8s and the whole overlay fades on
+                // out after 0.25s and the whole overlay fades on
                 // lift. A stroke of fewer than two points (a tap
                 // with no drag) draws nothing.
                 ForEach(strokes.indices, id: \.self) { i in
@@ -627,7 +604,7 @@ struct PadTrailOverlay: View {
                         let point = strokes[i][j]
                         let age = Date().timeIntervalSince(point.time)
                         Circle()
-                            .fill(color.opacity(max(0, 0.35 - age)))
+                            .fill(color.opacity(0.35 * max(0, 1 - age / TrailPoint.lifetime)))
                             .frame(width: dotSize(age), height: dotSize(age))
                             .position(point.point)
                     }
@@ -651,17 +628,20 @@ struct PadTrailOverlay: View {
         return path
     }
 
-    /// A dot's size by age: 12pt fresh, shrinking to 3pt.
+    /// A dot's size by age: 12pt fresh, shrinking to 3pt by the
+    /// end of the point's life.
     private func dotSize(_ age: TimeInterval) -> CGFloat {
-        max(3, 12 - age * 10)
+        max(3, 12 - age * (9 / TrailPoint.lifetime))
     }
 }
 
 /// Zone overlay (v1.0.56): faint lines separating the pad's
 /// double-tap zones, with an icon in each one — mute top-right,
-/// back / home / exit along the bottom — plus (v1.0.58) the
-/// direction hints: swipe arrows around the pad center and
-/// tap-OK in the middle. Purely visual: `.allowsHitTesting(false)`,
+/// back / home / exit along the bottom. The direction hints
+/// (v1.0.58 swipe arrows + tap-OK chip) were removed in v1.0.59:
+/// the pad is self-explanatory without them, and the right
+/// arrow cut into the mute zone's line. Purely visual:
+/// `.allowsHitTesting(false)`,
 /// so taps, swipes, holds and double-taps pass straight through
 /// to the pad underneath. The lines come straight from PadGeometry's
 /// zone constants, so they sit exactly on the real tap boundaries;
@@ -681,26 +661,6 @@ struct PadZoneOverlay: View {
                             .position(center)
                     }
                 }
-                // Direction hints (v1.0.58): swipe arrows around
-                // the center, tap-OK in the middle. They live in
-                // this overlay, so they show only while the guide
-                // is on and the plain pad stays clean. Same chip
-                // treatment as the zone icons, neutral so they
-                // read on any pad color or cover photo.
-                ForEach(PadDirection.allCases, id: \.self) { direction in
-                    Image(systemName: direction.icon)
-                        .font(.subheadline.bold())
-                        .foregroundStyle(.primary)
-                        .frame(width: 34, height: 34)
-                        .background(Color.primary.opacity(0.10), in: Circle())
-                        .position(PadGeometry(size: size).directionArrowCenter(direction))
-                }
-                Text("OK")
-                    .font(.subheadline.bold())
-                    .foregroundStyle(.primary)
-                    .frame(width: 34, height: 34)
-                    .background(Color.primary.opacity(0.10), in: Circle())
-                    .position(CGPoint(x: size.width / 2, y: size.height / 2))
             }
         }
         .allowsHitTesting(false)
@@ -871,7 +831,7 @@ struct SwipePadView: View {
     @State private var pressLocation: CGPoint? = nil
     /// Finger trail (v1.0.44): a short faint line that follows the
     /// finger across the pad and fades shortly after lift, so the
-    /// pad feels alive to touch. Points older than 0.8s drop off
+    /// pad feels alive to touch. Points older than 0.25s drop off
     /// while dragging; on lift the whole trail fades out. One
     /// stroke per touch (v1.0.47): lifting and touching elsewhere
     /// starts a new streak — the strokes never connect.
@@ -1138,18 +1098,23 @@ struct SwipePadView: View {
     }
 
     /// Records one finger position for the trail (v1.0.44): points
-    /// older than 0.8s drop off, so the tail shortens behind the
-    /// finger, and points closer than 4pt to the last one are
-    /// skipped. A new touch cancels any fade in flight. Each touch
-    /// is its own stroke (v1.0.47): lifting and touching elsewhere
-    /// starts a new streak — the strokes never connect.
+    /// older than TrailPoint.lifetime drop off, so the tail
+    /// shortens behind the finger, and points closer than 4pt to
+    /// the last one are skipped. The prune runs on every touch
+    /// event, before the 4pt guard — so old points age out while
+    /// the finger is still moving, and at any moment only a
+    /// short tail right behind the finger is visible, never a
+    /// long line spanning the pad. A new touch cancels any fade
+    /// in flight. Each touch is its own stroke (v1.0.47): lifting
+    /// and touching elsewhere starts a new streak — the strokes
+    /// never connect.
     private func addTrailPoint(_ location: CGPoint) {
         trailFadeTask?.cancel()
         trailFadeTask = nil
         trailOpacity = 1
         let now = Date()
-        // Drop points older than 0.8s, and strokes that emptied.
-        trail = trail.map { stroke in stroke.filter { now.timeIntervalSince($0.time) <= 0.8 } }
+        // Drop points older than the lifetime, and strokes that emptied.
+        trail = trail.map { stroke in stroke.filter { now.timeIntervalSince($0.time) <= TrailPoint.lifetime } }
             .filter { !$0.isEmpty }
         // A new touch — or a stroke that aged out mid-touch —
         // opens a fresh streak.
@@ -1165,15 +1130,17 @@ struct SwipePadView: View {
         trail[trail.count - 1] = stroke
     }
 
-    /// Fades the trail out after lift (v1.0.44): it lingers a beat,
-    /// then fades over 0.4s and clears.
+    /// Fades the trail out after lift (v1.0.44, quickened in
+    /// v1.0.59): a short 0.05s beat, then fades over 0.2s and
+    /// clears — the line is gone almost immediately once the
+    /// finger lifts, instead of lingering on the pad.
     private func fadeTrail() {
         trailFadeTask?.cancel()
         trailFadeTask = Task {
-            try? await Task.sleep(nanoseconds: 100_000_000)
+            try? await Task.sleep(nanoseconds: 50_000_000)
             guard !Task.isCancelled else { return }
-            withAnimation(.easeOut(duration: 0.4)) { trailOpacity = 0 }
-            try? await Task.sleep(nanoseconds: 400_000_000)
+            withAnimation(.easeOut(duration: 0.2)) { trailOpacity = 0 }
+            try? await Task.sleep(nanoseconds: 200_000_000)
             guard !Task.isCancelled else { return }
             trail.removeAll()
             trailOpacity = 1

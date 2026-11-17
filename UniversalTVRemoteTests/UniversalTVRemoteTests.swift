@@ -1781,16 +1781,13 @@ final class GuideButtonVisibilityTests: XCTestCase {
     }
 }
 
-/// Direction hints (v1.0.58): the guide's swipe arrows sit 55pt
-/// from the pad center in each direction, with tap-OK at the
-/// center itself.
-final class DirectionHintTests: XCTestCase {
-    func testArrowCentersAroundPadCenter() {
-        let geometry = PadGeometry(size: CGSize(width: 360, height: 220))
-        XCTAssertEqual(geometry.directionArrowCenter(.up), CGPoint(x: 180, y: 55))
-        XCTAssertEqual(geometry.directionArrowCenter(.down), CGPoint(x: 180, y: 165))
-        XCTAssertEqual(geometry.directionArrowCenter(.left), CGPoint(x: 125, y: 110))
-        XCTAssertEqual(geometry.directionArrowCenter(.right), CGPoint(x: 235, y: 110))
+/// Trail lifetime (v1.0.59): points live only 0.25s, so the
+/// trail is a short tail right behind the finger — visible
+/// while swiping, decaying as time goes on even mid-drag, and
+/// gone almost immediately after lift.
+final class TrailLifetimeTests: XCTestCase {
+    func testLifetimeIsShort() {
+        XCTAssertEqual(TrailPoint.lifetime, 0.25, accuracy: 0.0001)
     }
 }
 
