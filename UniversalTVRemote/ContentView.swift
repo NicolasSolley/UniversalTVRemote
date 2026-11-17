@@ -1606,13 +1606,25 @@ private struct SettingsSheet: View {
                                 .scaledToFill()
                                 .frame(height: 120)
                                 .clipShape(RoundedRectangle(cornerRadius: 16))
+                            // Text buttons only hit-test their words
+                            // (v1.0.52): the padding + contentShape
+                            // give each one a full-height tap target,
+                            // the same fix the Choose-a-photo row got
+                            // in v1.0.51 — without it, taps between
+                            // the words did nothing.
                             HStack(spacing: 16) {
                                 Button("Change photo") { coverSheet = .picker }
+                                    .padding(.vertical, 8)
+                                    .contentShape(Rectangle())
                                 Button("Adjust crop") {
                                     coverSheet = .cropper(PadCoverStore.loadOriginal() ?? cover)
                                 }
+                                .padding(.vertical, 8)
+                                .contentShape(Rectangle())
                                 Spacer()
                                 Button("Remove", role: .destructive) { showRemoveCoverAlert = true }
+                                    .padding(.vertical, 8)
+                                    .contentShape(Rectangle())
                             }
                             .font(.subheadline)
                         } else {
