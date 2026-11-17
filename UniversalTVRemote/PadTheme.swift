@@ -104,6 +104,17 @@ enum PadTheme: String, CaseIterable {
     static var current: PadTheme {
         PadTheme(rawValue: UserDefaults.standard.string(forKey: "padTheme") ?? "") ?? .midnight
     }
+
+    /// One-time migration (v1.0.54): clay was removed and replaced
+    /// by teal — move anyone still on clay to teal, and write it
+    /// back so Settings shows Teal selected and the pad renders
+    /// teal. Called once at launch; a no-op for everyone else, and
+    /// idempotent if it ever runs twice.
+    static func migrateIfNeeded() {
+        if UserDefaults.standard.string(forKey: "padTheme") == "clay" {
+            UserDefaults.standard.set("teal", forKey: "padTheme")
+        }
+    }
 }
 
 /// Pad border effect (v1.0.46): off is the plain static border;
