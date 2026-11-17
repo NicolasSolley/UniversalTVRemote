@@ -485,11 +485,10 @@ private struct DiscoveryListView: View {
 
 // MARK: - Remote
 
-/// Accent for the redesigned remote (v1.0.12): the selected
-/// toggle segment, the mic ring, the Play/Pause button, the Devices
-/// pill text. One accent, used sparingly — the rest stays dark and
-/// neutral. Since v1.0.46 it follows the pad color theme in
-/// Settings.
+/// Accent for the redesigned remote (v1.0.12): the Devices pill
+/// icon, the keyboard ring, the power-adjacent highlights. One
+/// accent, used sparingly — the rest stays dark and neutral. Since
+/// v1.0.46 it follows the pad color theme in Settings.
 private var remoteAccent: Color { PadTheme.current.accent }
 
 /// Remote, redesigned in v1.0.12. The fork's remote screen is the
@@ -499,14 +498,10 @@ private var remoteAccent: Color { PadTheme.current.accent }
 /// the diagnostic status text below. Dark with a blue accent. No ads,
 /// no promos, no cast button, no tab bar.
 /// What stays ours: the mic is hold-to-talk and Android TV only.
-/// Dropped to keep the layout clean: the number pad and the channel
-/// rocker (use the TV's own remote or the on-screen guide for
-/// channels), the app shortcut cards (v1.0.18 — the space went to the
-/// volume and mute buttons instead; launching still works in code, the
-/// row is just gone), and the playback row (v1.0.18 — left/right swipes
-/// already seek, so it was redundant with the swipe pad as master
-/// control; the play/pause/seek commands stay in code and the row can
-/// come back if missed).
+/// Dropped to keep the layout clean: the number pad, the channel
+/// rocker, the app shortcut cards (v1.0.18), and the playback row
+/// (v1.0.18 — left/right swipes already seek). The commands stay
+/// in code and the rows can come back if missed.
 /// Sizing for the non-scrollable remote screen (v1.0.15: the remote page
 /// never scrolls). Every section has a budgeted height, the swipe pad
 /// absorbs whatever height is left (down to a floor), and on short
@@ -542,15 +537,9 @@ private struct RemoteLayout {
         let pairingCardSpacing: CGFloat = extraCompact ? 8 : (compact ? 9 : 10)
         let pillsButtonHeight: CGFloat = extraCompact ? 44 : (compact ? 48 : 56)
         // The apps row is gone (v1.0.18), so its height went to the
-        // bottom row instead — but v1.0.20 shrank the row back (the
-        // rocker was way too big and crowded the pills above it),
-        // and v1.0.23 removes the rocker entirely: the iPhone's
-        // physical volume buttons drive the TV volume now, so the
-        // bottom row is just two circles (keyboard, Mute) and the
-        // row shrinks again. v1.0.28 removed the mute button (both
-        // volume buttons at once toggled mute instead); v1.0.29
-        // puts it back — pressing both buttons at once was awkward,
-        // and mute belongs on a button of its own.
+        // bottom row instead; the rocker is gone in v1.0.23 (the
+        // iPhone's physical volume buttons drive the TV volume now),
+        // so the bottom row is just two circles (keyboard, Mute).
         // While the pairing card is up the bottom row stays compact
         // — the card is the focus then, and the tall row would
         // overflow short screens.
@@ -584,16 +573,11 @@ private struct RemoteLayout {
         let gaps = CGFloat(sections - 1) * gap
         // The pad absorbs the rest, down to a floor (lower while the
         // pairing card or keyboard is up — the pad isn't the focus then).
-        // Cap is the swipe pad's design height: it is the master control
-        // now, so it takes the space the old toggle used to take.
-        // v1.0.23 raises the cap 300 → 320: the rocker is gone, so the
-        // freed space goes to the pad on tall phones.
-        // v1.0.41 raised it to 560 and the pad got way too tall;
-        // v1.0.43 put it back to 320. v1.0.45 splits the difference
-        // at 440 — longer than the old pad, but nowhere near the
-        // giant one. On an iPhone 15 Plus the pad lands at ~436
-        // (the available space binds first), so the page fills up
-        // with no dead space at the bottom.
+        // Cap is the swipe pad's design height (440, v1.0.45 — the
+        // 560 cap in v1.0.41 was way too tall, 320 too short). On an
+        // iPhone 15 Plus the pad lands at ~436 (the available space
+        // binds first), so the page fills up with no dead space at
+        // the bottom.
         let floor: CGFloat = pairingShown ? 80 : (keyboardShown ? 60 : 100)
         let padSize = min(440, max(floor, h - fixed - gaps))
 
@@ -616,17 +600,11 @@ private struct RemoteView: View {
     @State private var showKeyboard = false
     @FocusState private var keyboardFocused: Bool
     @FocusState private var pairingCodeFocused: Bool
-    /// Hardware volume buttons drive the TV volume (v1.0.23,
-    /// fixed in v1.0.26): the controller watches the iPhone's
-    /// outputVolume while this view is up and turns each press into
-    /// a .volumeUp / .volumeDown through the session's coalescing
-    /// pump (v1.0.28) — no haptics, the button press itself is the
-    /// feedback. v1.0.26: the anchor is verified, not assumed
-    /// (lastVolume always tracks the phone's real volume), session
-    /// activation is retried, and a capture failure shows in the
-    /// diagnostic line instead of vanishing. v1.0.28: a hold stops
-    /// the instant the finger lifts (the pump drops the pending
-    /// step instead of draining a backlog).
+    /// Hardware volume buttons drive the TV volume (v1.0.23):
+    /// the controller watches the iPhone's outputVolume while this
+    /// view is up and turns each press into a .volumeUp /
+    /// .volumeDown through the session's coalescing pump (v1.0.28)
+    /// — no haptics, the button press itself is the feedback.
     @StateObject private var hardwareVolume = HardwareVolumeController()
     @Environment(\.scenePhase) private var scenePhase
     /// Resolved color scheme (v1.0.48): the page background comes
@@ -674,9 +652,7 @@ private struct RemoteView: View {
             // to this view: start here, stop on disappear (and on
             // backgrounding, below). Steps go through the session's
             // coalescing pump (v1.0.28), so a hold stops the instant
-            // the finger lifts and never blocks other keys — no
-            // haptic, the button press itself and the TV's volume
-            // change are the feedback.
+            // the finger lifts and never blocks other keys.
             hardwareVolume.onStep = { [session] up in
                 session.sendVolume(up: up)
             }
@@ -933,22 +909,18 @@ private struct RemoteView: View {
     /// True while the session is actively connecting — busy in any
     /// form, including waiting on the TV's own allow prompt. The
     /// prompt wait is the long part (Samsung/LG sit in it for the
-    /// whole handshake), and a static pill there looks frozen:
-    /// v1.0.31, Nick never saw the spinner because it was
-    /// suppressed exactly while "Check your TV" showed. The label
-    /// already says what to do ("Check your TV" vs "Connecting…");
-    /// the spinner just shows something is happening.
+    /// whole handshake), and a static pill there looks frozen, so
+    /// a small spinner sits next to the dot while connecting.
     private var isConnecting: Bool {
         session.supportsControl && session.isBusy
     }
 
     /// `haptic` defaults to true — every tap buzzes once. (The
-    /// volume rocker used to pass false for repeat steps of a hold,
-    /// v1.0.20; the rocker is gone in v1.0.23, so no caller
-    /// overrides it now. The hardware volume buttons don't use
-    /// this at all — steps go through session.sendVolume (the
-    /// pump). Mute comes from the pad's middle-right double-tap
-    /// (v1.0.34), not a button anymore.)
+    /// volume rocker used to pass false for repeat steps of a hold;
+    /// the rocker is gone in v1.0.23. The hardware volume buttons
+    /// don't use this at all — steps go through session.sendVolume
+    /// (the pump). Mute comes from the pad's middle-right
+    /// double-tap (v1.0.34), not a button anymore.)
     private func send(_ command: RemoteCommand, haptic: Bool = true) {
         if haptic { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
         Task { await session.send(command) }
@@ -1012,11 +984,7 @@ private struct RemoteView: View {
     /// Bottom row (v1.0.34): just the keyboard button, centered.
     /// The row only exists where the button is needed: on TVs that
     /// announce a focused text field (Android TV, LG) the keyboard
-    /// pops up on its own and the button hides. (The volume rocker
-    /// is gone in v1.0.23: the iPhone's physical volume buttons
-    /// drive the TV volume now. The mic button is out for now; the
-    /// voice code stays dormant behind it. The apps row is gone in
-    /// v1.0.18 — its space went to this row instead.)
+    /// pops up on its own and the button hides.
     /// The control sits in a layout-sized cell. Icons only — the
     /// words underneath were removed in v1.0.19. Nothing here is
     /// ever a dead button. A separate view so the body stays small
@@ -1349,11 +1317,9 @@ struct SwipePadGesture {
     }
 }
 
-/// Pad controls reminder (v1.0.35 list, v1.0.36 diagram rejected,
-/// v1.0.39 back to a plain list, v1.0.40 card style): each gesture
-/// is its own card — a colored icon tile, the gesture name, what
-/// it does, and a chevron — matching the mockup Nick sent. No
-/// picture of the remote.
+/// Pad controls reminder: each gesture is its own card — a colored
+/// icon tile, the gesture name, what it does — matching the mockup
+/// Nick sent. No picture of the remote (v1.0.39).
 /// Pad controls help, glassmorphic (v1.0.50): Nick's screenshot —
 /// frosted glass cards on the page background, floating pill
 /// header, same six gesture cards.
@@ -1521,9 +1487,7 @@ private struct GlassSegmentedControl: View {
 
 /// Settings, glassmorphic (v1.0.50): Nick's screenshot — frosted
 /// glass cards on the page background, floating pill header,
-/// title-only section headers. Supersedes the v1.0.49 Apple-list
-/// rebuild before it ever shipped: he wants the glass look, not
-/// the Settings-app list. Also adds the pad cover picker.
+/// title-only section headers. Also adds the pad cover picker.
 private struct SettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
@@ -1929,22 +1893,21 @@ private extension UIImage {
 /// a bare pad — no chevrons, no hand icon, no label.
 /// One drag is one command on release (tap = select) — the same
 /// gesture as the old touchpad, only the size and the look changed.
-/// HOLDING the pad (v1.0.24) repeated the regular OK/select press
-/// while held. v1.0.25 splits that into two modes, decided by the
-/// pure SwipePadGesture above: a single tap held past the 0.3s
-/// onset holds the OK key DOWN until lift (a long-press, e.g. for
-/// a context menu), while a double-tap held past onset spams OK
-/// presses at the old cadence (first repeat at onset, then one
-/// every 0.12s). A quick tap still sends exactly one OK press, a
-/// quick double-tap sends two. v1.0.27 adds swipe-and-hold: a swipe
-/// fires its first directional press at once and, held past the
-/// 0.3s onset, repeats that same direction every 0.12s until lift;
-/// a quick swipe-and-lift is still exactly one press. Swiping out
-/// of a hold releases the key first, so a key is never left stuck
-/// down. v1.0.34 adds a mute zone: a double-tap on the middle-right
-/// of the pad mutes/unmutes, while the middle keeps its taps and
-/// holds exactly as before — the zone never starts a hold, and a
-/// swipe starting in it is still a swipe.
+/// Modes (decided by the pure SwipePadGesture above):
+/// - Quick tap: exactly one OK press on lift; quick double-tap two.
+/// - Single tap held past the 0.3s onset: the OK key goes DOWN at
+///   onset and UP on lift — no enter on lift (v1.0.25).
+/// - Double-tap held past onset: spams OK presses (first repeat at
+///   onset, then one every 0.12s) until lift (v1.0.25).
+/// - Swipe: the first directional press fires at once, and held past
+///   onset it repeats that same direction every 0.12s until lift;
+///   a quick swipe-and-lift is still exactly one press (v1.0.27).
+///   Swiping out of a hold releases the key first, so a key is never
+///   left stuck down.
+/// - Mute zone (v1.0.34): a double-tap on the middle-right of the pad
+///   mutes/unmutes; the middle keeps its taps and holds exactly as
+///   before — the zone never starts a hold, and a swipe starting in
+///   it is still a swipe.
 /// The height comes from the layout so the pad fits the
 /// non-scrollable page on small phones.
 /// One finger position on the trail (v1.0.44): where the finger
@@ -1958,11 +1921,10 @@ private struct TrailPoint {
 /// pad's own coordinates. Each touch is its own stroke (v1.0.47):
 /// lifting and touching elsewhere starts a new streak instead of
 /// drawing a connector line across the pad. Glow is a soft wide
-/// line with a faint core, plus a soft dot under the finger. Line
-/// is a single thin faint line. Dots is a row of circles that
-/// shrink and fade with age. Off draws nothing. Fades as a whole
-/// after lift (see trailOpacity). Everything is very faint — just
-/// enough to know the touch registered.
+/// line with a faint core, plus a soft dot under the finger. Dots
+/// is a row of circles that shrink and fade with age. Off draws
+/// nothing. Fades as a whole after lift (see trailOpacity).
+/// Everything is very faint — just enough to know the touch registered.
 private struct PadTrailOverlay: View {
     var strokes: [[TrailPoint]]
     var opacity: Double
@@ -2168,17 +2130,13 @@ private struct SwipePadView: View {
     /// halo in the theme color; flow runs a bright segment around
     /// the border, LED-keyboard style — a trimmed stroke whose
     /// trim window slides along the path, driven by a TimelineView
-    /// so it stays smooth with no timer to manage. The segment must
-    /// follow the path: the first version rotated the trimmed shape
-    /// around the center instead, and on a rounded rectangle (not a
-    /// circle) that swings the piece off the border, flinging
-    /// around detached. Sliding the trim keeps it glued to the
-    /// border the whole way around, with a second segment covering
-    /// the wrap past the end of the path. All strokes are inset
-    /// (strokeBorder): a centered stroke hangs half its width past
-    /// the pad's edge, so against a cover photo it read as a line
-    /// that didn't line up with the image — inset, the border's
-    /// outer edge is exactly the photo's edge.
+    /// so it stays smooth with no timer to manage. (The first
+    /// version rotated the trimmed shape instead — on a rounded
+    /// rectangle that swings the piece off the border.) All strokes
+    /// are inset (strokeBorder): a centered stroke hangs half its
+    /// width past the pad's edge, so against a cover photo it read
+    /// as a line that didn't line up with the image — inset, the
+    /// border's outer edge is exactly the photo's edge.
     @ViewBuilder
     private var padBorder: some View {
         switch borderEffect {

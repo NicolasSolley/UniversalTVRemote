@@ -25,44 +25,24 @@ import SwiftUI
 /// nothing when the app is backgrounded. No haptics: the button
 /// press itself and the TV's volume change are the feedback.
 ///
-/// v1.0.28: volume steps go through the coalescing VolumePump
-/// instead of one Task per step, so a hold stops the instant the
-/// finger lifts and never blocks other keys. That same release
-/// added a both-buttons-together mute (a near-simultaneous
-/// opposite-direction pair in the KVO stream); v1.0.29 removes
-/// that detection entirely — Nick found pressing both buttons at
-/// once awkward — and the on-screen mute button is back instead.
-/// The pump stays exactly as it is.
+/// v1.0.28: volume steps go through the coalescing pump instead of
+/// one Task per step, so a hold stops the instant the finger lifts
+/// and never blocks other keys. That same release added a
+/// both-buttons-together mute; v1.0.29 removes that detection
+/// entirely — Nick found pressing both buttons at once awkward —
+/// and the on-screen mute button is back instead. The pump stays
+/// exactly as it is.
 ///
-/// v1.0.26 diagnosis — why v1.0.23 didn't work in LiveContainer:
-/// 1. The anchor was assumed, never verified. `start()` set
-///    lastVolume = 0.5 and tried to move the system volume there,
-///    but the MPVolumeView's slider is created lazily and may not
-///    exist yet when .onAppear fires — so the anchor silently never
-///    landed while lastVolume still claimed 0.5. Every press was
-///    then measured against a phantom 0.5 instead of the phone's
-///    real volume, so presses read the wrong direction (phone at
-///    max, press down → delta from 0.5 reads as UP). The tracker
-///    below now always holds the phone's REAL volume: it starts at
-///    the actual outputVolume, and after a step it re-bases to the
-///    anchor ONLY when the reset actually moved the slider. If the
-///    slider is missing, tracking stays correct — only the range
-///    anchor is lost (up does nothing at max, down at min, like
-///    the phone itself).
-/// 2. The MPVolumeView was 1×1 at opacity 0.01 — the marginal case
-///    for the slider ever being created and for the system to treat
-///    the view as the volume display (HUD suppression). It is now
-///    a real-sized view (200×44, still near-invisible and
-///    touch-disabled) that reports when it is in the hierarchy so
-///    the anchor can be applied then.
-/// 3. Audio-session activation errors were swallowed and never
-///    retried: `start()` early-returned once `started` was true, so
-///    a failed activation stayed failed. Without an active session
-///    (and nothing playing) the buttons adjust the ringer, not
-///    outputVolume, so the KVO never fires at all. Activation is
-///    now retried on every start / return to foreground, and a
-///    failure is surfaced in the diagnostic line instead of
-///    vanishing.
+/// v1.0.26 diagnosis (full post-mortem in git history): the anchor
+/// was assumed, never verified (the slider is created lazily and
+/// may not exist at .onAppear, so presses read against a phantom
+/// 0.5); the MPVolumeView was 1×1 at opacity 0.01 (marginal for
+/// the slider ever being created); and activation errors were
+/// swallowed and never retried. Fixed: the tracker holds the
+/// phone's real volume and re-bases only when the reset actually
+/// moved the slider, the view is real-sized (200×44) and reports
+/// readiness, and activation is retried on every start with
+/// failures surfaced in the diagnostic line.
 final class HardwareVolumeController: NSObject, ObservableObject {
     /// Called with true for up, false for down. Runs on the main actor.
     var onStep: ((Bool) -> Void)?
