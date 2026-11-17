@@ -2283,16 +2283,6 @@ private struct SwipePadView: View {
     private var theme: PadTheme { PadTheme(rawValue: padThemeRaw) ?? .midnight }
     private var borderEffect: PadBorder { PadBorder(rawValue: padBorderRaw) ?? .off }
     private var trailStyle: TrailStyle { TrailStyle(rawValue: trailStyleRaw) ?? .glow }
-    /// Glass tint over a cover photo (v1.0.52): the pad's own
-    /// gradient colors at low opacity, so the frosted photo still
-    /// ties to the theme — dark gradient in dark mode, light
-    /// gradient in light mode.
-    private var coverTint: (top: Color, bottom: Color) {
-        if colorScheme == .light {
-            return (theme.lightTop.opacity(0.30), theme.lightBottom.opacity(0.30))
-        }
-        return (theme.top.opacity(0.30), theme.bottom.opacity(0.30))
-    }
     /// Resolved color scheme (v1.0.51): the pad follows the page —
     /// a light pad in light mode, dark in dark mode.
     @Environment(\.colorScheme) private var colorScheme
@@ -2414,26 +2404,15 @@ private struct SwipePadView: View {
             // Pad cover art (v1.0.50): a user photo cropped to the
             // pad's shape replaces the theme gradient. The border
             // and trail still draw on top, in the theme accent.
-            // Glass over the photo (v1.0.52): the bare photo read
-            // as a picture, not a pad — a frosted layer in the
-            // theme tint makes it feel like a pad surface, like
-            // the glass Settings cards, and keeps the trail
-            // readable over bright photos.
+            // Clear photo (v1.0.53): the v1.0.52 frost + tint
+            // blurred the photo beyond recognition — no blur, no
+            // frost, no overlay at all, just the image as-is.
             .overlay(
                 Group {
                     if let cover = PadCoverStore.image(for: coverVersion) {
                         Image(uiImage: cover)
                             .resizable()
                             .scaledToFill()
-                            .overlay(
-                                Rectangle()
-                                    .fill(.ultraThinMaterial)
-                                    .overlay(
-                                        LinearGradient(
-                                            colors: [coverTint.top, coverTint.bottom],
-                                            startPoint: .top, endPoint: .bottom)
-                                    )
-                            )
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 24))
