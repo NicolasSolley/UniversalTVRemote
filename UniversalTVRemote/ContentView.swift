@@ -67,16 +67,20 @@ private enum PadTheme: String, CaseIterable {
         case .blush: return Color(red: 0.98, green: 0.78, blue: 0.85)
         }
     }
-    /// Light-mode page background (v1.0.51): the palest tint of the
-    /// theme, so the page stops being flat white and ties to the pad.
+    /// Light-mode page background (v1.0.51, deepened in v1.0.52):
+    /// a tint of the theme, so the page stops being flat white and
+    /// ties to the pad. The first version was the palest tint and
+    /// it washed everything out — gray text and pale cards
+    /// disappeared into the bright page — so the tint is deeper
+    /// now, enough for the white surfaces to stand against it.
     var pageBackground: Color {
         switch self {
-        case .midnight: return Color(red: 0.93, green: 0.95, blue: 1.0)
-        case .sage: return Color(red: 0.94, green: 0.97, blue: 0.95)
-        case .clay: return Color(red: 0.99, green: 0.95, blue: 0.93)
-        case .graphite: return Color(red: 0.95, green: 0.96, blue: 0.97)
-        case .lavender: return Color(red: 0.96, green: 0.94, blue: 1.0)
-        case .blush: return Color(red: 1.0, green: 0.95, blue: 0.96)
+        case .midnight: return Color(red: 0.89, green: 0.92, blue: 0.99)
+        case .sage: return Color(red: 0.90, green: 0.93, blue: 0.91)
+        case .clay: return Color(red: 0.95, green: 0.91, blue: 0.89)
+        case .graphite: return Color(red: 0.91, green: 0.92, blue: 0.94)
+        case .lavender: return Color(red: 0.92, green: 0.90, blue: 0.98)
+        case .blush: return Color(red: 0.97, green: 0.91, blue: 0.93)
         }
     }
     /// The accent: pad border, TV icon, keyboard ring.
@@ -241,6 +245,24 @@ private struct DiscoveryListView: View {
     /// from it, so System follows the phone.
     @Environment(\.colorScheme) private var colorScheme
 
+    /// Card/button surface (v1.0.52): dark mode keeps the
+    /// translucent primary fill; light mode uses solid white with
+    /// a soft shadow, so the list card and the round buttons read
+    /// against the bright page instead of washing out into it.
+    /// Same treatment as the remote page's pills (v1.0.51).
+    private var surfaceFill: Color {
+        colorScheme == .light ? .white : Color.primary.opacity(0.10)
+    }
+    private var surfaceShadow: Color {
+        colorScheme == .light ? .black.opacity(0.07) : .clear
+    }
+    /// Secondary text (v1.0.52): the system secondary gray is too
+    /// pale on the bright light page to read — a darker gray in
+    /// light mode, the system secondary in dark mode.
+    private var secondaryText: Color {
+        colorScheme == .light ? Color.primary.opacity(0.6) : .secondary
+    }
+
     /// True once a scan has finished at least once — drives the empty
     /// state (still scanning vs. nothing found). View-side only; the
     /// discovery code is untouched.
@@ -274,7 +296,8 @@ private struct DiscoveryListView: View {
                                 .font(.subheadline.bold())
                                 .foregroundStyle(.primary)
                                 .frame(width: 30, height: 30)
-                                .background(Color.primary.opacity(0.10), in: Circle())
+                                .background(surfaceFill, in: Circle())
+                                .shadow(color: surfaceShadow, radius: 6, y: 2)
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Settings")
@@ -284,7 +307,8 @@ private struct DiscoveryListView: View {
                                 .font(.subheadline.bold())
                                 .foregroundStyle(.primary)
                                 .frame(width: 30, height: 30)
-                                .background(Color.primary.opacity(0.10), in: Circle())
+                                .background(surfaceFill, in: Circle())
+                                .shadow(color: surfaceShadow, radius: 6, y: 2)
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Pad controls")
@@ -308,12 +332,13 @@ private struct DiscoveryListView: View {
                     }
                 }
                 .padding(.vertical, 6)
-                .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 20))
+                .background(surfaceFill, in: RoundedRectangle(cornerRadius: 20))
+                .shadow(color: surfaceShadow, radius: 8, y: 2)
                 .padding(.horizontal)
 
                 Text("Make sure your phone and TV are connected to the same wifi network.")
                     .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(secondaryText)
                     .multilineTextAlignment(.center)
                     .padding(.horizontal, 32)
 
@@ -346,11 +371,11 @@ private struct DiscoveryListView: View {
             if discovery.isScanning || !hasCompletedScan {
                 Text("Looking for TVs…")
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(secondaryText)
             } else {
                 Text("No TVs found")
                     .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(secondaryText)
             }
             Spacer()
         }
@@ -370,7 +395,7 @@ private struct DiscoveryListView: View {
                     // app knows its MAC, else it just tries to connect.
                     Text(device.isSleeping ? (device.canWake ? "Sleeping — tap to wake" : "Sleeping") : device.addressLine)
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(secondaryText)
                 }
                 Spacer()
                 if !device.brand.supportsControl {
@@ -378,7 +403,7 @@ private struct DiscoveryListView: View {
                         .font(.caption2)
                         .padding(.horizontal, 8).padding(.vertical, 4)
                         .background(Color.primary.opacity(0.08), in: Capsule())
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(secondaryText)
                 }
             }
             .padding(.horizontal, 16)
@@ -1888,18 +1913,6 @@ private extension UIImage {
     }
 }
 
-/// Reports the pad's rendered size up through the view tree
-/// (v1.0.34): the mute zone is a fraction of the pad, so taps are
-/// located against the measured size. A PreferenceKey, not
-/// onChange(of: geo.size) — a zero-parameter onChange closure
-/// resolves to the iOS 17 overload, and the target is iOS 15.
-private struct PadSizePreferenceKey: PreferenceKey {
-    static var defaultValue: CGSize = .zero
-    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
-        value = nextValue()
-    }
-}
-
 /// Big swipe pad (the Swipe half of the toggle): near full-width,
 /// a bare pad — no chevrons, no hand icon, no label.
 /// One drag is one command on release (tap = select) — the same
@@ -2028,11 +2041,22 @@ private struct SwipePadView: View {
     /// zone is a fraction of the pad, so taps are located against
     /// this, not against fixed points.
     @State private var padSize: CGSize = .zero
-    /// Press feedback (v1.0.34, retuned in v1.0.47 and again in
-    /// v1.0.51 — the tilt does the talking now: 14° toward the
-    /// finger on a snappy spring, scale barely 0.995 — so a tap
-    /// reads as a tilt, not a press inward): while a finger is
-    /// down the pad dips toward it and springs back on lift.
+
+    /// Records the pad's measured size (v1.0.52): read straight off
+    /// the geometry in the background, no PreferenceKey in between.
+    /// The key never delivered — the size stayed .zero, so the tilt
+    /// never tilted and the mute zone never matched a tap. The size
+    /// is also remembered for the cover cropper (v1.0.50).
+    private func setPadSize(_ size: CGSize) {
+        padSize = size
+        UserDefaults.standard.set(size.width, forKey: "padMeasuredWidth")
+        UserDefaults.standard.set(size.height, forKey: "padMeasuredHeight")
+    }
+    /// Press feedback (v1.0.34, retuned in v1.0.47 and v1.0.51,
+    /// simplified in v1.0.52 — the tilt does the talking now: 14°
+    /// toward the finger, scale barely 0.995 — so a tap reads as a
+    /// tilt, not a press inward): while a finger is down the pad
+    /// dips toward it and springs back on lift.
     @State private var isPressed = false
     @State private var pressLocation: CGPoint? = nil
     /// Finger trail (v1.0.44): a short faint line that follows the
@@ -2091,15 +2115,12 @@ private struct SwipePadView: View {
     }
 
     /// Tilt toward the finger while pressed (v1.0.34, stronger in
-    /// v1.0.44, stronger again in v1.0.47, and again in v1.0.51):
-    /// at most 14°, around the axis perpendicular to the offset
-    /// from center, so the pad feels like a platform tipping
-    /// toward the thumb — strongest at the corners. A dead-center
-    /// press doesn't tilt at all — it only scales (barely, now).
-    /// The axis sign is toward the finger (verified against the
-    /// v1.0.50 field report): the "wrong direction" read was the
-    /// 0.2s spring lagging a moving finger plus the subtle 8° cap,
-    /// so the spring is snappier now and the angle is bigger.
+    /// v1.0.44, stronger again in v1.0.47, and again in v1.0.51,
+    /// simplified in v1.0.52): at most 14°, around the axis
+    /// perpendicular to the offset from center, so the pad feels
+    /// like a platform tipping toward the thumb — strongest at the
+    /// corners. A dead-center press doesn't tilt at all — it only
+    /// scales (barely, now). The axis sign is toward the finger.
     private var tiltAngle: Double {
         guard isPressed, let loc = pressLocation,
               padSize.width > 0, padSize.height > 0 else { return 0 }
@@ -2193,34 +2214,27 @@ private struct SwipePadView: View {
             )
             .frame(maxWidth: .infinity)
             .frame(height: height)
-            // Press feedback (v1.0.47, retuned in v1.0.51): the pad
-            // tips toward the finger like a platform — up to 14° at
-            // the corners, on a snappy spring so it tracks the
-            // finger instead of lagging behind it — and barely
-            // shrinks (0.995), so a tap reads as a tilt, not a
-            // press inward. The tilt follows the finger as it
-            // moves, so the animation tracks the press location
-            // too, not just the press state.
+            // Press feedback (v1.0.47, retuned in v1.0.51,
+            // simplified in v1.0.52): the pad tips toward the
+            // finger like a platform — up to 14° at the corners —
+            // and barely shrinks (0.995), so a tap reads as a tilt,
+            // not a press inward. One spring, on the press state
+            // only: the drag already delivers locations
+            // continuously, so the tilt follows the finger directly
+            // instead of chasing it through a second spring — the
+            // second spring kept re-targeting on every move and
+            // the tilt never got anywhere, which is why it read
+            // as not tilting at all.
             .scaleEffect(isPressed ? 0.995 : 1.0)
             .rotation3DEffect(.degrees(tiltAngle), axis: tiltAxis)
-            // Two watches, not one tuple: a tuple can't conform to
-            // Equatable, so `value: (isPressed, pressLocation)`
-            // fails the build (v1.0.47 CI). The tilt still tracks
-            // the finger as it moves, and the press still springs.
             .animation(.spring(response: 0.1, dampingFraction: 0.85), value: isPressed)
-            .animation(.spring(response: 0.1, dampingFraction: 0.85), value: pressLocation)
             .background(
                 GeometryReader { geo in
-                    Color.clear.preference(key: PadSizePreferenceKey.self, value: geo.size)
+                    Color.clear
+                        .onAppear { setPadSize(geo.size) }
+                        .onChange(of: geo.size) { setPadSize($0) }
                 }
             )
-            .onPreferenceChange(PadSizePreferenceKey.self) { size in
-                padSize = size
-                // Pad cover crop (v1.0.50): remember the real pad
-                // size so the cropper frames the photo to it.
-                UserDefaults.standard.set(size.width, forKey: "padMeasuredWidth")
-                UserDefaults.standard.set(size.height, forKey: "padMeasuredHeight")
-            }
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { value in
