@@ -2191,14 +2191,22 @@ private struct SwipePadView: View {
                 TimelineView(.animation) { timeline in
                     let phase = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3) / 3
                     let end = phase + 0.15
+                    // The segment is inset by half its width first:
+                    // strokeBorder doesn't exist on a trimmed shape
+                    // (trim drops the InsettableShape conformance,
+                    // so the v1.0.52 build failed to compile), and
+                    // a centered stroke on the inset path lands its
+                    // outer edge exactly on the photo's edge anyway.
                     RoundedRectangle(cornerRadius: 24)
+                        .inset(by: 1.5)
                         .trim(from: phase, to: min(1, end))
-                        .strokeBorder(theme.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .stroke(theme.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                         .shadow(color: theme.accent.opacity(0.9), radius: 8)
                     if end > 1 {
                         RoundedRectangle(cornerRadius: 24)
+                            .inset(by: 1.5)
                             .trim(from: 0, to: end - 1)
-                            .strokeBorder(theme.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                            .stroke(theme.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                             .shadow(color: theme.accent.opacity(0.9), radius: 8)
                     }
                 }
