@@ -134,19 +134,34 @@ enum PadBorder: String, CaseIterable {
     }
 }
 
-/// Finger trail style (v1.0.46, Line removed in v1.0.51 — Nick:
-/// keep Off, Glow, Dots only): how the swipe trail looks.
+/// Finger trail style (v1.0.46; Glow renamed to Line in v1.0.58 —
+/// Nick: "just call this one Line not glow for trails"): how the
+/// swipe trail looks. Line is the thin smooth continuous line;
+/// Dots is a row of circles; Off draws nothing.
 enum TrailStyle: String, CaseIterable {
-    case off, glow, dots
+    case off, line, dots
     var name: String {
         switch self {
         case .off: return "Off"
-        case .glow: return "Glow"
+        case .line: return "Line"
         case .dots: return "Dots"
         }
     }
     static var current: TrailStyle {
-        TrailStyle(rawValue: UserDefaults.standard.string(forKey: "trailStyle") ?? "") ?? .glow
+        let raw = UserDefaults.standard.string(forKey: "trailStyle") ?? ""
+        if raw == "glow" { return .line } // renamed in v1.0.58
+        return TrailStyle(rawValue: raw) ?? .line
+    }
+
+    /// One-time migration (v1.0.58): Glow was renamed to Line —
+    /// move anyone still on "glow" to "line", and write it back
+    /// so Settings shows Line selected and the pad renders Line.
+    /// Called once at launch; a no-op for everyone else, and
+    /// idempotent if it ever runs twice.
+    static func migrateIfNeeded() {
+        if UserDefaults.standard.string(forKey: "trailStyle") == "glow" {
+            UserDefaults.standard.set("line", forKey: "trailStyle")
+        }
     }
 }
 

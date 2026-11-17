@@ -334,15 +334,28 @@ enum PadZone: Equatable, Hashable {
     case mute, back, home, exit
 }
 
+/// A swipe direction, for the guide's direction hints (v1.0.58).
+enum PadDirection: CaseIterable, Hashable {
+    case up, down, left, right
+    var icon: String {
+        switch self {
+        case .up: return "chevron.up"
+        case .down: return "chevron.down"
+        case .left: return "chevron.left"
+        case .right: return "chevron.right"
+        }
+    }
+}
+
 /// Pure pad geometry (v1.0.53): the tilt and mute-zone math as
 /// functions of the pad size and the press location — no SwiftUI, so
 /// unit tests can drive it directly. Extracted from SwipePadView
 /// when the pad moved into its own file.
 struct PadGeometry {
-    /// Max tilt: 6° (v1.0.54) — back from 8° in v1.0.53, whose field
+    /// Max tilt: 4° (v1.0.58) — back from 6° in v1.0.54, whose field
     /// test still found it slightly too strong. Same single-spring
     /// behavior, just a lower max.
-    static let maxTiltDegrees: Double = 6
+    static let maxTiltDegrees: Double = 4
     /// Mute zone (v1.0.34): the middle-right of the pad — the right
     /// third horizontally, the middle half vertically. A double-tap
     /// with both taps here mutes; the middle stays for taps/holds.
@@ -355,6 +368,10 @@ struct PadGeometry {
     static let bottomZoneMinY: CGFloat = 0.75
     static let backZoneMaxX: CGFloat = 1 / 3
     static let homeZoneMaxX: CGFloat = 2 / 3
+    /// Direction-hint cluster (v1.0.58): the guide's swipe arrows
+    /// sit this far from the pad center in each direction; the
+    /// tap-OK spot is the center itself.
+    static let directionHintOffset: CGFloat = 55
 
     let size: CGSize
 
@@ -388,6 +405,19 @@ struct PadGeometry {
         case .exit:
             return CGPoint(x: (Self.homeZoneMaxX + 1) / 2 * size.width,
                            y: (Self.bottomZoneMinY + 1) / 2 * size.height)
+        }
+    }
+
+    /// A direction hint's center (v1.0.58): the swipe arrow for a
+    /// direction sits directionHintOffset from the pad center,
+    /// pointing outward. The tap-OK spot is the center itself.
+    func directionArrowCenter(_ direction: PadDirection) -> CGPoint {
+        let center = CGPoint(x: size.width / 2, y: size.height / 2)
+        switch direction {
+        case .up: return CGPoint(x: center.x, y: center.y - Self.directionHintOffset)
+        case .down: return CGPoint(x: center.x, y: center.y + Self.directionHintOffset)
+        case .left: return CGPoint(x: center.x - Self.directionHintOffset, y: center.y)
+        case .right: return CGPoint(x: center.x + Self.directionHintOffset, y: center.y)
         }
     }
 
@@ -547,14 +577,14 @@ enum TrailSmoothing {
 /// The finger trail (v1.0.44, styles in v1.0.46), drawn in the
 /// pad's own coordinates. Each touch is its own stroke (v1.0.47):
 /// lifting and touching elsewhere starts a new streak instead of
-/// drawing a connector line across the pad. Glow is the QuickPath
-/// line (v1.0.55): the stroke is smoothed into a continuous curve
-/// and drawn segment by segment, so the line tapers and fades
-/// with age — thick and bright at the finger, thin and faint at
-/// the tail — plus a soft dot under the finger. Dots is a row of
-/// circles that shrink and fade with age. Off draws nothing.
-/// Fades as a whole after lift (see trailOpacity). Everything is
-/// very faint — just enough to know the touch registered.
+/// drawing a connector line across the pad. Line is the QuickPath
+/// line (v1.0.55, renamed from Glow in v1.0.58): the stroke is
+/// smoothed into a continuous curve and drawn as one thin path,
+/// so it reads as a single smooth line with no dots along it.
+/// Dots is a row of circles that shrink and fade with age. Off
+/// draws nothing. Fades as a whole after lift (see trailOpacity).
+/// Everything is very faint — just enough to know the touch
+/// registered.
 struct PadTrailOverlay: View {
     var strokes: [[TrailPoint]]
     var opacity: Double
@@ -569,24 +599,27 @@ struct PadTrailOverlay: View {
             switch style {
             case .off:
                 EmptyView()
-            case .glow:
+            case .line:
+                // Line (v1.0.58, was Glow): one continuous thin
+                // line per stroke. The old render stroked every
+                // ~6pt segment on its own with round caps, so the
+                // wide halo caps read as a row of dots all along
+                // the line. A single Path through the smoothed
+                // points, stroked once, has round caps only at
+                // its two ends: thin, smooth, continuous, no
+                // dots. The soft under-stroke gives it the faint
+                // glow; the tail still fades because points age
+                // out after 0.8s and the whole overlay fades on
+                // lift. A stroke of fewer than two points (a tap
+                // with no drag) draws nothing.
                 ForEach(strokes.indices, id: \.self) { i in
-                    let smoothed = TrailSmoothing.smoothStroke(strokes[i])
-                    ForEach(smoothed.indices.dropLast(), id: \.self) { j in
-                        let a = smoothed[j], b = smoothed[j + 1]
-                        let age = Date().timeIntervalSince(b.time)
-                        segmentPath(a.point, b.point)
-                            .stroke(color.opacity(haloOpacity(age)), style: StrokeStyle(lineWidth: haloWidth(age), lineCap: .round))
-                        segmentPath(a.point, b.point)
-                            .stroke(color.opacity(coreOpacity(age)), style: StrokeStyle(lineWidth: coreWidth(age), lineCap: .round))
+                    let points = TrailSmoothing.smoothStroke(strokes[i]).map(\.point)
+                    if points.count >= 2 {
+                        linePath(points)
+                            .stroke(color.opacity(0.07), style: StrokeStyle(lineWidth: 6, lineCap: .round, lineJoin: .round))
+                        linePath(points)
+                            .stroke(color.opacity(0.28), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                     }
-                }
-                if let last = strokes.last?.last {
-                    Circle()
-                        .fill(color.opacity(0.3))
-                        .frame(width: 12, height: 12)
-                        .shadow(color: color.opacity(0.25), radius: 8)
-                        .position(last.point)
                 }
             case .dots:
                 ForEach(strokes.indices, id: \.self) { i in
@@ -605,32 +638,17 @@ struct PadTrailOverlay: View {
         .allowsHitTesting(false)
     }
 
-    /// One short segment of the smoothed trail, for the tapered
-    /// render: each segment is stroked on its own, so its width
-    /// and opacity can follow the age of its head end.
-    private func segmentPath(_ from: CGPoint, _ to: CGPoint) -> Path {
+    /// One continuous path through a stroke's smoothed points,
+    /// for the Line render: a single stroke, so the line is
+    /// smooth end to end with no beads at the sample points.
+    private func linePath(_ points: [CGPoint]) -> Path {
         var path = Path()
-        path.move(to: from)
-        path.addLine(to: to)
+        guard let first = points.first else { return path }
+        path.move(to: first)
+        for point in points.dropFirst() {
+            path.addLine(to: point)
+        }
         return path
-    }
-
-    /// Taper by age (points live 0.8s): the head is thick and
-    /// bright, the tail thin and faint. Linear in age, clamped.
-    private func haloWidth(_ age: TimeInterval) -> CGFloat {
-        max(3, 14 - age * 13.75)
-    }
-
-    private func haloOpacity(_ age: TimeInterval) -> Double {
-        max(0.01, 0.10 - age * 0.1125)
-    }
-
-    private func coreWidth(_ age: TimeInterval) -> CGFloat {
-        max(1, 4 - age * 3.75)
-    }
-
-    private func coreOpacity(_ age: TimeInterval) -> Double {
-        max(0.02, 0.28 - age * 0.325)
     }
 
     /// A dot's size by age: 12pt fresh, shrinking to 3pt.
@@ -641,12 +659,15 @@ struct PadTrailOverlay: View {
 
 /// Zone overlay (v1.0.56): faint lines separating the pad's
 /// double-tap zones, with an icon in each one — mute top-right,
-/// back / home / exit along the bottom. Purely visual:
-/// `.allowsHitTesting(false)`, so taps, swipes, holds and
-/// double-taps pass straight through to the pad underneath.
-/// The lines come straight from PadGeometry's zone constants,
-/// so they sit exactly on the real tap boundaries; the icons
-/// reuse the help sheet's icon + tint pairs.
+/// back / home / exit along the bottom — plus (v1.0.58) the
+/// direction hints: swipe arrows around the pad center and
+/// tap-OK in the middle. Purely visual: `.allowsHitTesting(false)`,
+/// so taps, swipes, holds and double-taps pass straight through
+/// to the pad underneath. The lines come straight from PadGeometry's
+/// zone constants, so they sit exactly on the real tap boundaries;
+/// the icons reuse the help sheet's icon + tint pairs. Guide-only:
+/// all of it renders only while the overlay is toggled on — the
+/// plain pad stays clean.
 struct PadZoneOverlay: View {
     var size: CGSize
 
@@ -660,6 +681,26 @@ struct PadZoneOverlay: View {
                             .position(center)
                     }
                 }
+                // Direction hints (v1.0.58): swipe arrows around
+                // the center, tap-OK in the middle. They live in
+                // this overlay, so they show only while the guide
+                // is on and the plain pad stays clean. Same chip
+                // treatment as the zone icons, neutral so they
+                // read on any pad color or cover photo.
+                ForEach(PadDirection.allCases, id: \.self) { direction in
+                    Image(systemName: direction.icon)
+                        .font(.subheadline.bold())
+                        .foregroundStyle(.primary)
+                        .frame(width: 34, height: 34)
+                        .background(Color.primary.opacity(0.10), in: Circle())
+                        .position(PadGeometry(size: size).directionArrowCenter(direction))
+                }
+                Text("OK")
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.primary)
+                    .frame(width: 34, height: 34)
+                    .background(Color.primary.opacity(0.10), in: Circle())
+                    .position(CGPoint(x: size.width / 2, y: size.height / 2))
             }
         }
         .allowsHitTesting(false)
@@ -806,8 +847,12 @@ struct SwipePadView: View {
     /// Records the pad's measured size (v1.0.52): read straight off
     /// the geometry in the background, no PreferenceKey in between.
     /// The key never delivered — the size stayed .zero, so the tilt
-    /// never tilted and the mute zone never matched a tap. The size
-    /// is also remembered for the cover cropper (v1.0.50).
+    /// never tilted and the mute zone never matched a tap.
+    /// (v1.0.58: the size used to be remembered in UserDefaults
+    /// for the cover cropper, but the stored measurement went
+    /// stale whenever Settings opened before the remote — the
+    /// cropper now computes the pad's aspect from the layout
+    /// math instead, so nothing writes it anymore.)
     private func setPadSize(_ size: CGSize) {
         // Only write on change: onAppear fires on every appear and
         // the geometry fires on every layout pass, so an unconditional
@@ -815,13 +860,11 @@ struct SwipePadView: View {
         // the same size.
         guard size != padSize else { return }
         padSize = size
-        UserDefaults.standard.set(size.width, forKey: "padMeasuredWidth")
-        UserDefaults.standard.set(size.height, forKey: "padMeasuredHeight")
     }
     /// Press feedback (v1.0.34, retuned in v1.0.47 and v1.0.51,
-    /// simplified in v1.0.52 — the tilt does the talking now: 8°
-    /// toward the finger (v1.0.53: back from 14° — his field test
-    /// found 14° over-rotated), scale barely 0.995 — so a tap reads
+    /// simplified in v1.0.52 — the tilt does the talking now: 4°
+    /// toward the finger (v1.0.58: back from 6° — his field test
+    /// found 6° still slightly too strong), scale barely 0.995 — so a tap reads
     /// as a tilt, not a press inward): while a finger is down the pad
     /// dips toward it and springs back on lift.
     @State private var isPressed = false
@@ -840,13 +883,13 @@ struct SwipePadView: View {
     /// they change: color theme, border effect, trail style.
     @AppStorage("padTheme") private var padThemeRaw = "midnight"
     @AppStorage("padBorder") private var padBorderRaw = "off"
-    @AppStorage("trailStyle") private var trailStyleRaw = "glow"
+    @AppStorage("trailStyle") private var trailStyleRaw = "line"
     /// Pad cover art (v1.0.50): bumped whenever the cover is
     /// set, re-cropped, or removed, so the pad re-renders.
     @AppStorage("padCoverVersion") private var coverVersion = 0
     private var theme: PadTheme { PadTheme(rawValue: padThemeRaw) ?? .midnight }
     private var borderEffect: PadBorder { PadBorder(rawValue: padBorderRaw) ?? .off }
-    private var trailStyle: TrailStyle { TrailStyle(rawValue: trailStyleRaw) ?? .glow }
+    private var trailStyle: TrailStyle { TrailStyle(rawValue: trailStyleRaw) ?? .line }
     /// Resolved color scheme (v1.0.51): the pad follows the page —
     /// a light pad in light mode, dark in dark mode.
     @Environment(\.colorScheme) private var colorScheme
@@ -937,12 +980,25 @@ struct SwipePadView: View {
             // Clear photo (v1.0.53): the v1.0.52 frost + tint
             // blurred the photo beyond recognition — no blur, no
             // frost, no overlay at all, just the image as-is.
+            // Bounded to the pad (v1.0.58): scaledToFill on its
+            // own sizes the image LARGER than the frame in the
+            // overflow dimension, and the clipShape below sizes
+            // to the image, not the pad — so a cover whose aspect
+            // didn't match the pad spilled past the pad's border
+            // (photo wider than the pad, text cut off at the
+            // screen edges). An explicit frame at the pad's live
+            // size + .clipped() confines the photo to the pad,
+            // whatever the saved image's aspect.
             .overlay(
                 Group {
                     if let cover = PadCoverStore.image(for: coverVersion) {
-                        Image(uiImage: cover)
-                            .resizable()
-                            .scaledToFill()
+                        GeometryReader { geo in
+                            Image(uiImage: cover)
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: geo.size.width, height: geo.size.height)
+                                .clipped()
+                        }
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 24))

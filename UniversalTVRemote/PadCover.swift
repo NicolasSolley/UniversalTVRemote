@@ -62,14 +62,22 @@ enum PadCoverStore {
         cachedImage = nil
     }
 
-    /// The pad's measured aspect (width / height), saved by the
-    /// pad itself so the cropper frames the photo to the real
-    /// pad shape. 0.91 is the iPhone 15 Plus fallback.
-    static var padAspect: CGFloat {
-        let w = UserDefaults.standard.double(forKey: "padMeasuredWidth")
-        let h = UserDefaults.standard.double(forKey: "padMeasuredHeight")
-        guard w > 0, h > 0 else { return 0.91 }
-        return w / h
+    /// The pad's aspect in its normal state, computed from the
+    /// layout math (v1.0.58) — the cropper's source of truth.
+    /// Takes the screen width and the remote page's usable
+    /// height (screen height less the safe-area insets); the
+    /// layout caps the pad height, so small errors in the
+    /// usable height barely move the aspect. (The old source
+    /// was a stored measurement with a 0.91 fallback — but
+    /// Settings lives on the devices list, so the cropper
+    /// could run before the remote ever measured the pad, and
+    /// the fallback framed the photo to 0.91 while the real
+    /// pad is ~0.80: the cover came out zoomed in, text cut
+    /// off at the edges, overflowing the pad. A computed
+    /// aspect can't go stale, so the stored measurement is
+    /// gone — the pad no longer writes it either.)
+    static func padAspect(screenWidth: CGFloat, usableHeight: CGFloat) -> CGFloat {
+        RemoteLayout.normalPadAspect(screenWidth: screenWidth, usableHeight: usableHeight)
     }
 }
 
@@ -178,18 +186,30 @@ struct PadCoverCropView: View {
     /// of silently doing nothing.
     @State private var saveFailed = false
 
-    private var frameSize: CGSize {
-        let w = min(UIScreen.main.bounds.width - 32, 520)
-        return CGSize(width: w, height: w / PadCoverStore.padAspect)
+    /// The crop frame, from the sheet's geometry (v1.0.58): the
+    /// width is the screen width less the pad's side padding,
+    /// capped at 520; the height comes from the pad's real
+    /// aspect, computed from the layout math — so the frame is
+    /// the pad's shape and the saved cover fits it exactly.
+    /// The usable height is the sheet height less the safe-area
+    /// insets, the same height RemoteView's layout works from;
+    /// the layout caps the pad height, so a few points either
+    /// way barely move the aspect.
+    private func frameSize(for geo: GeometryProxy) -> CGSize {
+        let w = min(geo.size.width - 32, 520)
+        let usableHeight = geo.size.height - geo.safeAreaInsets.top - geo.safeAreaInsets.bottom
+        let aspect = PadCoverStore.padAspect(screenWidth: geo.size.width, usableHeight: usableHeight)
+        return CGSize(width: w, height: w / aspect)
     }
-    private var fitScale: CGFloat {
+    private func fitScale(frameSize: CGSize) -> CGFloat {
         max(frameSize.width / image.size.width, frameSize.height / image.size.height)
     }
-    private var totalScale: CGFloat { fitScale * scale }
+    private func totalScale(frameSize: CGSize) -> CGFloat { fitScale(frameSize: frameSize) * scale }
 
-    private func clampedOffset(_ o: CGSize) -> CGSize {
-        let sw = image.size.width * totalScale
-        let sh = image.size.height * totalScale
+    private func clampedOffset(_ o: CGSize, frameSize: CGSize) -> CGSize {
+        let ts = totalScale(frameSize: frameSize)
+        let sw = image.size.width * ts
+        let sh = image.size.height * ts
         let mx = max(0, (sw - frameSize.width) / 2)
         let my = max(0, (sh - frameSize.height) / 2)
         return CGSize(width: min(max(o.width, -mx), mx),
@@ -197,6 +217,13 @@ struct PadCoverCropView: View {
     }
 
     var body: some View {
+        GeometryReader { geo in
+            content(frameSize: frameSize(for: geo))
+        }
+    }
+
+    @ViewBuilder
+    private func content(frameSize: CGSize) -> some View {
         VStack(spacing: 0) {
             HStack {
                 Button { onCancel() } label: {
@@ -211,7 +238,7 @@ struct PadCoverCropView: View {
                 Text("Crop pad cover")
                     .font(.headline)
                 Spacer()
-                Button { confirmCover() } label: {
+                Button { confirmCover(frameSize: frameSize) } label: {
                     Text(isSaving ? "Saving…" : "Set cover")
                         .padding(.vertical, 10)
                         .padding(.horizontal, 12)
@@ -233,10 +260,19 @@ struct PadCoverCropView: View {
                 // The drag / pinch / clamp / crop math is
                 // unchanged: scaledToFill's cover scale IS
                 // fitScale, and the offset moves the same window.
+                // The pinch zoom is applied as a scale effect
+                // (v1.0.58): before this the display never used
+                // `scale`, so pinching did nothing visible while
+                // the saved crop DID zoom in — the preview lied
+                // about the zoom and the pad came out more
+                // zoomed than the cropper showed. scaleEffect
+                // scales about the frame center, exactly what
+                // the crop math assumes.
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFill()
                     .frame(width: frameSize.width, height: frameSize.height)
+                    .scaleEffect(scale)
                     .offset(offset)
             }
             .frame(width: frameSize.width, height: frameSize.height)
@@ -265,13 +301,13 @@ struct PadCoverCropView: View {
                         .onChanged { value in
                             offset = clampedOffset(CGSize(
                                 width: lastOffset.width + value.translation.width,
-                                height: lastOffset.height + value.translation.height))
+                                height: lastOffset.height + value.translation.height), frameSize: frameSize)
                         }
                         .onEnded { _ in lastOffset = offset },
                     MagnificationGesture()
                         .onChanged { value in
                             scale = min(4, max(1, lastScale * value))
-                            offset = clampedOffset(offset)
+                            offset = clampedOffset(offset, frameSize: frameSize)
                         }
                         .onEnded { _ in lastScale = scale }
                 )
@@ -310,7 +346,7 @@ struct PadCoverCropView: View {
     /// repeated taps worked. A failed save surfaces the alert
     /// above instead of silently doing nothing — the sheet stays
     /// up so he can try again.
-    private func confirmCover() {
+    private func confirmCover(frameSize: CGSize) {
         guard !isSaving else { return }
         isSaving = true
         let image = image
@@ -329,12 +365,6 @@ struct PadCoverCropView: View {
                 saveFailed = true
             }
         }
-    }
-
-    /// The visible rect, in the photo's own points: invert the
-    /// display transform (fit scale × user zoom, plus offset).
-    private func croppedImage() -> UIImage {
-        Self.crop(image: image, scale: scale, offset: offset, frameSize: frameSize)
     }
 
     /// Pure crop (v1.0.53): the crop math as a static function of

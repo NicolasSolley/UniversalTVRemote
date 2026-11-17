@@ -336,7 +336,7 @@ private struct DiscoveryListView: View {
 /// and the LG power note on the shortest screens. Validated against iPhone 15 Plus (845pt), iPhone 13 mini
 /// (731pt) and iPhone SE (647pt) usable heights, with pairing card and
 /// keyboard — every combination fits.
-private struct RemoteLayout {
+struct RemoteLayout {
     var gap: CGFloat
     var topPadding: CGFloat
     var topBarButton: CGFloat
@@ -413,6 +413,24 @@ private struct RemoteLayout {
                             bottomRowTopPadding: bottomRowTopPadding,
                             diagnosticLines: diagnosticLines, showDiagnostic: showDiagnostic,
                             showLGNote: showLGNote)
+    }
+
+    /// The pad's aspect (width / height) in its normal state — no
+    /// pairing card, no keyboard — computed from the same layout
+    /// math the pad itself uses, so the cropper frames the photo
+    /// to exactly the shape the pad will show it in (v1.0.58).
+    /// The old source was a stored measurement (v1.0.50) with a
+    /// 0.91 fallback — but Settings lives on the devices list, so
+    /// the cropper could run before the remote ever measured the
+    /// pad, and the fallback framed the photo to 0.91 while the
+    /// real pad is ~0.80: the cover came out zoomed in, text cut
+    /// off at the edges, overflowing the pad. A computed aspect
+    /// can't go stale. Pad width is the page width less the
+    /// pad's .padding(.horizontal) (16pt each side).
+    static func normalPadAspect(screenWidth: CGFloat, usableHeight: CGFloat) -> CGFloat {
+        let w = screenWidth - 32
+        let h = make(height: usableHeight, pairingShown: false, keyboardShown: false, isLG: false).padSize
+        return w / h
     }
 }
 
@@ -912,7 +930,7 @@ private struct SettingsSheet: View {
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("padTheme") private var padThemeRaw = "midnight"
     @AppStorage("padBorder") private var padBorderRaw = "off"
-    @AppStorage("trailStyle") private var trailStyleRaw = "glow"
+    @AppStorage("trailStyle") private var trailStyleRaw = "line"
     @AppStorage("appearance") private var appearanceRaw = "system"
     @AppStorage("padCoverVersion") private var coverVersion = 0
     /// Cover flow (v1.0.57): the picker is still a sheet, but

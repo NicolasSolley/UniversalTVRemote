@@ -1455,8 +1455,8 @@ final class WakeOnLANTests: XCTestCase {
     }
 }
 
-/// Pad geometry (v1.0.54): max tilt 6° (back from 8°, still
-/// slightly too strong in the v1.0.53 field test), mute zone
+/// Pad geometry (v1.0.58): max tilt 4° (back from 6° in v1.0.54,
+/// whose field test still found it slightly too strong), mute zone
 /// middle-right, tilt axis toward the finger.
 final class PadGeometryTests: XCTestCase {
     private let pad = PadGeometry(size: CGSize(width: 360, height: 220))
@@ -1466,12 +1466,12 @@ final class PadGeometryTests: XCTestCase {
     }
 
     func testCornerPressTiltsAtMax() {
-        XCTAssertEqual(pad.tiltAngle(isPressed: true, pressLocation: CGPoint(x: 360, y: 220)), 6, accuracy: 0.0001)
+        XCTAssertEqual(pad.tiltAngle(isPressed: true, pressLocation: CGPoint(x: 360, y: 220)), 4, accuracy: 0.0001)
     }
 
     func testQuarterPressTiltsProportionally() {
-        // dx 0.25, dy 0 → sqrt(0.0625) * 2.5 = 0.625 of max (3.75° at a 6° max).
-        XCTAssertEqual(pad.tiltAngle(isPressed: true, pressLocation: CGPoint(x: 270, y: 110)), 3.75, accuracy: 0.0001)
+        // dx 0.25, dy 0 → sqrt(0.0625) * 2.5 = 0.625 of max (2.5° at a 4° max).
+        XCTAssertEqual(pad.tiltAngle(isPressed: true, pressLocation: CGPoint(x: 270, y: 110)), 2.5, accuracy: 0.0001)
     }
 
     func testNoPressDoesNotTilt() {
@@ -1692,5 +1692,80 @@ final class PadCoverCropTests: XCTestCase {
     func testOffsetKeepsFrameAspect() {
         let cropped = PadCoverCropView.crop(image: solidImage(width: 1000, height: 1000), scale: 1, offset: CGSize(width: 100, height: 0), frameSize: frame)
         XCTAssertEqual(aspect(cropped.size), aspect(frame), accuracy: 0.01)
+    }
+}
+
+/// Pad aspect agreement (v1.0.58): the cropper must frame the
+/// photo to the pad's real aspect — the bug was a stored
+/// measurement with a 0.91 fallback, used whenever Settings
+/// opened before the remote, while the real pad is ~0.80: the
+/// cover came out zoomed in and overflowing. The aspect is now
+/// computed from the layout math, and a crop at that aspect
+/// keeps the frame's aspect exactly.
+final class PadCoverAspectTests: XCTestCase {
+    func testIPhone15PlusAspectIsNotTheOldFallback() {
+        // iPhone 15 Plus: 430pt wide, 845pt usable height —
+        // pad is 398 wide (less 16pt padding each side) and
+        // 500 tall (the cap binds), so the aspect is 0.796,
+        // not the old 0.91 fallback.
+        let aspect = PadCoverStore.padAspect(screenWidth: 430, usableHeight: 845)
+        XCTAssertEqual(aspect, 0.796, accuracy: 0.01)
+        XCTAssertLessThan(aspect, 0.85)
+    }
+
+    func testCropAtRealPadAspectKeepsIt() {
+        // The real pad frame on an iPhone 15 Plus: 398x500.
+        let frame = CGSize(width: 398, height: 500)
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 1000, height: 1500)).image { ctx in
+            UIColor.red.setFill()
+            ctx.fill(CGRect(origin: .zero, size: CGSize(width: 1000, height: 1500)))
+        }
+        let cropped = PadCoverCropView.crop(image: image, scale: 1, offset: .zero, frameSize: frame)
+        XCTAssertEqual(cropped.size.width / cropped.size.height, frame.width / frame.height, accuracy: 0.01)
+    }
+}
+
+/// Trail style rename (v1.0.58): Glow became Line, and a stored
+/// "glow" must carry over to "line" instead of landing on
+/// nothing in the picker.
+final class TrailStyleMigrationTests: XCTestCase {
+    private let key = "trailStyle"
+
+    func testGlowRawValueNoLongerExists() {
+        XCTAssertNil(TrailStyle(rawValue: "glow"))
+        XCTAssertEqual(TrailStyle(rawValue: "line"), .line)
+        XCTAssertEqual(TrailStyle(rawValue: "off"), .off)
+        XCTAssertEqual(TrailStyle(rawValue: "dots"), .dots)
+    }
+
+    func testStoredGlowResolvesToLineAndMigrates() {
+        UserDefaults.standard.set("glow", forKey: key)
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+        // Defensive read: even before the launch migration runs,
+        // a stored "glow" resolves to Line.
+        XCTAssertEqual(TrailStyle.current, .line)
+        TrailStyle.migrateIfNeeded()
+        XCTAssertEqual(UserDefaults.standard.string(forKey: key), "line")
+        XCTAssertEqual(TrailStyle.current, .line)
+    }
+
+    func testMigrateIsANoopWithoutGlow() {
+        UserDefaults.standard.set("dots", forKey: key)
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+        TrailStyle.migrateIfNeeded()
+        XCTAssertEqual(UserDefaults.standard.string(forKey: key), "dots")
+    }
+}
+
+/// Direction hints (v1.0.58): the guide's swipe arrows sit 55pt
+/// from the pad center in each direction, with tap-OK at the
+/// center itself.
+final class DirectionHintTests: XCTestCase {
+    func testArrowCentersAroundPadCenter() {
+        let geometry = PadGeometry(size: CGSize(width: 360, height: 220))
+        XCTAssertEqual(geometry.directionArrowCenter(.up), CGPoint(x: 180, y: 55))
+        XCTAssertEqual(geometry.directionArrowCenter(.down), CGPoint(x: 180, y: 165))
+        XCTAssertEqual(geometry.directionArrowCenter(.left), CGPoint(x: 125, y: 110))
+        XCTAssertEqual(geometry.directionArrowCenter(.right), CGPoint(x: 235, y: 110))
     }
 }
