@@ -317,7 +317,10 @@ struct PadGeometry {
         guard size.width > 0, size.height > 0 else { return false }
         let x = location.x / size.width
         let y = location.y / size.height
-        return x >= Self.muteZoneMinX && y >= Self.muteZoneMinY && y <= Self.muteZoneMaxY
+        // Epsilon: a tap exactly on the 0.67 boundary computes to
+        // 0.6699999999999999 in floating point and would be rejected.
+        let eps: CGFloat = 1e-9
+        return x + eps >= Self.muteZoneMinX && y + eps >= Self.muteZoneMinY && y - eps <= Self.muteZoneMaxY
     }
 
     /// Tilt toward the finger while pressed (v1.0.34, stronger in
