@@ -716,6 +716,12 @@ private struct RemoteView: View {
         .onChange(of: scenePhase) { phase in
             if phase == .background {
                 hardwareVolume.stop()
+                // Backgrounding (v1.0.53): release a held key and
+                // cancel hold/repeat tasks, so a key can't stick on
+                // the TV while the app is away.
+                session.releaseHeldInput()
+            } else if phase == .inactive {
+                session.releaseHeldInput()
             } else if phase == .active {
                 hardwareVolume.start()
             }

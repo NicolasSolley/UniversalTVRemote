@@ -27,6 +27,17 @@ actor SamsungRemote {
         case notConnected
         case invalidResponse
 
+        /// Whether this error means the connection itself is gone
+        /// (v1.0.53): only then does the session drop `isConnected`.
+        /// An unexpected reply means the TV answered — it's still
+        /// there, so the session stays connected.
+        var isConnectionLevel: Bool {
+            switch self {
+            case .notConnected, .timeout, .denied: return true
+            case .invalidResponse: return false
+            }
+        }
+
         var errorDescription: String? {
             switch self {
             case .denied:
@@ -109,14 +120,42 @@ actor SamsungRemote {
     private var drainTask: Task<Void, Never>?
     private var lastSend = Date.distantPast
     /// Keys pressed while (re)connecting, sent once the TV lets us in
-    /// (fork's pendingKeys, cap 10).
-    private var pendingKeys: [Key] = []
+    /// (fork's pendingKeys, cap 10). Each entry carries when it was
+    /// queued (v1.0.53): a key queued while the TV was unreachable is
+    /// stale by the time the socket comes back minutes later, so the
+    /// flush drops entries older than ~5 s (see freshPendingKeys).
+    private var pendingKeys: [(key: Key, enqueuedAt: Date)] = []
     /// App to launch once connected (fork's pendingLaunch).
     private var pendingLaunch: SamsungApp?
     /// Continuation waiting for the `ed.installedApp.get` reply.
     private var appsContinuation: CheckedContinuation<[SamsungApp]?, Never>?
     /// Generation counter so a late timeout only cancels its own request.
     private var appsRequest = 0
+
+    /// Drops queued keys older than ~5 s (v1.0.53): a key queued
+    /// while the TV was unreachable is stale by the time the socket
+    /// comes back minutes later — firing it then presses a key the
+    /// user forgot about. Pure, so tests drive it directly.
+    static func freshPendingKeys(_ queued: [(key: Key, enqueuedAt: Date)], now: Date) -> [Key] {
+        queued.filter { now.timeIntervalSince($0.enqueuedAt) <= 5 }.map { $0.key }
+    }
+
+    /// The held-key tracker (v1.0.53): which key is down on the TV
+    /// right now, if any. A Samsung key held down stays stuck if
+    /// Wi-Fi drops mid-hold, because the Release never goes out —
+    /// the tracker remembers the key so a failure or disconnect can
+    /// best-effort Release it and report a dropped release instead
+    /// of silently leaving it stuck.
+    private var heldKey = HeldKeyTracker()
+    /// Called when a Release doesn't go out (v1.0.53): the key may
+    /// still be held down on the TV. Set once by RemoteSession.
+    private var onDroppedRelease: ((Key) -> Void)?
+
+    /// Reports when a Release doesn't go out (v1.0.53). Set once
+    /// by RemoteSession; the callback fires on dropped releases only.
+    func setDroppedReleaseHandler(_ handler: @escaping (Key) -> Void) {
+        onDroppedRelease = handler
+    }
 
     init() {
         let delegate = SamsungTrustDelegate()
@@ -184,7 +223,10 @@ actor SamsungRemote {
 
     /// Resets the socket without dropping queued keys/launches (the
     /// fork's open() never clears the queue; only disconnect does).
+    /// A held key is best-effort Released first (v1.0.53): the
+    /// socket is going away, so this is the last chance to free it.
     private func resetConnectionState() {
+        releaseHeldKeyIfNeeded()
         drainTask?.cancel()
         drainTask = nil
         task?.cancel(with: .goingAway, reason: nil)
@@ -193,11 +235,67 @@ actor SamsungRemote {
         connectionLost = false
     }
 
+    /// Best-effort Release of the held key, if any (v1.0.53): the
+    /// key stays down on the TV unless a Release goes out. Tries the
+    /// live socket; when there is no socket left — or the send
+    /// fails — reports the key as dropped so the user knows it may
+    /// still be held. Consumes the tracked key either way, so a
+    /// later disconnect doesn't report it twice.
+    private func releaseHeldKeyIfNeeded() {
+        guard let key = heldKey.takeForDisconnect() else { return }
+        guard let liveTask = task else {
+            onDroppedRelease?(key)
+            return
+        }
+        bestEffortRelease(key, on: liveTask) { [weak self] ok in
+            guard !ok else { return }
+            Task { [weak self] in await self?.notifyDroppedRelease(key) }
+        }
+    }
+
+    /// Hop back onto the actor to report a dropped release — the
+    /// best-effort Release's completion runs off-actor.
+    private func notifyDroppedRelease(_ key: Key) {
+        onDroppedRelease?(key)
+    }
+
+    /// Sends one key command on the open socket without awaiting
+    /// (v1.0.53): the non-suspending send, so a disconnect or a
+    /// dead drain can still try a Release without an async context.
+    /// Reports success/failure to the completion.
+    private func bestEffortRelease(_ key: Key, on liveTask: URLSessionWebSocketTask,
+                                   completion: @escaping (Bool) -> Void) {
+        guard let data = try? Self.keyPayloadData(key: key, cmd: "Release") else {
+            completion(false)
+            return
+        }
+        liveTask.send(.string(String(decoding: data, as: UTF8.self))) { error in
+            completion(error == nil)
+        }
+    }
+
+    /// The JSON body for a key command (v1.0.53): shared by the
+    /// normal send and the best-effort Release, so the two can't
+    /// drift apart.
+    private static func keyPayloadData(key: Key, cmd: String) throws -> Data {
+        let payload: [String: Any] = [
+            "method": "ms.remote.control",
+            "params": [
+                "Cmd": cmd,
+                "DataOfCmd": key.rawValue,
+                "Option": "false",
+                "TypeOfRemote": "SendRemoteKey",
+            ],
+        ]
+        return try JSONSerialization.data(withJSONObject: payload)
+    }
+
     /// Sends queued keys (in order) and a queued app launch, now that
     /// the TV has let us in. Failures are swallowed: the queue is
-    /// best-effort, like the fork's flush.
+    /// best-effort, like the fork's flush. Keys queued more than ~5 s
+    /// ago are stale and dropped (v1.0.53).
     private func flushPending() async {
-        let queued = pendingKeys
+        let queued = Self.freshPendingKeys(pendingKeys, now: Date())
         pendingKeys = []
         for key in queued {
             try? await sendKeyPayload(key, cmd: "Click")
@@ -268,12 +366,18 @@ actor SamsungRemote {
                         UserDefaults.standard.removeObject(forKey: tokenKey(for: host))
                     }
                     connectionLost = true
+                    // The TV revoked access mid-hold (v1.0.53):
+                    // free the held key if one is down.
+                    releaseHeldKeyIfNeeded()
                     return
                 default:
                     continue
                 }
             } catch {
                 connectionLost = true
+                // The socket died mid-hold (v1.0.53): best-effort
+                // Release the held key before giving up.
+                releaseHeldKeyIfNeeded()
                 return
             }
         }
@@ -329,7 +433,9 @@ actor SamsungRemote {
             // Queue the press (cap 10) so it fires on the next
             // successful connect instead of being lost (fork's
             // pendingKeys). A later disconnect drops the queue.
-            if pendingKeys.count < 10 { pendingKeys.append(key) }
+            // The queue time is recorded (v1.0.53): the flush
+            // drops entries older than ~5 s.
+            if pendingKeys.count < 10 { pendingKeys.append((key: key, enqueuedAt: Date())) }
             throw error
         }
         try await sendKeyPayload(key, cmd: "Click")
@@ -340,17 +446,35 @@ actor SamsungRemote {
     /// queued: pendingKeys only holds plain keys, so a queued Press
     /// would later fire as a Click — and a Release with no Press is
     /// meaningless. If the socket isn't live after the connect
-    /// attempt, the down/up is dropped silently.
+    /// attempt, the down/up is dropped silently. A Press that goes
+    /// out is tracked (v1.0.53): if the matching Release later
+    /// fails, the key is reported as possibly stuck on the TV.
     func sendKeyDown(_ key: Key, to host: String) async {
         do { try await connect(to: host) } catch { return }
         guard task != nil, !connectionLost, connectedHost == host else { return }
-        try? await sendKeyPayload(key, cmd: "Press")
+        do {
+            try await sendKeyPayload(key, cmd: "Press")
+            heldKey.pressSucceeded(key)
+        } catch {
+            // A Press that never went out holds nothing.
+        }
     }
 
     func sendKeyUp(_ key: Key, to host: String) async {
         do { try await connect(to: host) } catch { return }
         guard task != nil, !connectionLost, connectedHost == host else { return }
-        try? await sendKeyPayload(key, cmd: "Release")
+        do {
+            try await sendKeyPayload(key, cmd: "Release")
+            heldKey.releaseSucceeded(key)
+        } catch {
+            // The Release didn't go out (v1.0.53): the key may
+            // still be down on the TV. Report it now; the key
+            // stays tracked so a later disconnect can still try
+            // to free it.
+            if heldKey.releaseFailed(key) != nil {
+                onDroppedRelease?(key)
+            }
+        }
     }
 
     /// Sends one key on the open socket (connect first — use
@@ -358,16 +482,7 @@ actor SamsungRemote {
     private func sendKeyPayload(_ key: Key, cmd: String) async throws {
         guard let task else { throw SamsungError.notConnected }
         try await throttle()
-        let payload: [String: Any] = [
-            "method": "ms.remote.control",
-            "params": [
-                "Cmd": cmd,
-                "DataOfCmd": key.rawValue,
-                "Option": "false",
-                "TypeOfRemote": "SendRemoteKey",
-            ],
-        ]
-        let data = try JSONSerialization.data(withJSONObject: payload)
+        let data = try Self.keyPayloadData(key: key, cmd: cmd)
         do {
             try await task.send(.string(String(decoding: data, as: UTF8.self)))
         } catch {
@@ -435,12 +550,25 @@ actor SamsungRemote {
     }
 
     /// Power off: hold KEY_POWER for 3 s. A short press only toggles
-    /// Art Mode on The Frame (fork's holdPower).
+    /// Art Mode on The Frame (fork's holdPower). The power key is
+    /// tracked like any hold (v1.0.53): if the Release doesn't go
+    /// out — or the hold is cancelled mid-sleep — the key is
+    /// reported as possibly stuck, and a later disconnect can still
+    /// try to free it.
     func sendPowerOff(to host: String) async throws {
         try await connect(to: host)
         try await sendKeyPayload(.power, cmd: "Press")
-        try await Task.sleep(nanoseconds: 3_000_000_000)
-        try await sendKeyPayload(.power, cmd: "Release")
+        heldKey.pressSucceeded(.power)
+        do {
+            try await Task.sleep(nanoseconds: 3_000_000_000)
+            try await sendKeyPayload(.power, cmd: "Release")
+            heldKey.releaseSucceeded(.power)
+        } catch {
+            if heldKey.releaseFailed(.power) != nil {
+                onDroppedRelease?(.power)
+            }
+            throw error
+        }
     }
 
     /// Installed apps via `ed.installedApp.get` (4 s timeout, fork).
@@ -606,6 +734,39 @@ actor SamsungRemote {
         guard let info = await deviceInfo(host: host, timeout: 1.5) else { return false }
         let power = info["PowerState"] as? String
         return power == nil || power == "on"
+    }
+}
+
+/// Held-key state (v1.0.53): which Samsung key is down on the TV
+/// right now, if any. At most one — the pad holds one key at a time.
+/// Pure value type, so tests drive it directly:
+/// - a Press that goes out marks the key held;
+/// - a Release that goes out clears it;
+/// - a Release that fails reports the key but KEEPS it tracked, so
+///   a later disconnect can still try to free it;
+/// - a disconnect takes the key (clears it) for its best-effort Release.
+struct HeldKeyTracker {
+    private(set) var heldKey: SamsungRemote.Key?
+
+    mutating func pressSucceeded(_ key: SamsungRemote.Key) {
+        heldKey = key
+    }
+
+    mutating func releaseSucceeded(_ key: SamsungRemote.Key) {
+        if heldKey == key { heldKey = nil }
+    }
+
+    /// The Release didn't go out — the key is still down on the TV.
+    /// Returns the stuck key (nil when no key is held, or a different
+    /// one is). Kept tracked: a later disconnect can still free it.
+    func releaseFailed(_ key: SamsungRemote.Key) -> SamsungRemote.Key? {
+        heldKey == key ? key : nil
+    }
+
+    /// Consumes the held key for a disconnect's best-effort Release.
+    mutating func takeForDisconnect() -> SamsungRemote.Key? {
+        defer { heldKey = nil }
+        return heldKey
     }
 }
 

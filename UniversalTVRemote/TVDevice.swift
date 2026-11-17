@@ -221,17 +221,25 @@ enum RememberedTVStore {
 // MARK: - Wake-on-LAN (v1.0.47)
 
 /// Wake-on-LAN: the magic packet — 6 × 0xFF followed by 16 copies
-/// of the TV's MAC — sent to the TV's last-known address AND
-/// broadcast, on ports 9 and 7. Moved here from SamsungRemote so
-/// every brand's wake uses the same sender. iOS blocks broadcast
-/// without the multicast entitlement, so the unicast copy is what
-/// usually works in LiveContainer.
+/// of the TV's MAC — sent to the TV's last-known address, the
+/// subnet-directed broadcast, AND the global broadcast, on ports 9
+/// and 7. Moved here from SamsungRemote so every brand's wake uses
+/// the same sender. iOS blocks broadcast without the multicast
+/// entitlement, so the unicast copy is what usually works in
+/// LiveContainer — the subnet-directed broadcast (v1.0.53) is the
+/// middle ground that reaches the TV when the global broadcast
+/// doesn't.
 enum WakeOnLAN {
     static func sendMagicPacket(mac: String, host: String) {
         guard let bytes = macBytes(mac) else { return }
         var packet = [UInt8](repeating: 0xFF, count: 6)
         for _ in 0..<16 { packet.append(contentsOf: bytes) }
-        for target in [host, "255.255.255.255"] {
+        var targets = [host]
+        if let broadcast = SubnetSweep.wifiBroadcastAddress() {
+            targets.append(broadcast)
+        }
+        targets.append("255.255.255.255")
+        for target in targets {
             for port: UInt16 in [9, 7] {
                 sendUDPPacket(packet, to: target, port: port)
             }

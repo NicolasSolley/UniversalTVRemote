@@ -127,6 +127,10 @@ final class DiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
     /// never downgrade a controllable brand to a non-controllable one:
     /// a sweep-verified Android TV (port 6466 open) must not become
     /// "Other" just because its SSDP description says nothing Google.
+    /// The port is NOT overwritten from SSDP (v1.0.53): the SSDP
+    /// port is the description URL's port, not a control port — the
+    /// sweep's probed control port stays. (No connect path reads
+    /// TVDevice.port anyway; it is record/display metadata.)
     private func mergeSSDP(_ found: SSDPDevice) {
         if let index = devices.firstIndex(where: { $0.host == found.host }) {
             var existing = devices[index]
@@ -137,9 +141,11 @@ final class DiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
             existing.model = found.model ?? existing.model
             existing.manufacturer = found.manufacturer ?? existing.manufacturer
             existing.source = .ssdp
-            existing.port = found.port
             existing.isSleeping = false
             devices[index] = existing
+            // The name can change in place, so the order goes stale
+            // (v1.0.53) — re-sort after the update.
+            sortDevices()
             return
         }
         let device = TVDevice(ssdpUSN: found.usn, location: found.location,
@@ -179,6 +185,9 @@ final class DiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
             }
             existing.isSleeping = false
             devices[index] = existing
+            // The name can change in place, so the order goes stale
+            // (v1.0.53) — re-sort after the update.
+            sortDevices()
             return
         }
         let device = TVDevice(id: "sweep:\(found.host)", name: found.name, brand: found.brand,

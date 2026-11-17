@@ -36,6 +36,19 @@ enum LGError: Error, LocalizedError {
     /// unsigned variant. Never surfaced to the user.
     case blacklistOrSignature
 
+    /// Whether this error means the connection itself is gone
+    /// (v1.0.53): only then does the session drop `isConnected`. A
+    /// pairing refusal, a changed certificate, or an unexpected
+    /// reply means the TV answered — it's still there.
+    var isConnectionLevel: Bool {
+        switch self {
+        case .notConnected, .timeout: return true
+        case .pairingDenied, .pairingTimeout, .certificateChanged,
+             .invalidResponse, .remoteError, .blacklistOrSignature:
+            return false
+        }
+    }
+
     var errorDescription: String? {
         switch self {
         case .notConnected: return "Not connected to the TV."

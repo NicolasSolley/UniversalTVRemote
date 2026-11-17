@@ -53,10 +53,12 @@ final class SubnetSweep {
     /// Short timeouts keep the whole sweep to a few seconds.
     private static let httpTimeout: TimeInterval = 0.7
     private static let tcpTimeout: TimeInterval = 0.5
-    /// Hosts probed at once. 32 in flight × ~0.7 s worst case per host
-    /// means a /24 (254 hosts, 8 chunks) finishes in ~6 s worst case and
-    /// ~1–3 s typically, since most hosts refuse connections instantly.
-    private static let chunkSize = 32
+    /// Hosts probed at once. 16 in flight × ~0.7 s worst case per host
+    /// means a /24 (254 hosts, 16 chunks) finishes in ~11 s worst case
+    /// and ~1–3 s typically, since most hosts refuse connections
+    /// instantly. (32 in flight was too many at once on a busy
+    /// network — v1.0.53 halves it.)
+    private static let chunkSize = 16
     /// Never sweep more than one /24, even on a wider subnet (a /16 has
     /// 65k addresses). The /24 containing the phone is where home TVs live.
     private static let maxHosts = 254
@@ -327,6 +329,18 @@ final class SubnetSweep {
     }
 
     // MARK: - Subnet enumeration
+
+    /// The subnet-directed broadcast address (v1.0.53): the phone's
+    /// IP with the host bits set (ip | ~mask) — a broadcast that
+    /// stays on the local subnet, which the global 255.255.255.255
+    /// often doesn't reach from iOS. Reuses the Wi-Fi address
+    /// lookup, so it shares its "no Wi-Fi, no address" behavior.
+    static func wifiBroadcastAddress() -> String? {
+        guard let (address, netmask) = wifiIPv4() else { return nil }
+        let ip = UInt32(bigEndian: address.s_addr)
+        let mask = UInt32(bigEndian: netmask.s_addr)
+        return dottedQuad(ip | ~mask)
+    }
 
     /// The phone's Wi-Fi subnet: host addresses to sweep plus a label
     /// like "192.168.1.0/24". Returns nil when the phone has no Wi-Fi

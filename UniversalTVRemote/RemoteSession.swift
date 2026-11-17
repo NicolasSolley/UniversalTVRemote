@@ -193,6 +193,18 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
         repeatPump.send = { [weak self] command in
             _ = await self?.send(command)
         }
+        // The stuck-key report (v1.0.53): when a Samsung Release
+        // doesn't go out, the key may still be held down on the TV
+        // — say so in the status instead of leaving the user
+        // wondering why the TV keeps doing the thing. A fresh press
+        // of the same key (a Click sends Press then Release) frees it.
+        Task { [weak self] in
+            await self?.samsung.setDroppedReleaseHandler { [weak self] key in
+                Task { @MainActor in
+                    self?.status = "The \(key.rawValue) key may still be held down on the TV — the release didn't go through. Press it again to free it."
+                }
+            }
+        }
     }
 
     var supportsControl: Bool { device.brand.supportsControl }
@@ -209,6 +221,10 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
             status = "Still waiting for this TV's address — try scanning again."
             return
         }
+        // A second connect while one is in flight is a no-op
+        // (v1.0.53): two overlapping connects raced the socket and
+        // the busy state.
+        guard !isBusy else { return }
         isBusy = true
         defer { isBusy = false }
         switch device.brand {
@@ -554,6 +570,18 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
         repeatPump.cancel()
     }
 
+    /// Release a held key when the app backgrounds or goes inactive
+    /// (v1.0.53): a key held down when the phone locks or the app is
+    /// interrupted would otherwise stay stuck on the TV. Cancels
+    /// both pumps, and if connected sends an enter-up — guarded so
+    /// a disconnected session doesn't flash a status.
+    func releaseHeldInput() {
+        volumePump.cancel()
+        repeatPump.cancel()
+        guard isConnected else { return }
+        Task { await send(.enterUp) }
+    }
+
     func send(_ command: RemoteCommand) async {
         // A send that cannot go out says so in the status instead
         // of returning silently (v1.0.53): a dead button with no
@@ -583,12 +611,15 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
             // reflecting the change is the confirmation, so nothing
             // flashes "Sent." at the bottom after every press.
         } catch let error as SamsungRemote.SamsungError {
+            // Only connection-level errors drop `isConnected`
+            // (v1.0.53): an unexpected reply means the TV answered.
+            if error.isConnectionLevel { isConnected = false }
             status = error.localizedDescription
         } catch let error as RokuRemote.RokuError {
-            isConnected = false
+            if error.isConnectionLevel { isConnected = false }
             status = error.localizedDescription
         } catch let error as LGError {
-            isConnected = false
+            if error.isConnectionLevel { isConnected = false }
             status = error.localizedDescription
         } catch {
             isConnected = false

@@ -16,6 +16,12 @@ enum RokuRemote {
         case blocked
         case badResponse
 
+        /// Whether this error means the connection itself is gone
+        /// (v1.0.53): neither is — the Roku answered, it just
+        /// blocked the request or sent something unexpected — so
+        /// the session stays connected.
+        var isConnectionLevel: Bool { false }
+
         var errorDescription: String? {
             switch self {
             case .blocked:
