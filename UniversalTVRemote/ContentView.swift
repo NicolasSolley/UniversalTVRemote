@@ -114,6 +114,20 @@ private enum AppAppearance: String, CaseIterable {
     }
 }
 
+/// Page background (v1.0.48): not the system extremes. Dark is
+/// Chrome's dark gray (#202124), not solid black; light is a soft
+/// gray (#F2F2F7), not pure white. Resolved from the environment
+/// color scheme, so System follows the phone.
+private enum AppBackground {
+    static func color(for scheme: ColorScheme) -> Color {
+        switch scheme {
+        case .dark: return Color(red: 0.125, green: 0.129, blue: 0.141)
+        case .light: return Color(red: 0.949, green: 0.949, blue: 0.969)
+        @unknown default: return Color(.systemBackground)
+        }
+    }
+}
+
 struct ContentView: View {
     @StateObject private var discovery = DiscoveryManager()
     @State private var session: RemoteSession?
@@ -181,6 +195,10 @@ struct ContentView: View {
 private struct DiscoveryListView: View {
     @ObservedObject var discovery: DiscoveryManager
     var onSelect: (TVDevice) -> Void
+
+    /// Resolved color scheme (v1.0.48): the page background comes
+    /// from it, so System follows the phone.
+    @Environment(\.colorScheme) private var colorScheme
 
     /// True once a scan has finished at least once — drives the empty
     /// state (still scanning vs. nothing found). View-side only; the
@@ -271,6 +289,9 @@ private struct DiscoveryListView: View {
         .onChange(of: discovery.isScanning) { scanning in
             if !scanning { hasCompletedScan = true }
         }
+        // Page background (v1.0.48): Chrome dark gray / soft light
+        // gray, not the system black/white extremes.
+        .background(AppBackground.color(for: colorScheme).ignoresSafeArea())
         .sheet(isPresented: $showPadHelp) { PadHelpSheet() }
         .sheet(isPresented: $showSettings) { SettingsSheet() }
     }
@@ -542,6 +563,9 @@ private struct RemoteView: View {
     /// step instead of draining a backlog).
     @StateObject private var hardwareVolume = HardwareVolumeController()
     @Environment(\.scenePhase) private var scenePhase
+    /// Resolved color scheme (v1.0.48): the page background comes
+    /// from it, so System follows the phone.
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         // No ScrollView on the remote (v1.0.15): everything fits on one
@@ -558,6 +582,9 @@ private struct RemoteView: View {
                 isLG: session.device.brand == .lg)
             remoteContent(layout: layout)
         }
+        // Page background (v1.0.48): Chrome dark gray / soft light
+        // gray, not the system black/white extremes.
+        .background(AppBackground.color(for: colorScheme).ignoresSafeArea())
         .task { await session.connect() }
         .onChange(of: session.tvTextFieldFocused) { focused in
             // Auto keyboard (v1.0.34): the TV announced a focused
@@ -1379,6 +1406,14 @@ private struct SettingsSheet: View {
                 }
             }
         }
+        // Live appearance (v1.0.48): a sheet's color scheme is
+        // frozen at presentation — the root view's
+        // preferredColorScheme flips the app behind it, but the
+        // sheet itself stays in the old appearance until it's
+        // closed and reopened. Applying the setting here too, from
+        // the sheet's own @AppStorage, flips it the moment the
+        // picker changes.
+        .preferredColorScheme((AppAppearance(rawValue: appearanceRaw) ?? .dark).scheme)
     }
 }
 
