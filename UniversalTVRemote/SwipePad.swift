@@ -383,33 +383,38 @@ struct PadGeometry {
     }
 
     /// True when a tap location falls in the bottom-left zone
-    /// (Back). False until the size is known.
+    /// (Back). The bottom strip starts strictly below y = 0.75,
+    /// so it never overlaps the mute zone — a tap exactly on the
+    /// shared y = 0.75 line is a mute tap (x >= 0.67) or no zone
+    /// at all, never a bottom zone. False until the size is known.
     func isBackZone(_ location: CGPoint) -> Bool {
         guard size.width > 0, size.height > 0 else { return false }
         let x = location.x / size.width
         let y = location.y / size.height
         let eps: CGFloat = 1e-9
-        return x - eps < Self.backZoneMaxX && y + eps >= Self.bottomZoneMinY
+        return x - eps < Self.backZoneMaxX && y - eps > Self.bottomZoneMinY
     }
 
     /// True when a tap location falls in the bottom-middle zone
-    /// (Home). False until the size is known.
+    /// (Home). Same strict-below-y = 0.75 rule as the other bottom
+    /// zones. False until the size is known.
     func isHomeZone(_ location: CGPoint) -> Bool {
         guard size.width > 0, size.height > 0 else { return false }
         let x = location.x / size.width
         let y = location.y / size.height
         let eps: CGFloat = 1e-9
-        return x + eps >= Self.backZoneMaxX && x - eps < Self.homeZoneMaxX && y + eps >= Self.bottomZoneMinY
+        return x + eps >= Self.backZoneMaxX && x - eps < Self.homeZoneMaxX && y - eps > Self.bottomZoneMinY
     }
 
     /// True when a tap location falls in the bottom-right zone
-    /// (Exit). False until the size is known.
+    /// (Exit). Same strict-below-y = 0.75 rule as the other bottom
+    /// zones. False until the size is known.
     func isExitZone(_ location: CGPoint) -> Bool {
         guard size.width > 0, size.height > 0 else { return false }
         let x = location.x / size.width
         let y = location.y / size.height
         let eps: CGFloat = 1e-9
-        return x + eps >= Self.homeZoneMaxX && y + eps >= Self.bottomZoneMinY
+        return x + eps >= Self.homeZoneMaxX && y - eps > Self.bottomZoneMinY
     }
 
     /// Tilt toward the finger while pressed (v1.0.34, stronger in
