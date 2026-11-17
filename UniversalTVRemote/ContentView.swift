@@ -2,57 +2,96 @@ import SwiftUI
 
 // MARK: - Settings (v1.0.46)
 
-/// Pad color themes (v1.0.46): the pad gradient and the app accent
-/// follow the chosen theme. Stored in UserDefaults; views read it
-/// through PadTheme.current, or through @AppStorage("padTheme")
-/// when they need to re-render live on a change.
+/// Pad color themes (v1.0.46, palette curated in v1.0.51): the pad
+/// gradient and the app accent follow the chosen theme. Stored in
+/// UserDefaults; views read it through PadTheme.current, or through
+/// @AppStorage("padTheme") when they need to re-render live on a
+/// change. The v1.0.51 set is modern, popular colors — not a rainbow.
+/// Midnight is the default (the old blue, kept so existing installs
+/// look the same); the rest are muted, premium tones. An old stored
+/// value (blue/purple/teal/green/orange/pink) falls back to Midnight.
 private enum PadTheme: String, CaseIterable {
-    case blue, purple, teal, green, orange, pink
+    case midnight, sage, clay, graphite, lavender, blush
 
     var name: String {
         switch self {
-        case .blue: return "Blue"
-        case .purple: return "Purple"
-        case .teal: return "Teal"
-        case .green: return "Green"
-        case .orange: return "Orange"
-        case .pink: return "Pink"
+        case .midnight: return "Midnight"
+        case .sage: return "Sage"
+        case .clay: return "Clay"
+        case .graphite: return "Graphite"
+        case .lavender: return "Lavender"
+        case .blush: return "Blush"
         }
     }
     /// Gradient top / bottom for the pad.
     var top: Color {
         switch self {
-        case .blue: return Color(red: 0.10, green: 0.16, blue: 0.35)
-        case .purple: return Color(red: 0.20, green: 0.10, blue: 0.38)
-        case .teal: return Color(red: 0.05, green: 0.25, blue: 0.28)
-        case .green: return Color(red: 0.07, green: 0.25, blue: 0.14)
-        case .orange: return Color(red: 0.32, green: 0.15, blue: 0.05)
-        case .pink: return Color(red: 0.32, green: 0.10, blue: 0.24)
+        case .midnight: return Color(red: 0.10, green: 0.16, blue: 0.35)
+        case .sage: return Color(red: 0.16, green: 0.24, blue: 0.20)
+        case .clay: return Color(red: 0.32, green: 0.16, blue: 0.10)
+        case .graphite: return Color(red: 0.20, green: 0.21, blue: 0.24)
+        case .lavender: return Color(red: 0.24, green: 0.20, blue: 0.38)
+        case .blush: return Color(red: 0.34, green: 0.16, blue: 0.22)
         }
     }
     var bottom: Color {
         switch self {
-        case .blue: return Color(red: 0.05, green: 0.07, blue: 0.18)
-        case .purple: return Color(red: 0.09, green: 0.05, blue: 0.20)
-        case .teal: return Color(red: 0.03, green: 0.12, blue: 0.14)
-        case .green: return Color(red: 0.04, green: 0.12, blue: 0.07)
-        case .orange: return Color(red: 0.16, green: 0.08, blue: 0.03)
-        case .pink: return Color(red: 0.16, green: 0.05, blue: 0.12)
+        case .midnight: return Color(red: 0.05, green: 0.07, blue: 0.18)
+        case .sage: return Color(red: 0.08, green: 0.13, blue: 0.10)
+        case .clay: return Color(red: 0.18, green: 0.08, blue: 0.05)
+        case .graphite: return Color(red: 0.10, green: 0.10, blue: 0.12)
+        case .lavender: return Color(red: 0.13, green: 0.10, blue: 0.22)
+        case .blush: return Color(red: 0.19, green: 0.08, blue: 0.12)
+        }
+    }
+    /// Light-mode pad gradient (v1.0.51): a pale tint of the theme,
+    /// so the pad reads as a light surface instead of a dark slab
+    /// floating on a white page.
+    var lightTop: Color {
+        switch self {
+        case .midnight: return Color(red: 0.85, green: 0.90, blue: 0.99)
+        case .sage: return Color(red: 0.87, green: 0.92, blue: 0.88)
+        case .clay: return Color(red: 0.98, green: 0.89, blue: 0.84)
+        case .graphite: return Color(red: 0.90, green: 0.91, blue: 0.93)
+        case .lavender: return Color(red: 0.91, green: 0.88, blue: 0.99)
+        case .blush: return Color(red: 0.99, green: 0.88, blue: 0.92)
+        }
+    }
+    var lightBottom: Color {
+        switch self {
+        case .midnight: return Color(red: 0.74, green: 0.82, blue: 0.98)
+        case .sage: return Color(red: 0.78, green: 0.88, blue: 0.80)
+        case .clay: return Color(red: 0.96, green: 0.80, blue: 0.71)
+        case .graphite: return Color(red: 0.82, green: 0.83, blue: 0.87)
+        case .lavender: return Color(red: 0.84, green: 0.78, blue: 0.98)
+        case .blush: return Color(red: 0.98, green: 0.78, blue: 0.85)
+        }
+    }
+    /// Light-mode page background (v1.0.51): the palest tint of the
+    /// theme, so the page stops being flat white and ties to the pad.
+    var pageBackground: Color {
+        switch self {
+        case .midnight: return Color(red: 0.93, green: 0.95, blue: 1.0)
+        case .sage: return Color(red: 0.94, green: 0.97, blue: 0.95)
+        case .clay: return Color(red: 0.99, green: 0.95, blue: 0.93)
+        case .graphite: return Color(red: 0.95, green: 0.96, blue: 0.97)
+        case .lavender: return Color(red: 0.96, green: 0.94, blue: 1.0)
+        case .blush: return Color(red: 1.0, green: 0.95, blue: 0.96)
         }
     }
     /// The accent: pad border, TV icon, keyboard ring.
     var accent: Color {
         switch self {
-        case .blue: return Color(red: 0.15, green: 0.45, blue: 1.0)
-        case .purple: return Color(red: 0.62, green: 0.40, blue: 1.0)
-        case .teal: return Color(red: 0.15, green: 0.80, blue: 0.80)
-        case .green: return Color(red: 0.25, green: 0.85, blue: 0.45)
-        case .orange: return Color(red: 1.0, green: 0.55, blue: 0.15)
-        case .pink: return Color(red: 1.0, green: 0.40, blue: 0.65)
+        case .midnight: return Color(red: 0.15, green: 0.45, blue: 1.0)
+        case .sage: return Color(red: 0.35, green: 0.65, blue: 0.45)
+        case .clay: return Color(red: 0.85, green: 0.45, blue: 0.30)
+        case .graphite: return Color(red: 0.60, green: 0.65, blue: 0.80)
+        case .lavender: return Color(red: 0.65, green: 0.55, blue: 1.0)
+        case .blush: return Color(red: 0.95, green: 0.45, blue: 0.60)
         }
     }
     static var current: PadTheme {
-        PadTheme(rawValue: UserDefaults.standard.string(forKey: "padTheme") ?? "") ?? .blue
+        PadTheme(rawValue: UserDefaults.standard.string(forKey: "padTheme") ?? "") ?? .midnight
     }
 }
 
@@ -73,13 +112,13 @@ private enum PadBorder: String, CaseIterable {
     }
 }
 
-/// Finger trail style (v1.0.46): how the swipe trail looks.
+/// Finger trail style (v1.0.46, Line removed in v1.0.51 — Nick:
+/// keep Off, Glow, Dots only): how the swipe trail looks.
 private enum TrailStyle: String, CaseIterable {
-    case off, line, glow, dots
+    case off, glow, dots
     var name: String {
         switch self {
         case .off: return "Off"
-        case .line: return "Line"
         case .glow: return "Glow"
         case .dots: return "Dots"
         }
@@ -89,10 +128,11 @@ private enum TrailStyle: String, CaseIterable {
     }
 }
 
-/// App appearance (v1.0.46): dark is the default (the app was
-/// dark-only before); light flips the page surfaces, system
-/// follows the phone. The pad keeps its own theme gradient in
-/// both modes.
+/// App appearance (v1.0.46, default System in v1.0.51 — Nick: the
+/// app follows the phone unless the user picks Dark or Light, and
+/// then it remembers that choice): system follows the phone, dark
+/// and light pin it. The pad keeps its own theme gradient in both
+/// modes.
 private enum AppAppearance: String, CaseIterable {
     case system, dark, light
     var name: String {
@@ -110,19 +150,20 @@ private enum AppAppearance: String, CaseIterable {
         }
     }
     static var current: AppAppearance {
-        AppAppearance(rawValue: UserDefaults.standard.string(forKey: "appearance") ?? "") ?? .dark
+        AppAppearance(rawValue: UserDefaults.standard.string(forKey: "appearance") ?? "") ?? .system
     }
 }
 
-/// Page background (v1.0.48): not the system extremes. Dark is
-/// Chrome's dark gray (#202124), not solid black; light is a soft
-/// gray (#F2F2F7), not pure white. Resolved from the environment
-/// color scheme, so System follows the phone.
+/// Page background (v1.0.48, retuned in v1.0.51): not the system
+/// extremes. Dark is Chrome's dark gray (#202124), not solid black;
+/// light is the palest tint of the pad theme — not flat white, so
+/// the page ties to the pad. Resolved from the environment color
+/// scheme, so System follows the phone.
 private enum AppBackground {
     static func color(for scheme: ColorScheme) -> Color {
         switch scheme {
         case .dark: return Color(red: 0.125, green: 0.129, blue: 0.141)
-        case .light: return Color(red: 0.949, green: 0.949, blue: 0.969)
+        case .light: return PadTheme.current.pageBackground
         @unknown default: return Color(.systemBackground)
         }
     }
@@ -136,7 +177,7 @@ struct ContentView: View {
     @State private var didAutoScan = false
     /// Appearance (v1.0.46): the whole app follows this — dark is
     /// the default, the way the app has always looked.
-    @AppStorage("appearance") private var appearanceRaw = "dark"
+    @AppStorage("appearance") private var appearanceRaw = "system"
 
     var body: some View {
         // NavigationView (not NavigationStack): the deployment target is
@@ -170,7 +211,7 @@ struct ContentView: View {
                 .navigationBarHidden(true)
             }
         }
-        .preferredColorScheme((AppAppearance(rawValue: appearanceRaw) ?? .dark).scheme)
+        .preferredColorScheme((AppAppearance(rawValue: appearanceRaw) ?? .system).scheme)
         .task {
             // Scan automatically and silently on launch. There is no
             // scan button — pull-to-refresh re-scans. Discovery itself
@@ -566,6 +607,16 @@ private struct RemoteView: View {
     /// Resolved color scheme (v1.0.48): the page background comes
     /// from it, so System follows the phone.
     @Environment(\.colorScheme) private var colorScheme
+    /// Pill/card surface (v1.0.51): dark mode keeps the translucent
+    /// primary fill; light mode uses solid white with a soft shadow,
+    /// so the controls read as buttons on the tinted page instead
+    /// of washed-out gray blobs.
+    private var surfaceFill: Color {
+        colorScheme == .light ? .white : Color.primary.opacity(0.10)
+    }
+    private var surfaceShadow: Color {
+        colorScheme == .light ? .black.opacity(0.07) : .clear
+    }
 
     var body: some View {
         // No ScrollView on the remote (v1.0.15): everything fits on one
@@ -747,8 +798,9 @@ private struct RemoteView: View {
                 }
             }
             .padding(layout.pairingCardPadding)
-            .background(Color.primary.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
+            .background(surfaceFill, in: RoundedRectangle(cornerRadius: 16))
             .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.primary.opacity(0.08), lineWidth: 1))
+            .shadow(color: surfaceShadow, radius: 8, y: 2)
             .padding(.horizontal)
             .onAppear { pairingCodeFocused = true }
         }
@@ -768,8 +820,9 @@ private struct RemoteView: View {
                     .foregroundStyle(remoteAccent)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .background(Color.primary.opacity(0.08), in: Capsule())
+                    .background(surfaceFill, in: Capsule())
                     .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
+                    .shadow(color: surfaceShadow, radius: 6, y: 2)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Devices")
@@ -787,7 +840,8 @@ private struct RemoteView: View {
                     .font(.headline.bold())
                     .foregroundStyle(.red)
                     .frame(width: layout.topBarButton, height: layout.topBarButton)
-                    .background(Color.primary.opacity(0.08), in: Circle())
+                    .background(surfaceFill, in: Circle())
+                    .shadow(color: surfaceShadow, radius: 6, y: 2)
             }
             .buttonStyle(.plain)
         }
@@ -817,8 +871,9 @@ private struct RemoteView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
-        .background(Color.primary.opacity(0.08), in: Capsule())
+        .background(surfaceFill, in: Capsule())
         .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
+        .shadow(color: surfaceShadow, radius: 6, y: 2)
     }
 
     private var connectionDotColor: Color {
@@ -949,7 +1004,7 @@ private struct RemoteView: View {
                 Button { showKeyboard.toggle() } label: {
                     ZStack {
                         Circle()
-                            .fill(Color.primary.opacity(0.10))
+                            .fill(surfaceFill)
                         Circle()
                             .stroke(showKeyboard ? remoteAccent : Color.primary.opacity(0.08), lineWidth: 2.5)
                         Image(systemName: "keyboard")
@@ -957,6 +1012,7 @@ private struct RemoteView: View {
                             .foregroundStyle(.primary)
                     }
                     .frame(width: layout.circleSize, height: layout.circleSize)
+                    .shadow(color: surfaceShadow, radius: 8, y: 2)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Keyboard")
@@ -978,8 +1034,9 @@ private struct RemoteView: View {
                 .font(.title2.bold())
                 .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, minHeight: height)
-                .background(Color.primary.opacity(0.10), in: RoundedRectangle(cornerRadius: 28))
+                .background(surfaceFill, in: RoundedRectangle(cornerRadius: 28))
                 .overlay(RoundedRectangle(cornerRadius: 28).stroke(Color.primary.opacity(0.08), lineWidth: 1))
+                .shadow(color: surfaceShadow, radius: 6, y: 2)
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
@@ -1445,14 +1502,28 @@ private struct GlassSegmentedControl: View {
 private struct SettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
-    @AppStorage("padTheme") private var padThemeRaw = "blue"
+    @AppStorage("padTheme") private var padThemeRaw = "midnight"
     @AppStorage("padBorder") private var padBorderRaw = "off"
     @AppStorage("trailStyle") private var trailStyleRaw = "glow"
-    @AppStorage("appearance") private var appearanceRaw = "dark"
+    @AppStorage("appearance") private var appearanceRaw = "system"
     @AppStorage("padCoverVersion") private var coverVersion = 0
-    @State private var showPhotoPicker = false
-    @State private var showCropper = false
-    @State private var cropImage: UIImage?
+    /// One sheet for the whole cover flow (v1.0.51): picker and
+    /// cropper are one sheet whose content swaps, so picking a
+    /// photo opens the cropper at once — the old two-sheet dance
+    /// (dismiss picker, wait 0.5s, present cropper) dropped the
+    /// cropper whenever the dismiss ran long, so the photo looked
+    /// unselected.
+    private enum CoverSheet: Identifiable {
+        case picker
+        case cropper(UIImage)
+        var id: String {
+            switch self {
+            case .picker: return "picker"
+            case .cropper: return "cropper"
+            }
+        }
+    }
+    @State private var coverSheet: CoverSheet?
     @State private var showRemoveCoverAlert = false
 
     var body: some View {
@@ -1483,7 +1554,7 @@ private struct SettingsSheet: View {
                         }
                         .frame(maxWidth: .infinity)
                         Divider()
-                        Text((PadTheme(rawValue: padThemeRaw) ?? .blue).name)
+                        Text((PadTheme(rawValue: padThemeRaw) ?? .midnight).name)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .center)
@@ -1511,17 +1582,16 @@ private struct SettingsSheet: View {
                                 .frame(height: 120)
                                 .clipShape(RoundedRectangle(cornerRadius: 16))
                             HStack(spacing: 16) {
-                                Button("Change photo") { showPhotoPicker = true }
+                                Button("Change photo") { coverSheet = .picker }
                                 Button("Adjust crop") {
-                                    cropImage = PadCoverStore.loadOriginal() ?? cover
-                                    showCropper = true
+                                    coverSheet = .cropper(PadCoverStore.loadOriginal() ?? cover)
                                 }
                                 Spacer()
                                 Button("Remove", role: .destructive) { showRemoveCoverAlert = true }
                             }
                             .font(.subheadline)
                         } else {
-                            Button { showPhotoPicker = true } label: {
+                            Button { coverSheet = .picker } label: {
                                 HStack {
                                     Image(systemName: "photo")
                                     Text("Choose a photo")
@@ -1531,6 +1601,12 @@ private struct SettingsSheet: View {
                                 }
                             }
                             .buttonStyle(.plain)
+                            // The whole row is the tap target (v1.0.51):
+                            // without this, SwiftUI hit-tests only the
+                            // label's drawn content — the letters — so
+                            // taps on the empty space did nothing. Same
+                            // fix the device rows already use.
+                            .contentShape(Rectangle())
                             Text("Crop it to the pad and use it as the pad's cover art.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
@@ -1549,33 +1625,24 @@ private struct SettingsSheet: View {
         // closed and reopened. Applying the setting here too, from
         // the sheet's own @AppStorage, flips it the moment the
         // picker changes.
-        .preferredColorScheme((AppAppearance(rawValue: appearanceRaw) ?? .dark).scheme)
-        .sheet(isPresented: $showPhotoPicker) {
-            PadCoverPicker(
-                onPick: { image in
-                    showPhotoPicker = false
-                    cropImage = image
-                    // Let the picker finish dismissing before the
-                    // cropper presents, or the second sheet never
-                    // appears.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                        showCropper = true
-                    }
-                },
-                onCancel: { showPhotoPicker = false }
-            )
-        }
-        .sheet(isPresented: $showCropper) {
-            if let cropImage {
+        .preferredColorScheme((AppAppearance(rawValue: appearanceRaw) ?? .system).scheme)
+        .sheet(item: $coverSheet) { sheet in
+            switch sheet {
+            case .picker:
+                PadCoverPicker(
+                    onPick: { image in coverSheet = .cropper(image) },
+                    onCancel: { coverSheet = nil }
+                )
+            case .cropper(let image):
                 PadCoverCropView(
-                    image: cropImage,
+                    image: image,
                     onDone: { cropped in
-                        PadCoverStore.saveOriginal(cropImage)
+                        PadCoverStore.saveOriginal(image)
                         PadCoverStore.saveCover(cropped)
                         coverVersion += 1
-                        showCropper = false
+                        coverSheet = nil
                     },
-                    onCancel: { showCropper = false }
+                    onCancel: { coverSheet = nil }
                 )
             }
         }
@@ -1875,33 +1942,30 @@ private struct PadTrailOverlay: View {
     var strokes: [[TrailPoint]]
     var opacity: Double
     var style: TrailStyle
+    /// Trail color (v1.0.51): white on the dark pad, the theme
+    /// accent on the light pad — a white trail is invisible on a
+    /// light surface.
+    var color: Color = .white
 
     var body: some View {
         ZStack {
             switch style {
             case .off:
                 EmptyView()
-            case .line:
-                ForEach(strokes.indices, id: \.self) { i in
-                    if strokes[i].count > 1 {
-                        trailPath(strokes[i])
-                            .stroke(Color.white.opacity(0.16), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
-                    }
-                }
             case .glow:
                 ForEach(strokes.indices, id: \.self) { i in
                     if strokes[i].count > 1 {
                         trailPath(strokes[i])
-                            .stroke(Color.white.opacity(0.07), style: StrokeStyle(lineWidth: 12, lineCap: .round, lineJoin: .round))
+                            .stroke(color.opacity(0.07), style: StrokeStyle(lineWidth: 12, lineCap: .round, lineJoin: .round))
                         trailPath(strokes[i])
-                            .stroke(Color.white.opacity(0.16), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+                            .stroke(color.opacity(0.16), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
                     }
                 }
                 if let last = strokes.last?.last {
                     Circle()
-                        .fill(Color.white.opacity(0.3))
+                        .fill(color.opacity(0.3))
                         .frame(width: 12, height: 12)
-                        .shadow(color: .white.opacity(0.25), radius: 8)
+                        .shadow(color: color.opacity(0.25), radius: 8)
                         .position(last.point)
                 }
             case .dots:
@@ -1910,7 +1974,7 @@ private struct PadTrailOverlay: View {
                         let point = strokes[i][j]
                         let age = Date().timeIntervalSince(point.time)
                         Circle()
-                            .fill(Color.white.opacity(max(0, 0.35 - age)))
+                            .fill(color.opacity(max(0, 0.35 - age)))
                             .frame(width: dotSize(age), height: dotSize(age))
                             .position(point.point)
                     }
@@ -1964,10 +2028,11 @@ private struct SwipePadView: View {
     /// zone is a fraction of the pad, so taps are located against
     /// this, not against fixed points.
     @State private var padSize: CGSize = .zero
-    /// Press feedback (v1.0.34, retuned in v1.0.47 — the tilt does
-    /// the talking now: 8° toward the finger, scale barely 0.99 —
-    /// so a tap reads as a tilt, not a press inward): while a finger
-    /// is down the pad dips toward it and springs back on lift.
+    /// Press feedback (v1.0.34, retuned in v1.0.47 and again in
+    /// v1.0.51 — the tilt does the talking now: 14° toward the
+    /// finger on a snappy spring, scale barely 0.995 — so a tap
+    /// reads as a tilt, not a press inward): while a finger is
+    /// down the pad dips toward it and springs back on lift.
     @State private var isPressed = false
     @State private var pressLocation: CGPoint? = nil
     /// Finger trail (v1.0.44): a short faint line that follows the
@@ -1982,15 +2047,18 @@ private struct SwipePadView: View {
     @State private var trailFadeTask: Task<Void, Never>?
     /// Settings (v1.0.46), read live so the pad re-renders when
     /// they change: color theme, border effect, trail style.
-    @AppStorage("padTheme") private var padThemeRaw = "blue"
+    @AppStorage("padTheme") private var padThemeRaw = "midnight"
     @AppStorage("padBorder") private var padBorderRaw = "off"
     @AppStorage("trailStyle") private var trailStyleRaw = "glow"
     /// Pad cover art (v1.0.50): bumped whenever the cover is
     /// set, re-cropped, or removed, so the pad re-renders.
     @AppStorage("padCoverVersion") private var coverVersion = 0
-    private var theme: PadTheme { PadTheme(rawValue: padThemeRaw) ?? .blue }
+    private var theme: PadTheme { PadTheme(rawValue: padThemeRaw) ?? .midnight }
     private var borderEffect: PadBorder { PadBorder(rawValue: padBorderRaw) ?? .off }
     private var trailStyle: TrailStyle { TrailStyle(rawValue: trailStyleRaw) ?? .glow }
+    /// Resolved color scheme (v1.0.51): the pad follows the page —
+    /// a light pad in light mode, dark in dark mode.
+    @Environment(\.colorScheme) private var colorScheme
 
     /// Same timing as the volume hold (v1.0.19/20): the hold engages
     /// 0.3s after touch down, then spam repeats one press every
@@ -1999,7 +2067,10 @@ private struct SwipePadView: View {
     private static let holdInterval: UInt64 = 120_000_000
     /// A second tap within this long of the first tap's lift counts
     /// as a double-tap; after it, the next tap is a fresh single.
-    private static let doubleTapWindow: UInt64 = 300_000_000
+    /// 0.5s in v1.0.51 (was 0.3s): the tight window made a natural
+    /// double-tap on the mute zone land as two separate selects
+    /// instead of a mute — the second tap kept missing the window.
+    private static let doubleTapWindow: UInt64 = 500_000_000
     /// Finger movement within this box counts as a tap/hold;
     /// beyond it, the gesture is a swipe.
     private static let tapSlop: CGFloat = 14
@@ -2020,17 +2091,21 @@ private struct SwipePadView: View {
     }
 
     /// Tilt toward the finger while pressed (v1.0.34, stronger in
-    /// v1.0.44, stronger again in v1.0.47): at most 8°, around the
-    /// axis perpendicular to the offset from center, so the pad
-    /// feels like a platform tipping toward the thumb — strongest
-    /// at the corners. A dead-center press doesn't tilt at all —
-    /// it only scales (barely, now).
+    /// v1.0.44, stronger again in v1.0.47, and again in v1.0.51):
+    /// at most 14°, around the axis perpendicular to the offset
+    /// from center, so the pad feels like a platform tipping
+    /// toward the thumb — strongest at the corners. A dead-center
+    /// press doesn't tilt at all — it only scales (barely, now).
+    /// The axis sign is toward the finger (verified against the
+    /// v1.0.50 field report): the "wrong direction" read was the
+    /// 0.2s spring lagging a moving finger plus the subtle 8° cap,
+    /// so the spring is snappier now and the angle is bigger.
     private var tiltAngle: Double {
         guard isPressed, let loc = pressLocation,
               padSize.width > 0, padSize.height > 0 else { return 0 }
         let dx = loc.x / padSize.width - 0.5
         let dy = loc.y / padSize.height - 0.5
-        return min(1, sqrt(dx * dx + dy * dy) * 2) * 8
+        return min(1, sqrt(dx * dx + dy * dy) * 2.5) * 14
     }
     private var tiltAxis: (x: CGFloat, y: CGFloat, z: CGFloat) {
         guard let loc = pressLocation,
@@ -2040,11 +2115,18 @@ private struct SwipePadView: View {
         return (x: -dy, y: dx, z: 0)
     }
 
-    /// The pad's border (v1.0.46): off is the plain static stroke;
-    /// glow adds a soft halo in the theme color; flow runs a bright
-    /// segment around the border, LED-keyboard style — a trimmed
-    /// stroke rotating once every 3 seconds, driven by a
-    /// TimelineView so it stays smooth with no timer to manage.
+    /// The pad's border (v1.0.46, Flow fixed in v1.0.51): off is the
+    /// plain static stroke; glow adds a soft halo in the theme
+    /// color; flow runs a bright segment around the border,
+    /// LED-keyboard style — a trimmed stroke whose trim window
+    /// slides along the path, driven by a TimelineView so it stays
+    /// smooth with no timer to manage. The segment must follow the
+    /// path: the first version rotated the trimmed shape around
+    /// the center instead, and on a rounded rectangle (not a
+    /// circle) that swings the piece off the border, flinging
+    /// around detached. Sliding the trim keeps it glued to the
+    /// border the whole way around, with a second segment covering
+    /// the wrap past the end of the path.
     @ViewBuilder
     private var padBorder: some View {
         switch borderEffect {
@@ -2060,12 +2142,18 @@ private struct SwipePadView: View {
                 RoundedRectangle(cornerRadius: 24)
                     .stroke(theme.accent.opacity(0.25), lineWidth: 2)
                 TimelineView(.animation) { timeline in
-                    let angle = (timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3) / 3) * 360
+                    let phase = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 3) / 3
+                    let end = phase + 0.15
                     RoundedRectangle(cornerRadius: 24)
-                        .trim(from: 0, to: 0.15)
+                        .trim(from: phase, to: min(1, end))
                         .stroke(theme.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
                         .shadow(color: theme.accent.opacity(0.9), radius: 8)
-                        .rotationEffect(.degrees(angle))
+                    if end > 1 {
+                        RoundedRectangle(cornerRadius: 24)
+                            .trim(from: 0, to: end - 1)
+                            .stroke(theme.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                            .shadow(color: theme.accent.opacity(0.9), radius: 8)
+                    }
                 }
             }
         }
@@ -2075,7 +2163,10 @@ private struct SwipePadView: View {
         RoundedRectangle(cornerRadius: 24)
             .fill(
                 LinearGradient(
-                    colors: [theme.top, theme.bottom],
+                    // Light pad (v1.0.51): a pale tint of the theme
+                    // instead of the dark gradient — the dark pad
+                    // on a light page read as a hole in the page.
+                    colors: colorScheme == .light ? [theme.lightTop, theme.lightBottom] : [theme.top, theme.bottom],
                     startPoint: .top, endPoint: .bottom)
             )
             // Pad cover art (v1.0.50): a user photo cropped to the
@@ -2097,25 +2188,27 @@ private struct SwipePadView: View {
             // it tilts and scales with the pad. Clipped to the
             // rounded corners so it never spills outside the pad.
             .overlay(
-                PadTrailOverlay(strokes: trail, opacity: trailOpacity, style: trailStyle)
+                PadTrailOverlay(strokes: trail, opacity: trailOpacity, style: trailStyle, color: colorScheme == .light ? theme.accent : .white)
                     .clipShape(RoundedRectangle(cornerRadius: 24))
             )
             .frame(maxWidth: .infinity)
             .frame(height: height)
-            // Press feedback (v1.0.47): the pad tips toward the
-            // finger like a platform — up to 8° at the corners —
-            // and barely shrinks (0.99), so a tap reads as a tilt,
-            // not a press inward. The tilt follows the finger as
-            // it moves, so the animation tracks the press location
+            // Press feedback (v1.0.47, retuned in v1.0.51): the pad
+            // tips toward the finger like a platform — up to 14° at
+            // the corners, on a snappy spring so it tracks the
+            // finger instead of lagging behind it — and barely
+            // shrinks (0.995), so a tap reads as a tilt, not a
+            // press inward. The tilt follows the finger as it
+            // moves, so the animation tracks the press location
             // too, not just the press state.
-            .scaleEffect(isPressed ? 0.99 : 1.0)
+            .scaleEffect(isPressed ? 0.995 : 1.0)
             .rotation3DEffect(.degrees(tiltAngle), axis: tiltAxis)
             // Two watches, not one tuple: a tuple can't conform to
             // Equatable, so `value: (isPressed, pressLocation)`
             // fails the build (v1.0.47 CI). The tilt still tracks
             // the finger as it moves, and the press still springs.
-            .animation(.spring(response: 0.2, dampingFraction: 0.75), value: isPressed)
-            .animation(.spring(response: 0.2, dampingFraction: 0.75), value: pressLocation)
+            .animation(.spring(response: 0.1, dampingFraction: 0.85), value: isPressed)
+            .animation(.spring(response: 0.1, dampingFraction: 0.85), value: pressLocation)
             .background(
                 GeometryReader { geo in
                     Color.clear.preference(key: PadSizePreferenceKey.self, value: geo.size)
