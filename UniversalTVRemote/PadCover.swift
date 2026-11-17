@@ -1,0 +1,329 @@
+import SwiftUI
+
+// PadCover.swift — pad cover art, split out of ContentView.swift in
+// v1.0.53: the cover store (JPEGs in Documents), the system photo
+// picker, the in-pad cropper, and the orientation fix the cropper
+// needs. Internal, so SettingsSheet and the pad share them.
+
+/// Pad cover art (v1.0.50): a user-picked photo, cropped to the
+/// pad's shape in Settings, saved as JPEGs in Documents. The pad
+/// reads it through a version counter in @AppStorage so it
+/// re-renders when the cover changes.
+enum PadCoverStore {
+    private static var documents: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    }
+    static var coverURL: URL { documents.appendingPathComponent("pad-cover.jpg") }
+    static var originalURL: URL { documents.appendingPathComponent("pad-cover-original.jpg") }
+
+    private static var cachedImage: UIImage?
+    private static var cachedVersion = -1
+
+    static func image(for version: Int) -> UIImage? {
+        if cachedVersion != version {
+            cachedImage = UIImage(contentsOfFile: coverURL.path)
+            cachedVersion = version
+        }
+        return cachedImage
+    }
+
+    static func loadOriginal() -> UIImage? {
+        UIImage(contentsOfFile: originalURL.path)
+    }
+
+    /// Returns false when the JPEG can't be encoded or the write
+    /// fails (v1.0.53): the caller surfaces that instead of
+    /// silently doing nothing.
+    @discardableResult
+    static func saveCover(_ image: UIImage) -> Bool {
+        guard let data = image.jpegData(compressionQuality: 0.9) else { return false }
+        do {
+            try data.write(to: coverURL, options: .atomic)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    @discardableResult
+    static func saveOriginal(_ image: UIImage) -> Bool {
+        guard let data = image.jpegData(compressionQuality: 0.92) else { return false }
+        do {
+            try data.write(to: originalURL, options: .atomic)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    static func remove() {
+        try? FileManager.default.removeItem(at: coverURL)
+        try? FileManager.default.removeItem(at: originalURL)
+        cachedImage = nil
+    }
+
+    /// The pad's measured aspect (width / height), saved by the
+    /// pad itself so the cropper frames the photo to the real
+    /// pad shape. 0.91 is the iPhone 15 Plus fallback.
+    static var padAspect: CGFloat {
+        let w = UserDefaults.standard.double(forKey: "padMeasuredWidth")
+        let h = UserDefaults.standard.double(forKey: "padMeasuredHeight")
+        guard w > 0, h > 0 else { return 0.91 }
+        return w / h
+    }
+}
+
+/// The system photo picker (v1.0.50): UIImagePickerController
+/// works back to iOS 15, where PhotosPicker doesn't exist.
+/// Needs NSPhotoLibraryUsageDescription in Info.plist.
+struct PadCoverPicker: UIViewControllerRepresentable {
+    var onPick: (UIImage) -> Void
+    var onCancel: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onPick: onPick, onCancel: onCancel)
+    }
+
+    func makeUIViewController(context: Context) -> UIImagePickerController {
+        let picker = UIImagePickerController()
+        picker.sourceType = .photoLibrary
+        picker.allowsEditing = false
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
+
+    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+        var onPick: (UIImage) -> Void
+        var onCancel: () -> Void
+
+        init(onPick: @escaping (UIImage) -> Void, onCancel: @escaping () -> Void) {
+            self.onPick = onPick
+            self.onCancel = onCancel
+        }
+
+        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+            // Defer out of the UIKit callback (v1.0.53): swapping
+            // the sheet's content synchronously inside the delegate
+            // call raced the picker's dismissal and left the
+            // cropper's buttons dead until the transition settled.
+            // One run loop later the picker is gone and the swap
+            // lands cleanly.
+            if let image = info[.originalImage] as? UIImage {
+                DispatchQueue.main.async { self.onPick(image) }
+            } else {
+                DispatchQueue.main.async { self.onCancel() }
+            }
+        }
+
+        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+            DispatchQueue.main.async { self.onCancel() }
+        }
+    }
+}
+
+/// Crop a photo to the pad's shape (v1.0.50): drag to move, pinch
+/// to zoom, double-tap to reset. The frame is the pad — same
+/// aspect, same rounded corners — so what you see is what the pad
+/// shows.
+struct PadCoverCropView: View {
+    let image: UIImage
+    /// Called after the crop + save succeed (v1.0.53): the caller
+    /// bumps the version so the pad re-reads the cover, then
+    /// dismisses. The cropper owns the save, so the caller never
+    /// sees a half-saved cover.
+    var onSaved: () -> Void
+    var onCancel: () -> Void
+
+    /// Explicit init (v1.0.53): the synthesized memberwise init is
+    /// private to this file because of the private @State properties
+    /// below, so SettingsSheet in ContentView.swift needs this to
+    /// construct the cropper.
+    init(image: UIImage, onSaved: @escaping () -> Void, onCancel: @escaping () -> Void) {
+        self.image = image
+        self.onSaved = onSaved
+        self.onCancel = onCancel
+    }
+
+    @State private var scale: CGFloat = 1
+    @State private var offset: CGSize = .zero
+    @State private var lastScale: CGFloat = 1
+    @State private var lastOffset: CGSize = .zero
+    /// Saving state (v1.0.53): while the crop + save runs, both
+    /// buttons are disabled so a cancel can't race the save — and
+    /// the button reads "Saving…" so the tap visibly lands.
+    @State private var isSaving = false
+    /// Set when a save fails (v1.0.53): surfaces an alert instead
+    /// of silently doing nothing.
+    @State private var saveFailed = false
+
+    private var frameSize: CGSize {
+        let w = min(UIScreen.main.bounds.width - 32, 520)
+        return CGSize(width: w, height: w / PadCoverStore.padAspect)
+    }
+    private var fitScale: CGFloat {
+        max(frameSize.width / image.size.width, frameSize.height / image.size.height)
+    }
+    private var totalScale: CGFloat { fitScale * scale }
+
+    private func clampedOffset(_ o: CGSize) -> CGSize {
+        let sw = image.size.width * totalScale
+        let sh = image.size.height * totalScale
+        let mx = max(0, (sw - frameSize.width) / 2)
+        let my = max(0, (sh - frameSize.height) / 2)
+        return CGSize(width: min(max(o.width, -mx), mx),
+                      height: min(max(o.height, -my), my))
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button { onCancel() } label: {
+                    Text("Cancel")
+                        .padding(.vertical, 8)
+                        .contentShape(Rectangle())
+                }
+                .disabled(isSaving)
+                Spacer()
+                Text("Crop pad cover")
+                    .font(.headline)
+                Spacer()
+                Button { confirmCover() } label: {
+                    Text(isSaving ? "Saving…" : "Set cover")
+                        .padding(.vertical, 8)
+                        .contentShape(Rectangle())
+                }
+                .font(.headline)
+                .disabled(isSaving)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 14)
+            Spacer()
+            ZStack {
+                Image(uiImage: image)
+                    .resizable()
+                    .frame(width: image.size.width * totalScale,
+                           height: image.size.height * totalScale)
+                    .offset(offset)
+            }
+            .frame(width: frameSize.width, height: frameSize.height)
+            .clipShape(RoundedRectangle(cornerRadius: 24))
+            .overlay(
+                RoundedRectangle(cornerRadius: 24)
+                    .stroke(Color.white.opacity(0.7), lineWidth: 2)
+            )
+            .gesture(
+                SimultaneousGesture(
+                    DragGesture()
+                        .onChanged { value in
+                            offset = clampedOffset(CGSize(
+                                width: lastOffset.width + value.translation.width,
+                                height: lastOffset.height + value.translation.height))
+                        }
+                        .onEnded { _ in lastOffset = offset },
+                    MagnificationGesture()
+                        .onChanged { value in
+                            scale = min(4, max(1, lastScale * value))
+                            offset = clampedOffset(offset)
+                        }
+                        .onEnded { _ in lastScale = scale }
+                )
+            )
+            .onTapGesture(count: 2) {
+                scale = 1
+                lastScale = 1
+                offset = .zero
+                lastOffset = .zero
+            }
+            Spacer()
+            Text("Drag to move · Pinch to zoom · Double-tap to reset")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .padding(.bottom, 24)
+        }
+        .background(Color.black.ignoresSafeArea())
+        .alert("Couldn't save the cover", isPresented: $saveFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("The photo couldn't be saved. Check storage and try again.")
+        }
+    }
+
+    /// Confirm (v1.0.53): one ordered flow — crop + save the image,
+    /// then bump the version so the pad re-reads it (onSaved), then
+    /// dismiss. The crop + JPEG encodes run off the main thread:
+    /// on the main thread they blocked the UI for up to a second,
+    /// so the first tap on "Set cover" looked dead and only
+    /// repeated taps worked. A failed save surfaces the alert
+    /// above instead of silently doing nothing — the sheet stays
+    /// up so he can try again.
+    private func confirmCover() {
+        guard !isSaving else { return }
+        isSaving = true
+        let image = image
+        let scale = scale
+        let offset = offset
+        let frameSize = frameSize
+        Task {
+            let (originalOK, coverOK) = await Task.detached(priority: .userInitiated) {
+                let cropped = Self.crop(image: image, scale: scale, offset: offset, frameSize: frameSize)
+                return (PadCoverStore.saveOriginal(image), PadCoverStore.saveCover(cropped))
+            }.value
+            isSaving = false
+            if originalOK && coverOK {
+                onSaved()
+            } else {
+                saveFailed = true
+            }
+        }
+    }
+
+    /// The visible rect, in the photo's own points: invert the
+    /// display transform (fit scale × user zoom, plus offset).
+    private func croppedImage() -> UIImage {
+        Self.crop(image: image, scale: scale, offset: offset, frameSize: frameSize)
+    }
+
+    /// Pure crop (v1.0.53): the crop math as a static function of
+    /// its inputs, so the confirm path can run it off the main
+    /// thread. The render uses UIGraphicsImageRenderer + Core
+    /// Graphics, both safe off the main thread for offscreen work.
+    private static func crop(image: UIImage, scale: CGFloat, offset: CGSize, frameSize: CGSize) -> UIImage {
+        let normalized = image.normalizedOrientation()
+        let fitScale = max(frameSize.width / image.size.width, frameSize.height / image.size.height)
+        let ts = fitScale * scale
+        let vw = frameSize.width / ts
+        let vh = frameSize.height / ts
+        let cx = normalized.size.width / 2 - offset.width / ts
+        let cy = normalized.size.height / 2 - offset.height / ts
+        var rect = CGRect(x: cx - vw / 2, y: cy - vh / 2, width: vw, height: vh)
+        rect.origin.x = min(max(rect.origin.x, 0), max(0, normalized.size.width - rect.width))
+        rect.origin.y = min(max(rect.origin.y, 0), max(0, normalized.size.height - rect.height))
+        rect.size.width = min(rect.width, normalized.size.width)
+        rect.size.height = min(rect.height, normalized.size.height)
+        let s = normalized.scale
+        let pixelRect = CGRect(x: rect.origin.x * s, y: rect.origin.y * s,
+                               width: rect.width * s, height: rect.height * s)
+        guard let cg = normalized.cgImage?.cropping(to: pixelRect) else { return normalized }
+        let cropped = UIImage(cgImage: cg, scale: s, orientation: .up)
+        let targetW: CGFloat = 1200
+        guard cropped.size.width > targetW else { return cropped }
+        let k = targetW / cropped.size.width
+        let size = CGSize(width: cropped.size.width * k, height: cropped.size.height * k)
+        return UIGraphicsImageRenderer(size: size).image { _ in
+            cropped.draw(in: CGRect(origin: .zero, size: size))
+        }
+    }
+}
+
+extension UIImage {
+    /// Redraw with the orientation baked in, so pixel math
+    /// (cropping) and point math (display) agree.
+    func normalizedOrientation() -> UIImage {
+        guard imageOrientation != .up else { return self }
+        return UIGraphicsImageRenderer(size: size).image { _ in
+            draw(in: CGRect(origin: .zero, size: size))
+        }
+    }
+}

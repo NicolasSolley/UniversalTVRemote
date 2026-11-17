@@ -348,6 +348,8 @@ struct PadGeometry {
     }
 }
 
+/// One finger position on the trail (v1.0.44): where the finger
+/// was, and when — the trail drops points older than 0.8s.
 struct TrailPoint {
     var point: CGPoint
     var time: Date
@@ -424,6 +426,28 @@ struct PadTrailOverlay: View {
     }
 }
 
+
+/// Big swipe pad (the Swipe half of the toggle): near full-width,
+/// a bare pad — no chevrons, no hand icon, no label.
+/// One drag is one command on release (tap = select) — the same
+/// gesture as the old touchpad, only the size and the look changed.
+/// Modes (decided by the pure SwipePadGesture above):
+/// - Quick tap: exactly one OK press on lift; quick double-tap two.
+/// - Single tap held past the 0.3s onset: the OK key goes DOWN at
+///   onset and UP on lift — no enter on lift (v1.0.25).
+/// - Double-tap held past onset: spams OK presses (first repeat at
+///   onset, then one every 0.12s) until lift (v1.0.25).
+/// - Swipe: the first directional press fires at once, and held past
+///   onset it repeats that same direction every 0.12s until lift;
+///   a quick swipe-and-lift is still exactly one press (v1.0.27).
+///   Swiping out of a hold releases the key first, so a key is never
+///   left stuck down.
+/// - Mute zone (v1.0.34): a double-tap on the middle-right of the pad
+///   mutes/unmutes; the middle keeps its taps and holds exactly as
+///   before — the zone never starts a hold, and a swipe starting in
+///   it is still a swipe.
+/// The height comes from the layout so the pad fits the
+/// non-scrollable page on small phones.
 struct SwipePadView: View {
     var height: CGFloat
     /// Second parameter: whether the command should buzz. A tap
@@ -453,6 +477,20 @@ struct SwipePadView: View {
     /// unfocus. The pad calls this for a touch that landed while
     /// the keyboard was open; the touch itself sends nothing.
     var onDismissKeyboard: () -> Void
+
+    /// Explicit init (v1.0.53): the synthesized memberwise init is
+    /// private to this file because of the private @State /
+    /// @AppStorage properties below, so RemoteView in ContentView.swift
+    /// needs this to construct the pad.
+    init(height: CGFloat, onCommand: @escaping (RemoteCommand, Bool) -> Void, onRepeatCommand: @escaping (RemoteCommand, Bool) -> Void, onCancelRepeats: @escaping () -> Void, isKeyboardOpen: Bool, onDismissKeyboard: @escaping () -> Void) {
+        self.height = height
+        self.onCommand = onCommand
+        self.onRepeatCommand = onRepeatCommand
+        self.onCancelRepeats = onCancelRepeats
+        self.isKeyboardOpen = isKeyboardOpen
+        self.onDismissKeyboard = onDismissKeyboard
+    }
+
     /// A touch that landed while the keyboard was open (v1.0.53):
     /// the whole touch stays consumed as a dismiss even if the
     /// finger is still down when the keyboard finishes closing and
