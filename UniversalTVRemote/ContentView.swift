@@ -452,6 +452,9 @@ private struct RemoteView: View {
     /// lines + icons on the pad. @State, not persisted — it
     /// resets when the remote closes.
     @State private var showZones = false
+    /// Guide button visibility (v1.0.58): Settings toggle, default
+    /// shown. @AppStorage default true, so a fresh install shows it.
+    @AppStorage("showGuideButton") private var showGuideButton = true
     @FocusState private var keyboardFocused: Bool
     @FocusState private var pairingCodeFocused: Bool
     /// Hardware volume buttons drive the TV volume (v1.0.23):
@@ -506,6 +509,11 @@ private struct RemoteView: View {
             // leaving hides it again. On Samsung/Roku this never
             // fires — the button stays the only way in.
             showKeyboard = focused
+        }
+        .onChange(of: showGuideButton) { shown in
+            // Hiding the button while the guide is on would leave
+            // the overlay stuck with no way to turn it off.
+            if !shown { showZones = false }
         }
         .onAppear {
             // Hardware volume buttons → TV volume, scoped strictly
@@ -726,25 +734,29 @@ private struct RemoteView: View {
     /// row's budgeted height (layout.connectionPillHeight), so
     /// the row doesn't grow and the pad size doesn't move; it
     /// keeps the same look and behavior as in the top bar (accent
-    /// ring + tinted icon when on), just in the new spot.
+    /// ring + tinted icon when on), just in the new spot. The
+    /// toggle hides entirely when Settings turns it off
+    /// (showGuideButton) — the pill stays centered either way.
     private func connectionRow(_ layout: RemoteLayout) -> some View {
         ZStack {
             connectionPill
-            HStack {
-                Spacer()
-                Button { showZones.toggle() } label: {
-                    Image(systemName: "rectangle.split.2x2")
-                        .font(.headline.bold())
-                        .foregroundStyle(showZones ? remoteAccent : .primary)
-                        .frame(width: layout.connectionPillHeight, height: layout.connectionPillHeight)
-                        .background(surfaceFill, in: Circle())
-                        .overlay(Circle().stroke(showZones ? remoteAccent : Color.primary.opacity(0.08), lineWidth: showZones ? 2 : 1))
-                        .shadow(color: surfaceShadow, radius: 6, y: 2)
+            if showGuideButton {
+                HStack {
+                    Spacer()
+                    Button { showZones.toggle() } label: {
+                        Image(systemName: "rectangle.split.2x2")
+                            .font(.headline.bold())
+                            .foregroundStyle(showZones ? remoteAccent : .primary)
+                            .frame(width: layout.connectionPillHeight, height: layout.connectionPillHeight)
+                            .background(surfaceFill, in: Circle())
+                            .overlay(Circle().stroke(showZones ? remoteAccent : Color.primary.opacity(0.08), lineWidth: showZones ? 2 : 1))
+                            .shadow(color: surfaceShadow, radius: 6, y: 2)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Show pad zones")
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Show pad zones")
+                .padding(.horizontal)
             }
-            .padding(.horizontal)
         }
     }
 
@@ -958,6 +970,8 @@ private struct SettingsSheet: View {
     @AppStorage("padBorder") private var padBorderRaw = "off"
     @AppStorage("trailStyle") private var trailStyleRaw = "line"
     @AppStorage("appearance") private var appearanceRaw = "system"
+    /// Guide button (v1.0.58): Settings toggle, default shown.
+    @AppStorage("showGuideButton") private var showGuideButton = true
     @AppStorage("padCoverVersion") private var coverVersion = 0
     /// Cover flow (v1.0.57): the picker is still a sheet, but
     /// the cropper is NOT — two sheet-based cropper
@@ -1018,6 +1032,12 @@ private struct SettingsSheet: View {
                     GlassSection("TRAIL") {
                         GlassSegmentedControl(options: TrailStyle.allCases.map { ($0.rawValue, $0.name) }, selection: $trailStyleRaw)
                         Text("How the swipe trail looks on the pad.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    GlassSection("GUIDE") {
+                        Toggle("Show guide button", isOn: $showGuideButton)
+                        Text("Show the button that turns on the zone guide on the pad.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }

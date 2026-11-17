@@ -1757,6 +1757,30 @@ final class TrailStyleMigrationTests: XCTestCase {
     }
 }
 
+/// Guide button visibility (v1.0.58): Settings toggle, default
+/// shown — a fresh install (no stored value) shows the button,
+/// and storing false hides it.
+final class GuideButtonVisibilityTests: XCTestCase {
+    private let key = GuideButtonVisibility.key
+
+    func testAbsentValueMeansShown() {
+        UserDefaults.standard.removeObject(forKey: key)
+        XCTAssertTrue(GuideButtonVisibility.isShown)
+    }
+
+    func testStoredFalseHidesIt() {
+        UserDefaults.standard.set(false, forKey: key)
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+        XCTAssertFalse(GuideButtonVisibility.isShown)
+    }
+
+    func testStoredTrueShowsIt() {
+        UserDefaults.standard.set(true, forKey: key)
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+        XCTAssertTrue(GuideButtonVisibility.isShown)
+    }
+}
+
 /// Direction hints (v1.0.58): the guide's swipe arrows sit 55pt
 /// from the pad center in each direction, with tap-OK at the
 /// center itself.

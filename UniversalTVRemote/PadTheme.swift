@@ -138,6 +138,20 @@ enum PadBorder: String, CaseIterable {
 /// Nick: "just call this one Line not glow for trails"): how the
 /// swipe trail looks. Line is the thin smooth continuous line;
 /// Dots is a row of circles; Off draws nothing.
+/// Guide button visibility (v1.0.58): the Settings toggle that
+/// shows/hides the zone-guide button in the connection row.
+/// A plain `bool(forKey:)` reads false when the key is absent,
+/// which would hide the button on a fresh install — so the
+/// "no stored value" case is defined here as shown, matching
+/// the @AppStorage default (true) the views use.
+enum GuideButtonVisibility {
+    static let key = "showGuideButton"
+    static var isShown: Bool {
+        if UserDefaults.standard.object(forKey: key) == nil { return true }
+        return UserDefaults.standard.bool(forKey: key)
+    }
+}
+
 enum TrailStyle: String, CaseIterable {
     case off, line, dots
     var name: String {
