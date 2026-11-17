@@ -23,6 +23,7 @@ struct PadHelpSheet: View {
                     helpCard(icon: "arrow.up.and.down.and.arrow.left.and.right", tint: .cyan, title: "Swipe", subtitle: "Move that way")
                     helpCard(icon: "forward.fill", tint: .indigo, title: "Swipe + hold", subtitle: "Keep moving")
                     helpCard(icon: "speaker.slash.fill", tint: .red, title: "Double-tap right side", subtitle: "Mute audio")
+                    helpCard(icon: "rectangle.and.arrow.up.right", tint: .teal, title: "Double-tap top left", subtitle: "Change input / source")
                     helpCard(icon: "arrow.left", tint: .orange, title: "Double-tap bottom left", subtitle: "Go back")
                     helpCard(icon: "house", tint: .purple, title: "Double-tap bottom middle", subtitle: "Go home")
                     helpCard(icon: "rectangle.portrait.and.arrow.right", tint: .pink, title: "Double-tap bottom right", subtitle: "Exit")

@@ -903,6 +903,7 @@ final class SwipePadGestureTests: XCTestCase {
             (.back, .back(haptic: true)),
             (.home, .home(haptic: true)),
             (.exit, .exit(haptic: true)),
+            (.source, .source(haptic: true)),
         ]
         for (zone, expected) in cases {
             var g = SwipePadGesture()
@@ -918,7 +919,7 @@ final class SwipePadGestureTests: XCTestCase {
     func testSingleTapInBottomZoneStillSendsOK() {
         // A single tap in a bottom zone is still an OK — the zone
         // only changes what a double-tap does.
-        for zone in [PadZone.back, .home, .exit, .mute] {
+        for zone in [PadZone.back, .home, .exit, .mute, .source] {
             var g = SwipePadGesture()
             XCTAssertEqual(g.touchDown(inZone: zone).outputs, [])
             XCTAssertEqual(g.touchUp(translation: still, slop: slop), [])
@@ -1517,11 +1518,30 @@ final class PadGeometryTests: XCTestCase {
         XCTAssertFalse(PadGeometry(size: .zero).isBackZone(CGPoint(x: 10, y: 10)))
     }
 
+    func testSourceZone() {
+        // Top-left corner (y < 0.25, x < 1/3) on a 360x220 pad.
+        XCTAssertTrue(pad.isSourceZone(CGPoint(x: 30, y: 10)))
+        XCTAssertTrue(pad.isSourceZone(CGPoint(x: 0, y: 0)))
+        XCTAssertTrue(pad.isSourceZone(CGPoint(x: 119, y: 54)))
+        // Below the strip, or in the middle/right thirds, is not
+        // a source tap.
+        XCTAssertFalse(pad.isSourceZone(CGPoint(x: 30, y: 60)))
+        XCTAssertFalse(pad.isSourceZone(CGPoint(x: 180, y: 10)))
+        XCTAssertFalse(pad.isSourceZone(CGPoint(x: 300, y: 10)))
+        // Boundaries: y = 0.25 is not a source tap (mute wins on
+        // the shared line at x >= 0.67, plain pad elsewhere);
+        // x = 1/3 is still the source zone's edge.
+        XCTAssertFalse(pad.isSourceZone(CGPoint(x: 30, y: 55)))
+        XCTAssertTrue(pad.isSourceZone(CGPoint(x: 120, y: 10)))
+        XCTAssertFalse(PadGeometry(size: .zero).isSourceZone(CGPoint(x: 10, y: 10)))
+    }
+
     func testZoneAt() {
         XCTAssertEqual(pad.zone(at: CGPoint(x: 300, y: 110)), .mute)
         XCTAssertEqual(pad.zone(at: CGPoint(x: 30, y: 200)), .back)
         XCTAssertEqual(pad.zone(at: CGPoint(x: 180, y: 200)), .home)
         XCTAssertEqual(pad.zone(at: CGPoint(x: 330, y: 200)), .exit)
+        XCTAssertEqual(pad.zone(at: CGPoint(x: 30, y: 10)), .source)
         XCTAssertNil(pad.zone(at: CGPoint(x: 180, y: 110)))
         XCTAssertNil(pad.zone(at: CGPoint(x: 30, y: 100)))
         XCTAssertNil(PadGeometry(size: .zero).zone(at: CGPoint(x: 10, y: 10)))

@@ -35,6 +35,9 @@ struct SwipePadGesture {
         /// for Back, bottom-middle for Home, bottom-right for Exit
         /// — the same pattern as the mute zone.
         case back(haptic: Bool), home(haptic: Bool), exit(haptic: Bool)
+        /// Top-left zone (v1.0.60): double-tap the top-left corner
+        /// for Source — change the TV's input.
+        case source(haptic: Bool)
         case up(haptic: Bool), down(haptic: Bool), left(haptic: Bool), right(haptic: Bool)
     }
 
@@ -308,6 +311,7 @@ struct SwipePadGesture {
         case .back: return .back(haptic: haptic)
         case .home: return .home(haptic: haptic)
         case .exit: return .exit(haptic: haptic)
+        case .source: return .source(haptic: haptic)
         }
     }
 
@@ -324,14 +328,15 @@ struct SwipePadGesture {
 /// Nick sent. No picture of the remote (v1.0.39).
 /// Pad controls help, glassmorphic (v1.0.50): Nick's screenshot —
 /// frosted glass cards on the page background, floating pill
-/// header, nine gesture cards (v1.0.55: the three bottom zones
-/// joined the original six).
+/// header, ten gesture cards (v1.0.55: the three bottom zones
+/// joined the original six; v1.0.60: the top-left source zone
+/// joined them).
 
 /// A double-tap zone on the pad (v1.0.34 mute, v1.0.55
-/// back/home/exit): the zone only changes what a double-tap
+/// back/home/exit, v1.0.60 source): the zone only changes what a double-tap
 /// does — a single tap inside one still sends OK.
 enum PadZone: Equatable, Hashable {
-    case mute, back, home, exit
+    case mute, back, home, exit, source
 }
 
 /// Pure pad geometry (v1.0.53): the tilt and mute-zone math as
@@ -355,15 +360,24 @@ struct PadGeometry {
     static let bottomZoneMinY: CGFloat = 0.75
     static let backZoneMaxX: CGFloat = 1 / 3
     static let homeZoneMaxX: CGFloat = 2 / 3
+    /// Source zone (v1.0.60): the top-left corner — the top
+    /// quarter of the pad, left third. Double-tap it to change
+    /// the TV's input. Same double-tap pattern as the other
+    /// zones; top-middle and top-right stay plain pad.
+    static let sourceZoneMaxY: CGFloat = 0.25
+    static let sourceZoneMaxX: CGFloat = 1 / 3
 
     let size: CGSize
 
     /// The zone a tap location falls in, if any. Mute wins on the
     /// shared y = 0.75 boundary (a tap there is still a mute tap,
     /// as before); back wins on the x = 1/3 boundary, home on
-    /// x = 2/3.
+    /// x = 2/3. Source never overlaps mute (different x thirds),
+    /// and a tap exactly on y = 0.25 is not a source tap — the
+    /// source strip starts strictly above it.
     func zone(at location: CGPoint) -> PadZone? {
         if isMuteZone(location) { return .mute }
+        if isSourceZone(location) { return .source }
         if isBackZone(location) { return .back }
         if isHomeZone(location) { return .home }
         if isExitZone(location) { return .exit }
@@ -388,6 +402,9 @@ struct PadGeometry {
         case .exit:
             return CGPoint(x: (Self.homeZoneMaxX + 1) / 2 * size.width,
                            y: (Self.bottomZoneMinY + 1) / 2 * size.height)
+        case .source:
+            return CGPoint(x: Self.sourceZoneMaxX / 2 * size.width,
+                           y: Self.sourceZoneMaxY / 2 * size.height)
         }
     }
 
@@ -436,6 +453,19 @@ struct PadGeometry {
         let y = location.y / size.height
         let eps: CGFloat = 1e-9
         return x + eps >= Self.homeZoneMaxX && y - eps > Self.bottomZoneMinY
+    }
+
+    /// True when a tap location falls in the top-left zone
+    /// (Source). The top strip starts strictly above y = 0.25,
+    /// so it never overlaps the mute zone — a tap exactly on the
+    /// shared y = 0.25 line is a mute tap (x >= 0.67) or no zone
+    /// at all, never a source tap. False until the size is known.
+    func isSourceZone(_ location: CGPoint) -> Bool {
+        guard size.width > 0, size.height > 0 else { return false }
+        let x = location.x / size.width
+        let y = location.y / size.height
+        let eps: CGFloat = 1e-9
+        return x - eps < Self.sourceZoneMaxX && y + eps < Self.sourceZoneMaxY
     }
 
     /// Tilt toward the finger while pressed (v1.0.34, stronger in
@@ -655,7 +685,7 @@ struct PadZoneOverlay: View {
         ZStack {
             if size.width > 0, size.height > 0 {
                 zoneLines
-                ForEach([PadZone.mute, .back, .home, .exit], id: \.self) { zone in
+                ForEach([PadZone.mute, .source, .back, .home, .exit], id: \.self) { zone in
                     if let center = PadGeometry(size: size).center(of: zone) {
                         zoneIcon(zone)
                             .position(center)
@@ -669,9 +699,11 @@ struct PadZoneOverlay: View {
     /// The divider lines: the mute zone's left and top edges,
     /// the shared y = 0.75 line across the whole pad (mute
     /// zone's bottom edge and the bottom strip's top edge in
-    /// one), and the two verticals splitting the bottom strip
-    /// into thirds. Primary at low opacity, so the lines read
-    /// faint on both the light and the dark pad.
+    /// one), the two verticals splitting the bottom strip
+    /// into thirds, and the source zone's edges — the y = 0.25
+    /// line across the left third and the vertical splitting
+    /// the top strip at x = 1/3. Primary at low opacity, so the
+    /// lines read faint on both the light and the dark pad.
     private var zoneLines: some View {
         Path { path in
             let w = size.width, h = size.height
@@ -688,6 +720,12 @@ struct PadZoneOverlay: View {
             path.addLine(to: CGPoint(x: PadGeometry.backZoneMaxX * w, y: h))
             path.move(to: CGPoint(x: PadGeometry.homeZoneMaxX * w, y: PadGeometry.bottomZoneMinY * h))
             path.addLine(to: CGPoint(x: PadGeometry.homeZoneMaxX * w, y: h))
+            // Source zone: bottom edge (y = 0.25, left third only)
+            // and right edge (x = 1/3, top quarter only).
+            path.move(to: CGPoint(x: 0, y: PadGeometry.sourceZoneMaxY * h))
+            path.addLine(to: CGPoint(x: PadGeometry.sourceZoneMaxX * w, y: PadGeometry.sourceZoneMaxY * h))
+            path.move(to: CGPoint(x: PadGeometry.sourceZoneMaxX * w, y: 0))
+            path.addLine(to: CGPoint(x: PadGeometry.sourceZoneMaxX * w, y: PadGeometry.sourceZoneMaxY * h))
         }
         .stroke(Color.primary.opacity(0.25), lineWidth: 1)
     }
@@ -703,6 +741,7 @@ struct PadZoneOverlay: View {
             case .back: return ("arrow.left", .orange)
             case .home: return ("house", .purple)
             case .exit: return ("rectangle.portrait.and.arrow.right", .pink)
+            case .source: return ("rectangle.and.arrow.up.right", .teal)
             }
         }()
         return Image(systemName: icon)
@@ -1170,6 +1209,8 @@ struct SwipePadView: View {
                 if viaPump { onRepeatCommand(.home, haptic) } else { onCommand(.home, haptic) }
             case .exit(let haptic):
                 if viaPump { onRepeatCommand(.exit, haptic) } else { onCommand(.exit, haptic) }
+            case .source(let haptic):
+                if viaPump { onRepeatCommand(.input, haptic) } else { onCommand(.input, haptic) }
             case .up(let haptic):
                 if viaPump { onRepeatCommand(.up, haptic) } else { onCommand(.up, haptic) }
             case .down(let haptic):
