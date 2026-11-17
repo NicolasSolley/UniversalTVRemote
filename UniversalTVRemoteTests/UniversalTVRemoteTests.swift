@@ -1553,7 +1553,7 @@ final class TrailSmoothingTests: XCTestCase {
         XCTAssertEqual(smoothed.last?.point.x ?? -1, 120, accuracy: 0.001)
         XCTAssertEqual(smoothed.last?.point.y ?? -1, 0, accuracy: 0.001)
         // A straight line stays straight.
-        XCTAssertTrue(smoothed.allSatisfy { abs($0.y) < 0.001 })
+        XCTAssertTrue(smoothed.allSatisfy { abs($0.point.y) < 0.001 })
         // Resampling adds points between the samples.
         XCTAssertGreaterThan(smoothed.count, stroke.count)
     }
