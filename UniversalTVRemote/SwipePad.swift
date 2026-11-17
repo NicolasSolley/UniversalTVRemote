@@ -38,7 +38,7 @@ struct SwipePadGesture {
         case up(haptic: Bool), down(haptic: Bool), left(haptic: Bool), right(haptic: Bool)
     }
 
-    private enum State {
+    private enum State: Equatable {
         case idle
         case awaitingSecondTap
         case singleDown
@@ -512,9 +512,14 @@ enum TrailSmoothing {
     static func catmullRom(p0: CGPoint, p1: CGPoint, p2: CGPoint, p3: CGPoint, t: CGFloat) -> CGPoint {
         let t2 = t * t
         let t3 = t2 * t
-        return CGPoint(
-            x: 0.5 * ((2 * p1.x) + (-p0.x + p2.x) * t + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
-            y: 0.5 * ((2 * p1.y) + (-p0.y + p2.y) * t + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3))
+        let x = catmullRomAxis(p0: p0.x, p1: p1.x, p2: p2.x, p3: p3.x, t: t, t2: t2, t3: t3)
+        let y = catmullRomAxis(p0: p0.y, p1: p1.y, p2: p2.y, p3: p3.y, t: t, t2: t2, t3: t3)
+        return CGPoint(x: x, y: y)
+    }
+
+    /// One axis of the Catmull-Rom spline.
+    static func catmullRomAxis(p0: CGFloat, p1: CGFloat, p2: CGFloat, p3: CGFloat, t: CGFloat, t2: CGFloat, t3: CGFloat) -> CGFloat {
+        0.5 * ((2 * p1) + (-p0 + p2) * t + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3)
     }
 }
 
