@@ -130,7 +130,9 @@ enum PadBorder: String, CaseIterable {
         }
     }
     static var current: PadBorder {
-        PadBorder(rawValue: UserDefaults.standard.string(forKey: "padBorder") ?? "") ?? .off
+        // No stored value means the user never picked one —
+        // Glow is the default (v1.0.61, was Off).
+        PadBorder(rawValue: UserDefaults.standard.string(forKey: "padBorder") ?? "") ?? .glow
     }
 }
 

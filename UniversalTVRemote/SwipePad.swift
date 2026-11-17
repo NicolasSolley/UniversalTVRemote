@@ -665,6 +665,41 @@ struct PadTrailOverlay: View {
     }
 }
 
+/// Source glyph (v1.0.61): the TV-input icon, drawn with
+/// explicit shapes — a screen with an arrow pointing into it
+/// from the top-right, the classic "change input" pictogram.
+/// The v1.0.60 SF Symbol (`rectangle.and.arrow.up.right`)
+/// rendered as a blank circle on device, so the glyph is
+/// drawn instead: shapes always render, no symbol name to
+/// trust. 20pt, same visual weight as the other zone icons
+/// at .subheadline.bold().
+struct SourceGlyph: View {
+    var tint: Color
+
+    var body: some View {
+        ZStack {
+            // Screen, lower-left.
+            RoundedRectangle(cornerRadius: 2.5)
+                .stroke(tint, lineWidth: 1.75)
+                .frame(width: 14, height: 10)
+                .offset(x: -2, y: 3)
+            // Arrow entering from the top-right, pointing
+            // down-left into the screen.
+            Path { path in
+                path.move(to: CGPoint(x: 9, y: -9))
+                path.addLine(to: CGPoint(x: 1.5, y: 1.5))
+                // Arrowhead at the tip.
+                path.move(to: CGPoint(x: 1.5, y: 1.5))
+                path.addLine(to: CGPoint(x: 6, y: 1))
+                path.move(to: CGPoint(x: 1.5, y: 1.5))
+                path.addLine(to: CGPoint(x: 2.5, y: -2.5))
+            }
+            .stroke(tint, style: StrokeStyle(lineWidth: 1.75, lineCap: .round, lineJoin: .round))
+        }
+        .frame(width: 20, height: 20)
+    }
+}
+
 /// Zone overlay (v1.0.56): faint lines separating the pad's
 /// double-tap zones, with an icon in each one — mute top-right,
 /// back / home / exit along the bottom. The direction hints
@@ -733,22 +768,32 @@ struct PadZoneOverlay: View {
     /// One zone's icon: the help sheet's icon + tint, on a
     /// faint tinted chip so it reads on any pad color or cover
     /// photo. Small on purpose — the pad stays a pad, not a
-    /// legend.
+    /// legend. Source draws its own glyph (v1.0.61): the
+    /// v1.0.60 SF Symbol rendered as a blank circle on device,
+    /// so the screen-with-arrow is drawn with explicit shapes
+    /// (see SourceGlyph above).
+    @ViewBuilder
     private func zoneIcon(_ zone: PadZone) -> some View {
-        let (icon, tint): (String, Color) = {
-            switch zone {
-            case .mute: return ("speaker.slash.fill", .red)
-            case .back: return ("arrow.left", .orange)
-            case .home: return ("house", .purple)
-            case .exit: return ("rectangle.portrait.and.arrow.right", .pink)
-            case .source: return ("rectangle.and.arrow.up.right", .teal)
-            }
-        }()
-        return Image(systemName: icon)
-            .font(.subheadline.bold())
-            .foregroundStyle(tint)
-            .frame(width: 34, height: 34)
-            .background(tint.opacity(0.15), in: Circle())
+        if zone == .source {
+            SourceGlyph(tint: .teal)
+                .frame(width: 34, height: 34)
+                .background(Color.teal.opacity(0.15), in: Circle())
+        } else {
+            let (icon, tint): (String, Color) = {
+                switch zone {
+                case .mute: return ("speaker.slash.fill", .red)
+                case .back: return ("arrow.left", .orange)
+                case .home: return ("house", .purple)
+                case .exit: return ("rectangle.portrait.and.arrow.right", .pink)
+                case .source: return ("", .teal) // unreachable: handled above
+                }
+            }()
+            Image(systemName: icon)
+                .font(.subheadline.bold())
+                .foregroundStyle(tint)
+                .frame(width: 34, height: 34)
+                .background(tint.opacity(0.15), in: Circle())
+        }
     }
 }
 
@@ -881,13 +926,13 @@ struct SwipePadView: View {
     /// Settings (v1.0.46), read live so the pad re-renders when
     /// they change: color theme, border effect, trail style.
     @AppStorage("padTheme") private var padThemeRaw = "midnight"
-    @AppStorage("padBorder") private var padBorderRaw = "off"
+    @AppStorage("padBorder") private var padBorderRaw = "glow"
     @AppStorage("trailStyle") private var trailStyleRaw = "line"
     /// Pad cover art (v1.0.50): bumped whenever the cover is
     /// set, re-cropped, or removed, so the pad re-renders.
     @AppStorage("padCoverVersion") private var coverVersion = 0
     private var theme: PadTheme { PadTheme(rawValue: padThemeRaw) ?? .midnight }
-    private var borderEffect: PadBorder { PadBorder(rawValue: padBorderRaw) ?? .off }
+    private var borderEffect: PadBorder { PadBorder(rawValue: padBorderRaw) ?? .glow }
     private var trailStyle: TrailStyle { TrailStyle(rawValue: trailStyleRaw) ?? .line }
     /// Resolved color scheme (v1.0.51): the pad follows the page —
     /// a light pad in light mode, dark in dark mode.

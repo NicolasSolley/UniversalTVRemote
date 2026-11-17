@@ -347,8 +347,21 @@ struct RemoteLayout {
     /// this height as its layout slot — the circle overflows
     /// 3pt above and below the row into the empty space there,
     /// so the row doesn't grow and the pad (which absorbs the
-    /// slack) doesn't shrink.
+    /// slack) doesn't shrink. The slot is topBarButton WIDE
+    /// (v1.0.61), so the circle's center sits exactly on the
+    /// power button's centerline.
     var connectionPillHeight: CGFloat = 38
+    /// The zone guide toggle's layout slot (v1.0.61): topBarButton
+    /// WIDE, so the 44pt circle's center lands exactly on the
+    /// power button's centerline — both rows have the same 16pt
+    /// horizontal padding and both buttons are topBarButton wide,
+    /// so both centers are 16 + topBarButton/2 from the right
+    /// edge — but only connectionPillHeight TALL (38), so the
+    /// row height, pad size, and crop aspect don't move.
+    /// (v1.0.60 used a 38-wide slot, so the circle sat 3pt
+    /// right of power.)
+    var guideToggleSlotWidth: CGFloat { topBarButton }
+    var guideToggleSlotHeight: CGFloat { connectionPillHeight }
     var pairingCardPadding: CGFloat
     var pairingCardSpacing: CGFloat
     var padSize: CGFloat
@@ -735,9 +748,16 @@ private struct RemoteView: View {
     /// under the power button — a vertical stack on the right,
     /// power on top, guide below. The toggle renders at the same
     /// size as the power button (layout.topBarButton, v1.0.60)
-    /// but occupies only the row's budgeted height
-    /// (layout.connectionPillHeight) as its layout slot, so the
-    /// row doesn't grow and the pad size doesn't move; it keeps
+    /// and occupies a slot that size WIDE (v1.0.61), so its center
+    /// sits exactly on the power button's centerline: both rows
+    /// have the same 16pt horizontal padding and both buttons are
+    /// topBarButton wide, so both centers are 16 + topBarButton/2
+    /// from the right edge. The slot stays the row's budgeted
+    /// height (layout.connectionPillHeight, 38) — the 44pt circle
+    /// overflows 3pt above/below the row into the empty space
+    /// there, so the row height, pad size, and crop aspect don't
+    /// move (v1.0.60's 38-wide slot put the circle's center 3pt
+    /// right of power's — that's what v1.0.61 fixes). It keeps
     /// the same look and behavior as in the top bar (accent
     /// ring + tinted icon when on), just in the new spot. The
     /// toggle hides entirely when Settings turns it off
@@ -758,12 +778,17 @@ private struct RemoteView: View {
                             .shadow(color: surfaceShadow, radius: 6, y: 2)
                     }
                     .buttonStyle(.plain)
-                    // Layout slot stays the pill row's 38pt (v1.0.60):
-                    // the 44pt circle renders centered in it and
+                    // Layout slot is topBarButton WIDE (v1.0.61) so
+                    // the 44pt circle's center lands exactly on the
+                    // power button's centerline (same 16pt row
+                    // padding, same width), but only
+                    // connectionPillHeight TALL (38): the circle
                     // overflows 3pt above/below the row into the
                     // empty space there — the row height, pad size,
-                    // and crop aspect don't move.
-                    .frame(width: layout.connectionPillHeight, height: layout.connectionPillHeight)
+                    // and crop aspect don't move. (v1.0.60 used a
+                    // 38-wide slot, so the circle sat 3pt right of
+                    // power.) Tappable area is the full 44x38 slot.
+                    .frame(width: layout.guideToggleSlotWidth, height: layout.guideToggleSlotHeight)
                     .accessibilityLabel("Show pad zones")
                 }
                 .padding(.horizontal)
@@ -978,7 +1003,7 @@ private struct SettingsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
     @AppStorage("padTheme") private var padThemeRaw = "midnight"
-    @AppStorage("padBorder") private var padBorderRaw = "off"
+    @AppStorage("padBorder") private var padBorderRaw = "glow"
     @AppStorage("trailStyle") private var trailStyleRaw = "line"
     @AppStorage("appearance") private var appearanceRaw = "system"
     /// Guide button (v1.0.58): Settings toggle, default shown.

@@ -1811,19 +1811,54 @@ final class TrailLifetimeTests: XCTestCase {
     }
 }
 
+/// Pad border default (v1.0.61): Glow is the default — a fresh
+/// install (no stored value) gets the glow halo, and a value the
+/// user explicitly picked still wins.
+final class PadBorderDefaultTests: XCTestCase {
+    private let key = "padBorder"
+
+    func testAbsentValueMeansGlow() {
+        UserDefaults.standard.removeObject(forKey: key)
+        XCTAssertEqual(PadBorder.current, .glow)
+    }
+
+    func testStoredOffStillWins() {
+        UserDefaults.standard.set("off", forKey: key)
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+        XCTAssertEqual(PadBorder.current, .off)
+    }
+
+    func testStoredFlowStillWins() {
+        UserDefaults.standard.set("flow", forKey: key)
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+        XCTAssertEqual(PadBorder.current, .flow)
+    }
+}
+
 /// Top-bar centering (v1.0.58): the guide toggle moved out of the
 /// top bar into the connection row, under the power button, and
 /// the Devices button became a circle the same size as power, so
 /// the TV name centers between two equal ends. The toggle renders
-/// at power-button size (44) but occupies only the pill row's
-/// budgeted height (38) as its layout slot (v1.0.60), so the row
-/// — and the pad — don't move: the 15 Plus pad is still 500pt
-/// (cap binds) at 845pt usable height.
+/// at power-button size (44) and its slot is that wide too
+/// (v1.0.61 — v1.0.60's 38-wide slot put its center 3pt right
+/// of power's), but only the pill row's budgeted height (38)
+/// tall, so the row — and the pad — don't move: the 15 Plus
+/// pad is still 500pt (cap binds) at 845pt usable height.
 final class TopBarLayoutTests: XCTestCase {
     func testGuideToggleFitsPillRowWithoutMovingPad() {
         let layout = RemoteLayout.make(height: 845, pairingShown: false, keyboardShown: false, isLG: false)
         XCTAssertEqual(layout.topBarButton, 44)
         XCTAssertEqual(layout.connectionPillHeight, 38)
+        XCTAssertEqual(layout.padSize, 500)
+    }
+
+    func testGuideToggleSharesPowerButtonCenterline() {
+        // Same slot width as the power button, same 16pt row
+        // padding — so both centers sit 16 + topBarButton/2
+        // from the right edge, one vertical line through both.
+        let layout = RemoteLayout.make(height: 845, pairingShown: false, keyboardShown: false, isLG: false)
+        XCTAssertEqual(layout.guideToggleSlotWidth, layout.topBarButton)
+        XCTAssertEqual(layout.guideToggleSlotHeight, layout.connectionPillHeight)
         XCTAssertEqual(layout.padSize, 500)
     }
 }

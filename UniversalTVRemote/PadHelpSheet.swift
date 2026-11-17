@@ -23,7 +23,7 @@ struct PadHelpSheet: View {
                     helpCard(icon: "arrow.up.and.down.and.arrow.left.and.right", tint: .cyan, title: "Swipe", subtitle: "Move that way")
                     helpCard(icon: "forward.fill", tint: .indigo, title: "Swipe + hold", subtitle: "Keep moving")
                     helpCard(icon: "speaker.slash.fill", tint: .red, title: "Double-tap right side", subtitle: "Mute audio")
-                    helpCard(icon: "rectangle.and.arrow.up.right", tint: .teal, title: "Double-tap top left", subtitle: "Change input / source")
+                    helpCard(tile: SourceGlyph(tint: .teal), tint: .teal, title: "Double-tap top left", subtitle: "Change input / source")
                     helpCard(icon: "arrow.left", tint: .orange, title: "Double-tap bottom left", subtitle: "Go back")
                     helpCard(icon: "house", tint: .purple, title: "Double-tap bottom middle", subtitle: "Go home")
                     helpCard(icon: "rectangle.portrait.and.arrow.right", tint: .pink, title: "Double-tap bottom right", subtitle: "Exit")
@@ -42,10 +42,18 @@ struct PadHelpSheet: View {
     /// No chevron (v1.0.42): the rows aren't tappable, and the
     /// arrow made them look clickable.
     private func helpCard(icon: String, tint: Color, title: String, subtitle: String) -> some View {
+        helpCard(tile: Image(systemName: icon)
+            .font(.title3)
+            .foregroundStyle(tint), tint: tint, title: title, subtitle: subtitle)
+    }
+
+    /// One gesture card with a custom-drawn tile (v1.0.61):
+    /// same tile as helpCard(icon:), but the tile content is a
+    /// View instead of an SF Symbol — the Source glyph is drawn
+    /// with shapes because its symbol rendered blank on device.
+    private func helpCard<Tile: View>(tile: Tile, tint: Color, title: String, subtitle: String) -> some View {
         HStack(spacing: 14) {
-            Image(systemName: icon)
-                .font(.title3)
-                .foregroundStyle(tint)
+            tile
                 .frame(width: 52, height: 52)
                 .background(tint.opacity(0.15), in: RoundedRectangle(cornerRadius: 14))
             VStack(alignment: .leading, spacing: 2) {
