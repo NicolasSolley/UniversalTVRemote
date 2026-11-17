@@ -1403,8 +1403,9 @@ final class WakeOnLANTests: XCTestCase {
     }
 }
 
-/// Pad geometry (v1.0.53): max tilt 8° (back from the over-rotated
-/// 14°), mute zone middle-right, tilt axis toward the finger.
+/// Pad geometry (v1.0.54): max tilt 6° (back from 8°, still
+/// slightly too strong in the v1.0.53 field test), mute zone
+/// middle-right, tilt axis toward the finger.
 final class PadGeometryTests: XCTestCase {
     private let pad = PadGeometry(size: CGSize(width: 360, height: 220))
 
@@ -1413,12 +1414,12 @@ final class PadGeometryTests: XCTestCase {
     }
 
     func testCornerPressTiltsAtMax() {
-        XCTAssertEqual(pad.tiltAngle(isPressed: true, pressLocation: CGPoint(x: 360, y: 220)), 8, accuracy: 0.0001)
+        XCTAssertEqual(pad.tiltAngle(isPressed: true, pressLocation: CGPoint(x: 360, y: 220)), 6, accuracy: 0.0001)
     }
 
     func testQuarterPressTiltsProportionally() {
-        // dx 0.25, dy 0 → sqrt(0.0625) * 2.5 = 0.625 of max.
-        XCTAssertEqual(pad.tiltAngle(isPressed: true, pressLocation: CGPoint(x: 270, y: 110)), 5, accuracy: 0.0001)
+        // dx 0.25, dy 0 → sqrt(0.0625) * 2.5 = 0.625 of max (3.75° at a 6° max).
+        XCTAssertEqual(pad.tiltAngle(isPressed: true, pressLocation: CGPoint(x: 270, y: 110)), 3.75, accuracy: 0.0001)
     }
 
     func testNoPressDoesNotTilt() {

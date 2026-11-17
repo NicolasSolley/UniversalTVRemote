@@ -298,10 +298,10 @@ struct SwipePadGesture {
 /// unit tests can drive it directly. Extracted from SwipePadView
 /// when the pad moved into its own file.
 struct PadGeometry {
-    /// Max tilt: 8° (v1.0.53) — back from 14° in v1.0.51, whose field
-    /// test found 14° over-rotated; the v1.0.47 value, which nobody
-    /// complained about.
-    static let maxTiltDegrees: Double = 8
+    /// Max tilt: 6° (v1.0.54) — back from 8° in v1.0.53, whose field
+    /// test still found it slightly too strong. Same single-spring
+    /// behavior, just a lower max.
+    static let maxTiltDegrees: Double = 6
     /// Mute zone (v1.0.34): the middle-right of the pad — the right
     /// third horizontally, the middle half vertically. A double-tap
     /// with both taps here mutes; the middle stays for taps/holds.

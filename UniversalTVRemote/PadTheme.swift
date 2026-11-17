@@ -1,8 +1,8 @@
 // PadTheme.swift — theme + surface helpers, split out of
 // ContentView.swift in v1.0.53 (the file had grown past 2,400 lines).
 // PadTheme / PadBorder / TrailStyle / AppAppearance / AppBackground,
-// the light-mode glass wash + surfaces, and remoteAccent. Internal,
-// so ContentView, the pad, and the sheets all share them.
+// and remoteAccent. Internal, so ContentView, the pad, and the
+// sheets all share them.
 
 import SwiftUI
 
@@ -177,62 +177,6 @@ enum AppBackground {
         @unknown default: return Color(.systemBackground)
         }
     }
-}
-
-/// Page background with a glass wash (v1.0.53): the flat page color
-/// plus soft radial glows in the theme accent — LIGHT MODE ONLY. A
-/// thin material over a flat solid background shows almost no frost,
-/// so the wash gives the glass cards something to blur and the frost
-/// actually reads. Dark mode keeps the flat Chrome gray, exactly as
-/// before.
-struct GlassWashBackground: View {
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        ZStack {
-            AppBackground.color(for: colorScheme)
-            if colorScheme == .light {
-                let accent = PadTheme.current.accent
-                Rectangle()
-                    .fill(RadialGradient(
-                        colors: [accent.opacity(0.22), .clear],
-                        center: .topLeading, startRadius: 10, endRadius: 340))
-                Rectangle()
-                    .fill(RadialGradient(
-                        colors: [accent.opacity(0.18), .clear],
-                        center: .bottomTrailing, startRadius: 10, endRadius: 380))
-            }
-        }
-        .ignoresSafeArea()
-    }
-}
-
-/// Frosted-glass surface for a card, pill, or round button (v1.0.53):
-/// dark mode keeps the translucent primary fill exactly as before;
-/// light mode is ultraThinMaterial over the glow wash with a soft
-/// gray veil, so the surface reads as gray glass instead of flat
-/// white — the TV list box and the remote pills were too much white
-/// overall. The veil sits above the material: the blur still shows
-/// through, just grayed.
-struct GlassSurface<S: Shape>: View {
-    let shape: S
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        if colorScheme == .light {
-            shape.fill(.ultraThinMaterial)
-                .overlay(shape.fill(Color.glassVeil))
-        } else {
-            shape.fill(Color.primary.opacity(0.10))
-        }
-    }
-}
-
-/// The gray veil over light-mode glass (v1.0.53): shared by the
-/// surfaces above and the glass cards below, so every frosted
-/// element reads the same gray.
-extension Color {
-    static var glassVeil: Color { Color(white: 0.88).opacity(0.5) }
 }
 
 /// Accent for the redesigned remote (v1.0.12): the Devices pill

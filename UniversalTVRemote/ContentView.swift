@@ -2,7 +2,7 @@ import SwiftUI
 
 // Theme + surface helpers live in PadTheme.swift (split out in
 // v1.0.53) — PadTheme, PadBorder, TrailStyle, AppAppearance,
-// AppBackground, GlassWashBackground, GlassSurface, remoteAccent.
+// AppBackground, remoteAccent.
 
 struct ContentView: View {
     @StateObject private var discovery = DiscoveryManager()
@@ -76,9 +76,14 @@ private struct DiscoveryListView: View {
     /// from it, so System follows the phone.
     @Environment(\.colorScheme) private var colorScheme
 
-    /// Card/button surface (v1.0.53, light-mode glass): the surfaces
-    /// are GlassSurface now — frosted material with a gray veil in
-    /// light mode, the translucent primary fill in dark mode.
+    /// Card/button surface (v1.0.52): dark mode keeps the
+    /// translucent primary fill; light mode uses solid white with
+    /// a soft shadow, so the list card and the round buttons read
+    /// against the bright page instead of washing out into it.
+    /// Same treatment as the remote page's pills (v1.0.51).
+    private var surfaceFill: Color {
+        colorScheme == .light ? .white : Color.primary.opacity(0.10)
+    }
     private var surfaceShadow: Color {
         colorScheme == .light ? .black.opacity(0.07) : .clear
     }
@@ -122,7 +127,7 @@ private struct DiscoveryListView: View {
                                 .font(.subheadline.bold())
                                 .foregroundStyle(.primary)
                                 .frame(width: 30, height: 30)
-                                .background { GlassSurface(shape: Circle()) }
+                                .background(surfaceFill, in: Circle())
                                 .shadow(color: surfaceShadow, radius: 6, y: 2)
                         }
                         .buttonStyle(.plain)
@@ -133,7 +138,7 @@ private struct DiscoveryListView: View {
                                 .font(.subheadline.bold())
                                 .foregroundStyle(.primary)
                                 .frame(width: 30, height: 30)
-                                .background { GlassSurface(shape: Circle()) }
+                                .background(surfaceFill, in: Circle())
                                 .shadow(color: surfaceShadow, radius: 6, y: 2)
                         }
                         .buttonStyle(.plain)
@@ -158,7 +163,7 @@ private struct DiscoveryListView: View {
                     }
                 }
                 .padding(.vertical, 6)
-                .background { GlassSurface(shape: RoundedRectangle(cornerRadius: 20)) }
+                .background(surfaceFill, in: RoundedRectangle(cornerRadius: 20))
                 .shadow(color: surfaceShadow, radius: 8, y: 2)
                 .padding(.horizontal)
 
@@ -181,10 +186,9 @@ private struct DiscoveryListView: View {
         .onChange(of: discovery.isScanning) { scanning in
             if !scanning { hasCompletedScan = true }
         }
-        // Page background (v1.0.48, glass wash in v1.0.53): Chrome
-        // dark gray / soft light gray with an accent glow in light
-        // mode, not the system black/white extremes.
-        .background(GlassWashBackground())
+        // Page background (v1.0.48): Chrome dark gray / soft light
+        // gray, not the system black/white extremes.
+        .background(AppBackground.color(for: colorScheme).ignoresSafeArea())
         .sheet(isPresented: $showPadHelp) { PadHelpSheet() }
         .sheet(isPresented: $showSettings) { SettingsSheet() }
     }
@@ -431,9 +435,13 @@ private struct RemoteView: View {
     /// Resolved color scheme (v1.0.48): the page background comes
     /// from it, so System follows the phone.
     @Environment(\.colorScheme) private var colorScheme
-    /// Pill/card surface (v1.0.53, light-mode glass): the surfaces
-    /// are GlassSurface now — frosted material with a gray veil in
-    /// light mode, the translucent primary fill in dark mode.
+    /// Pill/card surface (v1.0.51): dark mode keeps the translucent
+    /// primary fill; light mode uses solid white with a soft shadow,
+    /// so the controls read as buttons on the tinted page instead
+    /// of washed-out gray blobs.
+    private var surfaceFill: Color {
+        colorScheme == .light ? .white : Color.primary.opacity(0.10)
+    }
     private var surfaceShadow: Color {
         colorScheme == .light ? .black.opacity(0.07) : .clear
     }
@@ -453,10 +461,9 @@ private struct RemoteView: View {
                 isLG: session.device.brand == .lg)
             remoteContent(layout: layout)
         }
-        // Page background (v1.0.48, glass wash in v1.0.53): Chrome
-        // dark gray / soft light gray with an accent glow in light
-        // mode, not the system black/white extremes.
-        .background(GlassWashBackground())
+        // Page background (v1.0.48): Chrome dark gray / soft light
+        // gray, not the system black/white extremes.
+        .background(AppBackground.color(for: colorScheme).ignoresSafeArea())
         // Tap-to-dismiss (v1.0.53): a tap on empty space (or any
         // non-button area) with the keyboard open just closes the
         // keyboard. Buttons and the pad handle it themselves — a
@@ -629,7 +636,7 @@ private struct RemoteView: View {
                 }
             }
             .padding(layout.pairingCardPadding)
-            .background { GlassSurface(shape: RoundedRectangle(cornerRadius: 16)) }
+            .background(surfaceFill, in: RoundedRectangle(cornerRadius: 16))
             .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.primary.opacity(0.08), lineWidth: 1))
             .shadow(color: surfaceShadow, radius: 8, y: 2)
             .padding(.horizontal)
@@ -655,7 +662,7 @@ private struct RemoteView: View {
                     .foregroundStyle(remoteAccent)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                    .background { GlassSurface(shape: Capsule()) }
+                    .background(surfaceFill, in: Capsule())
                     .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
                     .shadow(color: surfaceShadow, radius: 6, y: 2)
             }
@@ -675,7 +682,7 @@ private struct RemoteView: View {
                     .font(.headline.bold())
                     .foregroundStyle(.red)
                     .frame(width: layout.topBarButton, height: layout.topBarButton)
-                    .background { GlassSurface(shape: Circle()) }
+                    .background(surfaceFill, in: Circle())
                     .shadow(color: surfaceShadow, radius: 6, y: 2)
             }
             .buttonStyle(.plain)
@@ -706,7 +713,7 @@ private struct RemoteView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
-        .background { GlassSurface(shape: Capsule()) }
+        .background(surfaceFill, in: Capsule())
         .overlay(Capsule().stroke(Color.primary.opacity(0.08), lineWidth: 1))
         .shadow(color: surfaceShadow, radius: 6, y: 2)
     }
@@ -857,13 +864,14 @@ private struct RemoteView: View {
                 Button { showKeyboard.toggle() } label: {
                     ZStack {
                         Circle()
+                            .fill(surfaceFill)
+                        Circle()
                             .stroke(showKeyboard ? remoteAccent : Color.primary.opacity(0.08), lineWidth: 2.5)
                         Image(systemName: "keyboard")
                             .font(.title)
                             .foregroundStyle(.primary)
                     }
                     .frame(width: layout.circleSize, height: layout.circleSize)
-                    .background { GlassSurface(shape: Circle()) }
                     .shadow(color: surfaceShadow, radius: 8, y: 2)
                 }
                 .buttonStyle(.plain)
@@ -886,7 +894,7 @@ private struct RemoteView: View {
                 .font(.title2.bold())
                 .foregroundStyle(.primary)
                 .frame(maxWidth: .infinity, minHeight: height)
-                .background { GlassSurface(shape: RoundedRectangle(cornerRadius: 28)) }
+                .background(surfaceFill, in: RoundedRectangle(cornerRadius: 28))
                 .overlay(RoundedRectangle(cornerRadius: 28).stroke(Color.primary.opacity(0.08), lineWidth: 1))
                 .shadow(color: surfaceShadow, radius: 6, y: 2)
         }
@@ -1048,7 +1056,7 @@ private struct SettingsSheet: View {
                 .padding(.bottom, 24)
             }
         }
-        .background(GlassWashBackground())
+        .background(AppBackground.color(for: colorScheme).ignoresSafeArea())
         // Live appearance (v1.0.48): a sheet's color scheme is
         // frozen at presentation — the root view's
         // preferredColorScheme flips the app behind it, but the

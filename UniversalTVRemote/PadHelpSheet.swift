@@ -31,7 +31,7 @@ struct PadHelpSheet: View {
         // Same background as the home screen (v1.0.48): the
         // sheet was showing the system black/white while the
         // home screen uses the Chrome gray / soft gray.
-        .background(GlassWashBackground())
+        .background(AppBackground.color(for: colorScheme).ignoresSafeArea())
     }
 
     /// One gesture card: colored icon tile, name + what it does.
@@ -70,23 +70,9 @@ struct PadHelpSheet: View {
 /// adapts to light and dark on its own, so the same card reads
 /// as glass on both appearances.
 struct GlassCardBackground: View {
-    @Environment(\.colorScheme) private var colorScheme
-
     var body: some View {
         RoundedRectangle(cornerRadius: 28)
             .fill(.ultraThinMaterial)
-            .overlay(
-                // Light mode only (v1.0.53): the same gray veil as
-                // the glass surfaces, so the card reads gray glass
-                // instead of flat white. Dark mode keeps the bare
-                // material exactly as before.
-                Group {
-                    if colorScheme == .light {
-                        RoundedRectangle(cornerRadius: 28)
-                            .fill(Color.glassVeil)
-                    }
-                }
-            )
             .overlay(
                 RoundedRectangle(cornerRadius: 28)
                     .stroke(Color.primary.opacity(0.10), lineWidth: 1)
@@ -101,30 +87,10 @@ struct GlassHeaderPill: View {
     let title: String
     var onDone: () -> Void
 
-    /// Explicit init (v1.0.53): the synthesized memberwise init is
-    /// private to this file because of the private @Environment
-    /// property below, so PadHelpSheet and SettingsSheet in
-    /// ContentView.swift need this to construct the pill.
-    init(title: String, onDone: @escaping () -> Void) {
-        self.title = title
-        self.onDone = onDone
-    }
-
-    @Environment(\.colorScheme) private var colorScheme
-
     var body: some View {
         ZStack {
             Capsule()
                 .fill(.ultraThinMaterial)
-                .overlay(
-                    // Light mode only (v1.0.53): the gray veil, as
-                    // on the cards — the pill read as flat white.
-                    Group {
-                        if colorScheme == .light {
-                            Capsule().fill(Color.glassVeil)
-                        }
-                    }
-                )
                 .overlay(
                     Capsule()
                         .stroke(Color.primary.opacity(0.12), lineWidth: 1)
