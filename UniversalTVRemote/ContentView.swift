@@ -2032,9 +2032,10 @@ private struct SwipePadView: View {
         UserDefaults.standard.set(size.height, forKey: "padMeasuredHeight")
     }
     /// Press feedback (v1.0.34, retuned in v1.0.47 and v1.0.51,
-    /// simplified in v1.0.52 — the tilt does the talking now: 14°
-    /// toward the finger, scale barely 0.995 — so a tap reads as a
-    /// tilt, not a press inward): while a finger is down the pad
+    /// simplified in v1.0.52 — the tilt does the talking now: 8°
+    /// toward the finger (v1.0.53: back from 14° — his field test
+    /// found 14° over-rotated), scale barely 0.995 — so a tap reads
+    /// as a tilt, not a press inward): while a finger is down the pad
     /// dips toward it and springs back on lift.
     @State private var isPressed = false
     @State private var pressLocation: CGPoint? = nil
@@ -2105,7 +2106,7 @@ private struct SwipePadView: View {
 
     /// Tilt toward the finger while pressed (v1.0.34, stronger in
     /// v1.0.44, stronger again in v1.0.47, and again in v1.0.51,
-    /// simplified in v1.0.52): at most 14°, around the axis
+    /// simplified in v1.0.52): at most 8°, around the axis
     /// perpendicular to the offset from center, so the pad feels
     /// like a platform tipping toward the thumb — strongest at the
     /// corners. A dead-center press doesn't tilt at all — it only
@@ -2115,7 +2116,7 @@ private struct SwipePadView: View {
               padSize.width > 0, padSize.height > 0 else { return 0 }
         let dx = loc.x / padSize.width - 0.5
         let dy = loc.y / padSize.height - 0.5
-        return min(1, sqrt(dx * dx + dy * dy) * 2.5) * 14
+        return min(1, sqrt(dx * dx + dy * dy) * 2.5) * 8
     }
     private var tiltAxis: (x: CGFloat, y: CGFloat, z: CGFloat) {
         guard let loc = pressLocation,
@@ -2226,7 +2227,7 @@ private struct SwipePadView: View {
             .frame(height: height)
             // Press feedback (v1.0.47, retuned in v1.0.51,
             // simplified in v1.0.52): the pad tips toward the
-            // finger like a platform — up to 14° at the corners —
+            // finger like a platform — up to 8° at the corners —
             // and barely shrinks (0.995), so a tap reads as a tilt,
             // not a press inward. One spring, on the press state
             // only: the drag already delivers locations
