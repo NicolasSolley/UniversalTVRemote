@@ -319,8 +319,8 @@ private struct DiscoveryListView: View {
 /// Remote, redesigned in v1.0.12. The fork's remote screen is the
 /// design inspiration, not a template: a top bar (Devices pill, TV
 /// name, power), a Connected pill, then the navigation area, a
-/// Back/Home/Exit pill row, and a bottom row (keyboard, Mute), with
-/// the diagnostic status text below. Dark with a blue accent. No ads,
+/// bottom row (keyboard), with the diagnostic status text below.
+/// Dark with a blue accent. No ads,
 /// no promos, no cast button, no tab bar.
 /// What stays ours: the mic is hold-to-talk and Android TV only.
 /// Dropped to keep the layout clean: the number pad, the channel
@@ -343,7 +343,6 @@ private struct RemoteLayout {
     var pairingCardPadding: CGFloat
     var pairingCardSpacing: CGFloat
     var padSize: CGFloat
-    var pillsButtonHeight: CGFloat
     var bottomCell: CGFloat
     var circleSize: CGFloat
     var bottomRowTopPadding: CGFloat
@@ -360,11 +359,13 @@ private struct RemoteLayout {
         let topBarButton: CGFloat = extraCompact ? 40 : 44
         let pairingCardPadding: CGFloat = extraCompact ? 10 : (compact ? 12 : 14)
         let pairingCardSpacing: CGFloat = extraCompact ? 8 : (compact ? 9 : 10)
-        let pillsButtonHeight: CGFloat = extraCompact ? 44 : (compact ? 48 : 56)
         // The apps row is gone (v1.0.18), so its height went to the
         // bottom row instead; the rocker is gone in v1.0.23 (the
         // iPhone's physical volume buttons drive the TV volume now),
-        // so the bottom row is just two circles (keyboard, Mute).
+        // so the bottom row is just the keyboard circle. The
+        // Back/Home/Exit pill row is gone in v1.0.55 (the buttons
+        // live in the pad as double-tap zones now), so its height
+        // went to the pad instead — see the cap below.
         // While the pairing card is up the bottom row stays compact
         // — the card is the focus then, and the tall row would
         // overflow short screens.
@@ -385,12 +386,11 @@ private struct RemoteLayout {
         if keyboardShown { fixed += extraCompact ? 36 : (compact ? 40 : 44) }
         fixed += 38 // connection pill
         if showLGNote { fixed += 16 }
-        fixed += pillsButtonHeight // pills row — icons only, no labels
         fixed += bottomCell // bottom row — icons only, no labels
         fixed += bottomRowTopPadding // breathing room above the bottom row (v1.0.20)
         if showDiagnostic { fixed += CGFloat(diagnosticLines) * 17 }
         // Gaps between sections.
-        var sections = 6 // topBar, pill, pad, pills, bottom, diagnostic
+        var sections = 5 // topBar, pill, pad, bottom, diagnostic
         if pairingShown { sections += 1 }
         if keyboardShown { sections += 1 }
         if showLGNote { sections += 1 }
@@ -398,18 +398,17 @@ private struct RemoteLayout {
         let gaps = CGFloat(sections - 1) * gap
         // The pad absorbs the rest, down to a floor (lower while the
         // pairing card or keyboard is up — the pad isn't the focus then).
-        // Cap is the swipe pad's design height (440, v1.0.45 — the
-        // 560 cap in v1.0.41 was way too tall, 320 too short). On an
-        // iPhone 15 Plus the pad lands at ~436 (the available space
-        // binds first), so the page fills up with no dead space at
-        // the bottom.
+        // Cap is the swipe pad's design height (500, v1.0.55 — was
+        // 440; the Back/Home/Exit pill row moved into the pad, so
+        // its height went to the pad instead). On an iPhone 15 Plus
+        // the pad lands at 500 (the cap binds), so the page fills
+        // up with no dead space at the bottom.
         let floor: CGFloat = pairingShown ? 80 : (keyboardShown ? 60 : 100)
-        let padSize = min(440, max(floor, h - fixed - gaps))
+        let padSize = min(500, max(floor, h - fixed - gaps))
 
         return RemoteLayout(gap: gap, topPadding: topPadding, topBarButton: topBarButton,
                             pairingCardPadding: pairingCardPadding, pairingCardSpacing: pairingCardSpacing,
                             padSize: padSize,
-                            pillsButtonHeight: pillsButtonHeight,
                             bottomCell: bottomCell, circleSize: circleSize,
                             bottomRowTopPadding: bottomRowTopPadding,
                             diagnosticLines: diagnosticLines, showDiagnostic: showDiagnostic,
@@ -536,16 +535,11 @@ private struct RemoteView: View {
             // Navigation: the swipe pad is the one and only
             // navigation control — no D-pad, no toggle. It sizes
             // from the layout so the page fits without scrolling.
+            // Back / Home / Exit live in the pad now (v1.0.55):
+            // double-tap the bottom-left, bottom-middle, or
+            // bottom-right — the pill row is gone.
             SwipePadView(height: layout.padSize, onCommand: { send($0, haptic: $1) }, onRepeatCommand: { sendRepeat($0, haptic: $1) }, onCancelRepeats: { session.cancelRepeats() }, isKeyboardOpen: showKeyboard, onDismissKeyboard: { dismissKeyboard() })
                 .padding(.horizontal)
-
-            // Back / Home / Exit pill row — icons only, no labels.
-            HStack(spacing: 16) {
-                pillButton(systemImage: "arrow.left", label: "Back", height: layout.pillsButtonHeight) { send(.back) }
-                pillButton(systemImage: "house", label: "Home", height: layout.pillsButtonHeight) { send(.home) }
-                pillButton(systemImage: "rectangle.portrait.and.arrow.right", label: "Exit", height: layout.pillsButtonHeight) { send(.exit) }
-            }
-            .padding(.horizontal)
 
             bottomRow(layout: layout)
 
@@ -881,25 +875,6 @@ private struct RemoteView: View {
             }
             .padding(.top, layout.bottomRowTopPadding)
         }
-    }
-
-    /// Wide pill button with an icon only (Back / Home / Exit row).
-    /// The `label` is VoiceOver-only now — the visible words
-    /// underneath were removed in v1.0.19; the icons are
-    /// self-explanatory. The button height comes from the layout
-    /// so the row shrinks on short screens.
-    private func pillButton(systemImage: String, label: String, height: CGFloat, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.title2.bold())
-                .foregroundStyle(.primary)
-                .frame(maxWidth: .infinity, minHeight: height)
-                .background(surfaceFill, in: RoundedRectangle(cornerRadius: 28))
-                .overlay(RoundedRectangle(cornerRadius: 28).stroke(Color.primary.opacity(0.08), lineWidth: 1))
-                .shadow(color: surfaceShadow, radius: 6, y: 2)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
     }
 
 }

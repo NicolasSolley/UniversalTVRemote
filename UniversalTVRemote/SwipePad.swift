@@ -31,6 +31,10 @@ struct SwipePadGesture {
         case enterDown
         case enterUp
         case mute(haptic: Bool)
+        /// Bottom-row zones (v1.0.55): double-tap the bottom-left
+        /// for Back, bottom-middle for Home, bottom-right for Exit
+        /// — the same pattern as the mute zone.
+        case back(haptic: Bool), home(haptic: Bool), exit(haptic: Bool)
         case up(haptic: Bool), down(haptic: Bool), left(haptic: Bool), right(haptic: Bool)
     }
 
@@ -42,14 +46,16 @@ struct SwipePadGesture {
         case doubleDown
         case doubleSpam
         case swiping
-        /// First tap down inside the mute zone (v1.0.34): no hold
-        /// timer, no enter yet — the window decides.
-        case muteZoneDown
-        /// First tap in the mute zone lifted, waiting to see if a
-        /// second zone tap mutes or the window expires (one enter).
-        case awaitingSecondTapZone
-        /// Second tap down inside the mute zone: lift mutes.
-        case muteZoneDoubleDown
+        /// First tap down inside a double-tap zone (v1.0.34 mute,
+        /// v1.0.55 back/home/exit): no hold timer, no enter yet —
+        /// the window decides.
+        case zoneDown(PadZone)
+        /// First tap in a zone lifted, waiting to see if a second
+        /// zone tap fires the zone's action or the window expires
+        /// (one enter).
+        case awaitingSecondTapZone(PadZone)
+        /// Second tap down inside a zone: lift fires its action.
+        case zoneDoubleDown(PadZone)
     }
 
     private var state: State = .idle
@@ -68,9 +74,12 @@ struct SwipePadGesture {
     /// True after a quick tap lifted, while a second tap still
     /// counts as a double-tap.
     var isAwaitingSecondTap: Bool { state == .awaitingSecondTap }
-    /// True after a quick tap in the mute zone lifted, while a
-    /// second tap in the zone still counts as a mute.
-    var isAwaitingSecondTapZone: Bool { state == .awaitingSecondTapZone }
+    /// True after a quick tap in a zone lifted, while a second
+    /// tap in the zone still counts as the zone's action.
+    var isAwaitingSecondTapZone: Bool {
+        if case .awaitingSecondTapZone = state { return true }
+        return false
+    }
     /// True while a swipe is being held down (repeats active).
     var isSwiping: Bool { state == .swiping }
 
@@ -81,25 +90,32 @@ struct SwipePadGesture {
         touchDown(inMuteZone: false).startHold
     }
 
-    /// Finger down, with the mute-zone flag (v1.0.34). Returns the
-    /// outputs to emit now and whether the view should start the
-    /// hold onset timer. A tap inside the mute zone never starts
-    /// the hold timer — a hold in the zone is not a key hold — and
-    /// its enter is held back until the double-tap window decides:
-    /// a second zone tap mutes, the window expiring leaves one
-    /// enter, and a second tap outside the zone turns the held-back
-    /// enter into half of a normal double-tap. Muting needs both
-    /// taps in the zone: a zone tap after a middle tap is just the
-    /// second tap of a normal double-tap.
-    mutating func touchDown(inMuteZone: Bool) -> (outputs: [Output], startHold: Bool) {
-        if inMuteZone {
+    /// Finger down, with the double-tap zone (v1.0.34 mute,
+    /// v1.0.55 back/home/exit) or nil when outside any zone.
+    /// Returns the outputs to emit now and whether the view
+    /// should start the hold onset timer. A tap inside a zone
+    /// never starts the hold timer — a hold in a zone is not a
+    /// key hold — and its enter is held back until the
+    /// double-tap window decides: a second tap in the same zone
+    /// fires the zone's action, the window expiring leaves one
+    /// enter, and a second tap elsewhere turns the held-back
+    /// enter into half of a normal double-tap. Firing a zone's
+    /// action needs both taps in that zone: a zone tap after a
+    /// middle tap is just the second tap of a normal double-tap,
+    /// and a second tap in a different zone fires nothing — the
+    /// held-back enter stands and that tap is a fresh single.
+    mutating func touchDown(inZone zone: PadZone?) -> (outputs: [Output], startHold: Bool) {
+        if let zone {
             switch state {
             case .idle:
-                state = .muteZoneDown
+                state = .zoneDown(zone)
+                return ([], false)
+            case .awaitingSecondTapZone(let pending) where pending == zone:
+                state = .zoneDoubleDown(zone)
                 return ([], false)
             case .awaitingSecondTapZone:
-                state = .muteZoneDoubleDown
-                return ([], false)
+                state = .singleDown
+                return ([.enter(haptic: true)], true)
             case .awaitingSecondTap:
                 state = .doubleDown
                 return ([], true)
@@ -120,6 +136,13 @@ struct SwipePadGesture {
         default:
             return ([], false)
         }
+    }
+
+    /// Mute-zone shorthand (v1.0.34), kept for the existing
+    /// tests: a zone tap is a mute-zone tap, a non-zone tap is
+    /// outside every zone.
+    mutating func touchDown(inMuteZone: Bool) -> (outputs: [Output], startHold: Bool) {
+        touchDown(inZone: inMuteZone ? .mute : nil)
     }
 
     /// The 0.3s hold onset fired: a single tap engages the hold
@@ -188,10 +211,10 @@ struct SwipePadGesture {
             let direction = direction(of: translation)
             swipeDirection = direction
             return [.enterUp, direction]
-        case .singleDown, .doubleDown, .doubleSpam, .muteZoneDown, .muteZoneDoubleDown:
-            // A swipe starting in the mute zone is still a swipe:
-            // the zone only changes what a tap does, and no key
-            // was held down, so there is nothing to release first.
+        case .singleDown, .doubleDown, .doubleSpam, .zoneDown, .zoneDoubleDown:
+            // A swipe starting in a zone is still a swipe: the
+            // zone only changes what a tap does, and no key was
+            // held down, so there is nothing to release first.
             state = .swiping
             let direction = direction(of: translation)
             swipeDirection = direction
@@ -232,19 +255,19 @@ struct SwipePadGesture {
         case .doubleSpam:
             state = .idle
             return isSwipe ? [direction(of: translation)] : []
-        case .muteZoneDown:
+        case .zoneDown(let zone):
             // First tap in the zone lifted: hold its enter until
-            // the window decides — a second zone tap mutes, the
-            // window expiring leaves one enter.
-            state = .awaitingSecondTapZone
+            // the window decides — a second zone tap fires the
+            // zone's action, the window expiring leaves one enter.
+            state = .awaitingSecondTapZone(zone)
             return []
-        case .muteZoneDoubleDown:
+        case .zoneDoubleDown(let zone):
             if isSwipe {
                 state = .idle
                 return [direction(of: translation)]
             }
             state = .idle
-            return [.mute(haptic: true)]
+            return [zoneAction(zone, haptic: true)]
         case .swiping:
             state = .idle
             swipeDirection = nil
@@ -278,6 +301,16 @@ struct SwipePadGesture {
         swipeRepeatFired = false
     }
 
+    /// The action a zone fires on a double-tap lift.
+    private func zoneAction(_ zone: PadZone, haptic: Bool) -> Output {
+        switch zone {
+        case .mute: return .mute(haptic: haptic)
+        case .back: return .back(haptic: haptic)
+        case .home: return .home(haptic: haptic)
+        case .exit: return .exit(haptic: haptic)
+        }
+    }
+
     private func direction(of translation: CGSize, haptic: Bool = true) -> Output {
         if abs(translation.width) > abs(translation.height) {
             return translation.width > 0 ? .right(haptic: haptic) : .left(haptic: haptic)
@@ -291,7 +324,15 @@ struct SwipePadGesture {
 /// Nick sent. No picture of the remote (v1.0.39).
 /// Pad controls help, glassmorphic (v1.0.50): Nick's screenshot —
 /// frosted glass cards on the page background, floating pill
-/// header, same six gesture cards.
+/// header, nine gesture cards (v1.0.55: the three bottom zones
+/// joined the original six).
+
+/// A double-tap zone on the pad (v1.0.34 mute, v1.0.55
+/// back/home/exit): the zone only changes what a double-tap
+/// does — a single tap inside one still sends OK.
+enum PadZone: Equatable {
+    case mute, back, home, exit
+}
 
 /// Pure pad geometry (v1.0.53): the tilt and mute-zone math as
 /// functions of the pad size and the press location — no SwiftUI, so
@@ -308,8 +349,26 @@ struct PadGeometry {
     static let muteZoneMinX: CGFloat = 0.67
     static let muteZoneMinY: CGFloat = 0.25
     static let muteZoneMaxY: CGFloat = 0.75
+    /// Bottom zones (v1.0.55): the bottom quarter of the pad,
+    /// split into thirds — left is Back, middle is Home, right is
+    /// Exit. Same double-tap pattern as the mute zone.
+    static let bottomZoneMinY: CGFloat = 0.75
+    static let backZoneMaxX: CGFloat = 1 / 3
+    static let homeZoneMaxX: CGFloat = 2 / 3
 
     let size: CGSize
+
+    /// The zone a tap location falls in, if any. Mute wins on the
+    /// shared y = 0.75 boundary (a tap there is still a mute tap,
+    /// as before); back wins on the x = 1/3 boundary, home on
+    /// x = 2/3.
+    func zone(at location: CGPoint) -> PadZone? {
+        if isMuteZone(location) { return .mute }
+        if isBackZone(location) { return .back }
+        if isHomeZone(location) { return .home }
+        if isExitZone(location) { return .exit }
+        return nil
+    }
 
     /// True when a tap location (in the pad's own coordinates)
     /// falls inside the mute zone. False until the size is known.
@@ -321,6 +380,36 @@ struct PadGeometry {
         // 0.6699999999999999 in floating point and would be rejected.
         let eps: CGFloat = 1e-9
         return x + eps >= Self.muteZoneMinX && y + eps >= Self.muteZoneMinY && y - eps <= Self.muteZoneMaxY
+    }
+
+    /// True when a tap location falls in the bottom-left zone
+    /// (Back). False until the size is known.
+    func isBackZone(_ location: CGPoint) -> Bool {
+        guard size.width > 0, size.height > 0 else { return false }
+        let x = location.x / size.width
+        let y = location.y / size.height
+        let eps: CGFloat = 1e-9
+        return x - eps < Self.backZoneMaxX && y + eps >= Self.bottomZoneMinY
+    }
+
+    /// True when a tap location falls in the bottom-middle zone
+    /// (Home). False until the size is known.
+    func isHomeZone(_ location: CGPoint) -> Bool {
+        guard size.width > 0, size.height > 0 else { return false }
+        let x = location.x / size.width
+        let y = location.y / size.height
+        let eps: CGFloat = 1e-9
+        return x + eps >= Self.backZoneMaxX && x - eps < Self.homeZoneMaxX && y + eps >= Self.bottomZoneMinY
+    }
+
+    /// True when a tap location falls in the bottom-right zone
+    /// (Exit). False until the size is known.
+    func isExitZone(_ location: CGPoint) -> Bool {
+        guard size.width > 0, size.height > 0 else { return false }
+        let x = location.x / size.width
+        let y = location.y / size.height
+        let eps: CGFloat = 1e-9
+        return x + eps >= Self.homeZoneMaxX && y + eps >= Self.bottomZoneMinY
     }
 
     /// Tilt toward the finger while pressed (v1.0.34, stronger in
@@ -358,14 +447,83 @@ struct TrailPoint {
     var time: Date
 }
 
+/// One resampled point on a smoothed trail stroke: the position
+/// on the curve and the time it was touched, so the tail can
+/// taper and fade by age.
+struct SmoothedTrailPoint {
+    var point: CGPoint
+    var time: Date
+}
+
+/// QuickPath-style smoothing (v1.0.55): resamples a stroke's
+/// points through a Catmull-Rom spline into a smooth continuous
+/// curve, ~6pt apart, passing through the first and last points
+/// exactly — the iOS keyboard swipe-to-type line, not a polyline
+/// of straight segments. Pure, so tests can drive it directly.
+/// Times are interpolated along each segment, so the tail still
+/// knows its age. Long strokes are capped at 40 samples so the
+/// tapered render stays cheap.
+enum TrailSmoothing {
+    static func smoothStroke(_ stroke: [TrailPoint], step: CGFloat = 6) -> [SmoothedTrailPoint] {
+        guard stroke.count >= 2 else {
+            return stroke.map { SmoothedTrailPoint(point: $0.point, time: $0.time) }
+        }
+        var out: [SmoothedTrailPoint] = []
+        for i in 0..<(stroke.count - 1) {
+            let p0 = stroke[max(0, i - 1)].point
+            let p1 = stroke[i].point
+            let p2 = stroke[i + 1].point
+            let p3 = stroke[min(stroke.count - 1, i + 2)].point
+            let len = hypot(p2.x - p1.x, p2.y - p1.y)
+            let samples = max(1, Int(len / step))
+            for s in 0..<samples {
+                let t = CGFloat(s) / CGFloat(samples)
+                let point = catmullRom(p0: p0, p1: p1, p2: p2, p3: p3, t: t)
+                // Skip near-duplicates (a held finger samples the
+                // same spot): a zero-length segment would draw a
+                // stray round-cap dot.
+                if let last = out.last,
+                   hypot(point.x - last.point.x, point.y - last.point.y) < 0.5 { continue }
+                out.append(SmoothedTrailPoint(
+                    point: point,
+                    time: stroke[i].time.addingTimeInterval(stroke[i + 1].time.timeIntervalSince(stroke[i].time) * Double(t))))
+            }
+        }
+        let last = SmoothedTrailPoint(point: stroke.last!.point, time: stroke.last!.time)
+        if let prev = out.last, hypot(last.point.x - prev.point.x, last.point.y - prev.point.y) < 0.5 {
+            out[out.count - 1] = last
+        } else {
+            out.append(last)
+        }
+        guard out.count > 40 else { return out }
+        let stride = Double(out.count - 1) / 39.0
+        var capped: [SmoothedTrailPoint] = (0..<39).map { out[Int(Double($0) * stride)] }
+        capped.append(out.last!)
+        return capped
+    }
+
+    /// One point on a Catmull-Rom spline through p0…p3 at
+    /// parameter t (0 at p1, 1 at p2).
+    static func catmullRom(p0: CGPoint, p1: CGPoint, p2: CGPoint, p3: CGPoint, t: CGFloat) -> CGPoint {
+        let t2 = t * t
+        let t3 = t2 * t
+        return CGPoint(
+            x: 0.5 * ((2 * p1.x) + (-p0.x + p2.x) * t + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
+            y: 0.5 * ((2 * p1.y) + (-p0.y + p2.y) * t + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3))
+    }
+}
+
 /// The finger trail (v1.0.44, styles in v1.0.46), drawn in the
 /// pad's own coordinates. Each touch is its own stroke (v1.0.47):
 /// lifting and touching elsewhere starts a new streak instead of
-/// drawing a connector line across the pad. Glow is a soft wide
-/// line with a faint core, plus a soft dot under the finger. Dots
-/// is a row of circles that shrink and fade with age. Off draws
-/// nothing. Fades as a whole after lift (see trailOpacity).
-/// Everything is very faint — just enough to know the touch registered.
+/// drawing a connector line across the pad. Glow is the QuickPath
+/// line (v1.0.55): the stroke is smoothed into a continuous curve
+/// and drawn segment by segment, so the line tapers and fades
+/// with age — thick and bright at the finger, thin and faint at
+/// the tail — plus a soft dot under the finger. Dots is a row of
+/// circles that shrink and fade with age. Off draws nothing.
+/// Fades as a whole after lift (see trailOpacity). Everything is
+/// very faint — just enough to know the touch registered.
 struct PadTrailOverlay: View {
     var strokes: [[TrailPoint]]
     var opacity: Double
@@ -382,11 +540,14 @@ struct PadTrailOverlay: View {
                 EmptyView()
             case .glow:
                 ForEach(strokes.indices, id: \.self) { i in
-                    if strokes[i].count > 1 {
-                        trailPath(strokes[i])
-                            .stroke(color.opacity(0.07), style: StrokeStyle(lineWidth: 12, lineCap: .round, lineJoin: .round))
-                        trailPath(strokes[i])
-                            .stroke(color.opacity(0.16), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+                    let smoothed = TrailSmoothing.smoothStroke(strokes[i])
+                    ForEach(smoothed.indices.dropLast(), id: \.self) { j in
+                        let a = smoothed[j], b = smoothed[j + 1]
+                        let age = Date().timeIntervalSince(b.time)
+                        segmentPath(a.point, b.point)
+                            .stroke(color.opacity(haloOpacity(age)), style: StrokeStyle(lineWidth: haloWidth(age), lineCap: .round))
+                        segmentPath(a.point, b.point)
+                            .stroke(color.opacity(coreOpacity(age)), style: StrokeStyle(lineWidth: coreWidth(age), lineCap: .round))
                     }
                 }
                 if let last = strokes.last?.last {
@@ -413,14 +574,32 @@ struct PadTrailOverlay: View {
         .allowsHitTesting(false)
     }
 
-    /// The path through one stroke's points.
-    private func trailPath(_ stroke: [TrailPoint]) -> Path {
+    /// One short segment of the smoothed trail, for the tapered
+    /// render: each segment is stroked on its own, so its width
+    /// and opacity can follow the age of its head end.
+    private func segmentPath(_ from: CGPoint, _ to: CGPoint) -> Path {
         var path = Path()
-        if let first = stroke.first {
-            path.move(to: first.point)
-            for point in stroke.dropFirst() { path.addLine(to: point.point) }
-        }
+        path.move(to: from)
+        path.addLine(to: to)
         return path
+    }
+
+    /// Taper by age (points live 0.8s): the head is thick and
+    /// bright, the tail thin and faint. Linear in age, clamped.
+    private func haloWidth(_ age: TimeInterval) -> CGFloat {
+        max(3, 14 - age * 13.75)
+    }
+
+    private func haloOpacity(_ age: TimeInterval) -> Double {
+        max(0.01, 0.10 - age * 0.1125)
+    }
+
+    private func coreWidth(_ age: TimeInterval) -> CGFloat {
+        max(1, 4 - age * 3.75)
+    }
+
+    private func coreOpacity(_ age: TimeInterval) -> Double {
+        max(0.02, 0.28 - age * 0.325)
     }
 
     /// A dot's size by age: 12pt fresh, shrinking to 3pt.
@@ -449,6 +628,11 @@ struct PadTrailOverlay: View {
 ///   mutes/unmutes; the middle keeps its taps and holds exactly as
 ///   before — the zone never starts a hold, and a swipe starting in
 ///   it is still a swipe.
+/// - Bottom zones (v1.0.55): a double-tap on the bottom-left goes
+///   Back, bottom-middle goes Home, bottom-right Exits — the same
+///   pattern as the mute zone, and a single tap in any zone is
+///   still OK. The on-screen Back / Home / Exit buttons are gone:
+///   they live in the pad now.
 /// The height comes from the layout so the pad fits the
 /// non-scrollable page on small phones.
 struct SwipePadView: View {
@@ -716,11 +900,11 @@ struct SwipePadView: View {
                         } else if holdTask == nil {
                             // Finger down and still — the gesture
                             // decides single vs double-tap (and, in
-                            // the mute zone, mute vs enter); start
-                            // the hold timer when it says this is
-                            // a tap that can be held.
+                            // a zone, the zone's action vs enter);
+                            // start the hold timer when it says
+                            // this is a tap that can be held.
                             cancelWindowTask()
-                            let down = gesture.touchDown(inMuteZone: padGeometry.isMuteZone(value.location))
+                            let down = gesture.touchDown(inZone: padGeometry.zone(at: value.location))
                             emit(down.outputs)
                             if down.startHold {
                                 startHoldTask()
@@ -835,6 +1019,12 @@ struct SwipePadView: View {
                 if viaPump { onRepeatCommand(.enterUp, false) } else { onCommand(.enterUp, false) }
             case .mute(let haptic):
                 if viaPump { onRepeatCommand(.mute, haptic) } else { onCommand(.mute, haptic) }
+            case .back(let haptic):
+                if viaPump { onRepeatCommand(.back, haptic) } else { onCommand(.back, haptic) }
+            case .home(let haptic):
+                if viaPump { onRepeatCommand(.home, haptic) } else { onCommand(.home, haptic) }
+            case .exit(let haptic):
+                if viaPump { onRepeatCommand(.exit, haptic) } else { onCommand(.exit, haptic) }
             case .up(let haptic):
                 if viaPump { onRepeatCommand(.up, haptic) } else { onCommand(.up, haptic) }
             case .down(let haptic):

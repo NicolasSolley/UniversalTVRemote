@@ -893,6 +893,56 @@ final class SwipePadGestureTests: XCTestCase {
         XCTAssertEqual(g.onsetTimerFired(), [])
         XCTAssertEqual(g.touchUp(translation: still, slop: slop), [.mute(haptic: true)])
     }
+
+    // MARK: Bottom zones (v1.0.55)
+
+    func testBottomZoneDoubleTapFiresZoneAction() {
+        let cases: [(PadZone, SwipePadGesture.Output)] = [
+            (.back, .back(haptic: true)),
+            (.home, .home(haptic: true)),
+            (.exit, .exit(haptic: true)),
+        ]
+        for (zone, expected) in cases {
+            var g = SwipePadGesture()
+            XCTAssertEqual(g.touchDown(inZone: zone).outputs, [])
+            XCTAssertEqual(g.touchUp(translation: still, slop: slop), [])
+            XCTAssertTrue(g.isAwaitingSecondTapZone)
+            XCTAssertEqual(g.touchDown(inZone: zone).outputs, [])
+            XCTAssertEqual(g.touchUp(translation: still, slop: slop), [expected])
+            XCTAssertFalse(g.isAwaitingSecondTapZone)
+        }
+    }
+
+    func testSingleTapInBottomZoneStillSendsOK() {
+        // A single tap in a bottom zone is still an OK — the zone
+        // only changes what a double-tap does.
+        for zone in [PadZone.back, .home, .exit, .mute] {
+            var g = SwipePadGesture()
+            XCTAssertEqual(g.touchDown(inZone: zone).outputs, [])
+            XCTAssertEqual(g.touchUp(translation: still, slop: slop), [])
+            XCTAssertEqual(g.secondTapWindowExpired(), [.enter(haptic: true)])
+        }
+    }
+
+    func testSecondTapInDifferentZoneIsNotAnAction() {
+        var g = SwipePadGesture()
+        XCTAssertEqual(g.touchDown(inZone: .back).outputs, [])
+        XCTAssertEqual(g.touchUp(translation: still, slop: slop), [])
+        // Second tap in a different zone: no action fires — the
+        // held-back enter stands and this tap is a fresh single.
+        let second = g.touchDown(inZone: .exit)
+        XCTAssertEqual(second.outputs, [.enter(haptic: true)])
+        XCTAssertTrue(second.startHold)
+        XCTAssertEqual(g.touchUp(translation: still, slop: slop), [.enter(haptic: true)])
+    }
+
+    func testSwipeFromBottomZoneStillSwipes() {
+        var g = SwipePadGesture()
+        XCTAssertEqual(g.touchDown(inZone: .back).outputs, [])
+        XCTAssertEqual(g.moved(translation: swipeRight, slop: slop), [.right(haptic: true)])
+        XCTAssertTrue(g.isSwiping)
+        XCTAssertEqual(g.touchUp(translation: swipeRight, slop: slop), [])
+    }
 }
 
 /// The coalescing volume pump (v1.0.28): rapid steps collapse into
@@ -1440,6 +1490,41 @@ final class PadGeometryTests: XCTestCase {
         XCTAssertFalse(PadGeometry(size: .zero).isMuteZone(CGPoint(x: 10, y: 10)))
     }
 
+    func testBottomZones() {
+        // Bottom strip (y >= 0.75) split into thirds on a 360x220 pad.
+        XCTAssertTrue(pad.isBackZone(CGPoint(x: 30, y: 200)))
+        XCTAssertTrue(pad.isBackZone(CGPoint(x: 0, y: 220)))
+        XCTAssertTrue(pad.isHomeZone(CGPoint(x: 180, y: 200)))
+        XCTAssertTrue(pad.isHomeZone(CGPoint(x: 180, y: 220)))
+        XCTAssertTrue(pad.isExitZone(CGPoint(x: 330, y: 200)))
+        XCTAssertTrue(pad.isExitZone(CGPoint(x: 360, y: 220)))
+        // Above the strip is not a bottom zone.
+        XCTAssertFalse(pad.isBackZone(CGPoint(x: 30, y: 150)))
+        XCTAssertFalse(pad.isHomeZone(CGPoint(x: 180, y: 150)))
+        XCTAssertFalse(pad.isExitZone(CGPoint(x: 330, y: 150)))
+        // Thirds: the left third is back, not home or exit.
+        XCTAssertFalse(pad.isHomeZone(CGPoint(x: 30, y: 200)))
+        XCTAssertFalse(pad.isExitZone(CGPoint(x: 30, y: 200)))
+        XCTAssertFalse(pad.isBackZone(CGPoint(x: 330, y: 200)))
+        // Boundaries: x = 1/3 belongs to back (checked first),
+        // x = 2/3 belongs to home; y = 0.75 still belongs to mute.
+        XCTAssertTrue(pad.isBackZone(CGPoint(x: 120, y: 200)))
+        XCTAssertTrue(pad.isHomeZone(CGPoint(x: 240, y: 200)))
+        XCTAssertTrue(pad.isMuteZone(CGPoint(x: 300, y: 165)))
+        XCTAssertFalse(pad.isExitZone(CGPoint(x: 300, y: 165)))
+        XCTAssertFalse(PadGeometry(size: .zero).isBackZone(CGPoint(x: 10, y: 10)))
+    }
+
+    func testZoneAt() {
+        XCTAssertEqual(pad.zone(at: CGPoint(x: 300, y: 110)), .mute)
+        XCTAssertEqual(pad.zone(at: CGPoint(x: 30, y: 200)), .back)
+        XCTAssertEqual(pad.zone(at: CGPoint(x: 180, y: 200)), .home)
+        XCTAssertEqual(pad.zone(at: CGPoint(x: 330, y: 200)), .exit)
+        XCTAssertNil(pad.zone(at: CGPoint(x: 180, y: 110)))
+        XCTAssertNil(pad.zone(at: CGPoint(x: 30, y: 100)))
+        XCTAssertNil(PadGeometry(size: .zero).zone(at: CGPoint(x: 10, y: 10)))
+    }
+
     func testTiltAxis() {
         let idle = pad.tiltAxis(pressLocation: nil)
         XCTAssertEqual(idle.x, 0, accuracy: 0.0001)
@@ -1449,6 +1534,58 @@ final class PadGeometryTests: XCTestCase {
         XCTAssertEqual(corner.x, -0.5, accuracy: 0.0001)
         XCTAssertEqual(corner.y, 0.5, accuracy: 0.0001)
         XCTAssertEqual(corner.z, 0, accuracy: 0.0001)
+    }
+}
+
+/// QuickPath smoothing (v1.0.55): the resampled curve passes
+/// through the endpoints, rounds the corners, and never connects
+/// separate strokes (strokes stay separate by construction — the
+/// smoother only ever sees one stroke at a time).
+final class TrailSmoothingTests: XCTestCase {
+    func testStraightLinePassesThroughEndpoints() {
+        let now = Date()
+        let stroke = [TrailPoint(point: CGPoint(x: 0, y: 0), time: now),
+                      TrailPoint(point: CGPoint(x: 60, y: 0), time: now.addingTimeInterval(0.1)),
+                      TrailPoint(point: CGPoint(x: 120, y: 0), time: now.addingTimeInterval(0.2))]
+        let smoothed = TrailSmoothing.smoothStroke(stroke)
+        XCTAssertEqual(smoothed.first?.point.x ?? -1, 0, accuracy: 0.001)
+        XCTAssertEqual(smoothed.first?.point.y ?? -1, 0, accuracy: 0.001)
+        XCTAssertEqual(smoothed.last?.point.x ?? -1, 120, accuracy: 0.001)
+        XCTAssertEqual(smoothed.last?.point.y ?? -1, 0, accuracy: 0.001)
+        // A straight line stays straight.
+        XCTAssertTrue(smoothed.allSatisfy { abs($0.y) < 0.001 })
+        // Resampling adds points between the samples.
+        XCTAssertGreaterThan(smoothed.count, stroke.count)
+    }
+
+    func testCurveBulgesAroundACorner() {
+        // An L-shaped stroke: the smooth curve rounds the corner
+        // instead of kinking through it — a point between the
+        // corner and the end sits off the straight segment.
+        let now = Date()
+        let stroke = [TrailPoint(point: CGPoint(x: 0, y: 0), time: now),
+                      TrailPoint(point: CGPoint(x: 60, y: 0), time: now.addingTimeInterval(0.1)),
+                      TrailPoint(point: CGPoint(x: 60, y: 60), time: now.addingTimeInterval(0.2))]
+        let smoothed = TrailSmoothing.smoothStroke(stroke)
+        XCTAssertTrue(smoothed.contains { $0.point.x > 60.5 && $0.point.y > 0 && $0.point.y < 60 })
+        XCTAssertEqual(smoothed.last?.point, CGPoint(x: 60, y: 60))
+    }
+
+    func testSinglePointStaysSingle() {
+        let now = Date()
+        let stroke = [TrailPoint(point: CGPoint(x: 10, y: 10), time: now)]
+        let smoothed = TrailSmoothing.smoothStroke(stroke)
+        XCTAssertEqual(smoothed.count, 1)
+        XCTAssertEqual(smoothed.first?.point, CGPoint(x: 10, y: 10))
+    }
+
+    func testTimesIncreaseAlongTheCurve() {
+        let now = Date()
+        let stroke = (0..<5).map { TrailPoint(point: CGPoint(x: CGFloat($0) * 30, y: 0), time: now.addingTimeInterval(Double($0) * 0.1)) }
+        let smoothed = TrailSmoothing.smoothStroke(stroke)
+        for i in 1..<smoothed.count {
+            XCTAssertGreaterThanOrEqual(smoothed[i].time, smoothed[i - 1].time)
+        }
     }
 }
 
