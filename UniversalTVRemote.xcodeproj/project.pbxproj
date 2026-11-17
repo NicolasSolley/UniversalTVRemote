@@ -14,6 +14,7 @@
 		F08D3CE3D21E437FA0FE4EF2 /* DiscoveryManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 80CD84BBFED2406491377B8F /* DiscoveryManager.swift */; };
 		A02A0C51BE114E3F89BF1552 /* LGRemote.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CD2FD67F407485CAB55E035 /* LGRemote.swift */; };
 		E13D7CE15CE2B3C2EBD60A0E /* PadCover.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FCDC9CF689DFFAE931C3946 /* PadCover.swift */; };
+		E6BD831E0109675D1E788892 /* PadHelpSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB84C7CBD0B455B27EF93C66 /* PadHelpSheet.swift */; };
 		749C8D3ED7D7E3480099517D /* PadTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58E38B6821CEDA884A4DEB2D /* PadTheme.swift */; };
 		A52E001078134AE38526D169 /* Protobuf.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA9B5E5F4CA24427A2F337B8 /* Protobuf.swift */; };
 		D546F55F73E241329EE35BD9 /* RemoteSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38C67934C3434D1F94494DE7 /* RemoteSession.swift */; };
@@ -47,6 +48,7 @@
 		80CD84BBFED2406491377B8F /* DiscoveryManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiscoveryManager.swift; sourceTree = "<group>"; };
 		4CD2FD67F407485CAB55E035 /* LGRemote.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LGRemote.swift; sourceTree = "<group>"; };
 		8FCDC9CF689DFFAE931C3946 /* PadCover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PadCover.swift; sourceTree = "<group>"; };
+		EB84C7CBD0B455B27EF93C66 /* PadHelpSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PadHelpSheet.swift; sourceTree = "<group>"; };
 		58E38B6821CEDA884A4DEB2D /* PadTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PadTheme.swift; sourceTree = "<group>"; };
 		CA9B5E5F4CA24427A2F337B8 /* Protobuf.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Protobuf.swift; sourceTree = "<group>"; };
 		38C67934C3434D1F94494DE7 /* RemoteSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteSession.swift; sourceTree = "<group>"; };
@@ -116,6 +118,7 @@
 				80CD84BBFED2406491377B8F /* DiscoveryManager.swift */,
 				4CD2FD67F407485CAB55E035 /* LGRemote.swift */,
 				8FCDC9CF689DFFAE931C3946 /* PadCover.swift */,
+				EB84C7CBD0B455B27EF93C66 /* PadHelpSheet.swift */,
 				58E38B6821CEDA884A4DEB2D /* PadTheme.swift */,
 				CA9B5E5F4CA24427A2F337B8 /* Protobuf.swift */,
 				38C67934C3434D1F94494DE7 /* RemoteSession.swift */,
@@ -295,6 +298,7 @@
 				749C8D3ED7D7E3480099517D /* PadTheme.swift in Sources */,
 				31F711F71729DDD720C3D265 /* SwipePad.swift in Sources */,
 				E13D7CE15CE2B3C2EBD60A0E /* PadCover.swift in Sources */,
+				E6BD831E0109675D1E788892 /* PadHelpSheet.swift in Sources */,
 				75A414E9689F4CBC9432185A /* TLSChannel.swift in Sources */,
 				5AF9BD0811EC404DA4C61FEC /* ClientIdentity.swift in Sources */,
 				BED832E1F6B84808AF16169E /* DER.swift in Sources */,

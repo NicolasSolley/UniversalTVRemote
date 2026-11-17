@@ -230,10 +230,18 @@ enum RememberedTVStore {
 /// middle ground that reaches the TV when the global broadcast
 /// doesn't.
 enum WakeOnLAN {
-    static func sendMagicPacket(mac: String, host: String) {
-        guard let bytes = macBytes(mac) else { return }
+    /// The Wake-on-LAN magic packet for a MAC (v1.0.53): six 0xFF
+    /// bytes followed by the 6 MAC bytes repeated 16 times (102
+    /// bytes). Pure, so tests check the packet shape directly.
+    static func magicPacket(mac: String) -> [UInt8]? {
+        guard let bytes = macBytes(mac) else { return nil }
         var packet = [UInt8](repeating: 0xFF, count: 6)
         for _ in 0..<16 { packet.append(contentsOf: bytes) }
+        return packet
+    }
+
+    static func sendMagicPacket(mac: String, host: String) {
+        guard let packet = magicPacket(mac: mac) else { return }
         var targets = [host]
         if let broadcast = SubnetSweep.wifiBroadcastAddress() {
             targets.append(broadcast)

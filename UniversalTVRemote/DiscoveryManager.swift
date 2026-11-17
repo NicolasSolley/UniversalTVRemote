@@ -131,7 +131,8 @@ final class DiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
     /// port is the description URL's port, not a control port — the
     /// sweep's probed control port stays. (No connect path reads
     /// TVDevice.port anyway; it is record/display metadata.)
-    private func mergeSSDP(_ found: SSDPDevice) {
+    // Internal, not private, so tests can drive the merge rules directly (v1.0.53).
+    func mergeSSDP(_ found: SSDPDevice) {
         if let index = devices.firstIndex(where: { $0.host == found.host }) {
             var existing = devices[index]
             if found.brand.supportsControl || !existing.brand.supportsControl {
@@ -168,7 +169,8 @@ final class DiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
     /// controllable brand, and a non-controllable sweep result never
     /// downgrades one either; a name that is just the IP never replaces
     /// a real friendly name.
-    private func mergeSweep(_ found: SweptDevice) {
+    // Internal, not private, so tests can drive the merge rules directly (v1.0.53).
+    func mergeSweep(_ found: SweptDevice) {
         if let index = devices.firstIndex(where: { $0.host == found.host }) {
             var existing = devices[index]
             if found.brand.supportsControl {
@@ -218,7 +220,8 @@ final class DiscoveryManager: NSObject, ObservableObject, NetServiceBrowserDeleg
         }
     }
 
-    private func sortDevices() {
+    // Internal, not private, so tests can drive the merge rules directly (v1.0.53).
+    func sortDevices() {
         devices.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
 

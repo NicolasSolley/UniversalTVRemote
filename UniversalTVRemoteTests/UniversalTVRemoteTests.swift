@@ -1108,3 +1108,363 @@ final class RepeatPumpTests: XCTestCase {
     }
 }
 
+
+// MARK: - v1.0.53 cleanup tests
+
+/// Held-key tracking (B1): a Samsung key held down stays stuck if
+/// Wi-Fi drops mid-hold, so the tracker remembers it until a Release
+/// goes out or a disconnect best-effort Releases it.
+final class HeldKeyTrackerTests: XCTestCase {
+    func testPressTracksKey() {
+        var tracker = HeldKeyTracker()
+        XCTAssertNil(tracker.heldKey)
+        tracker.pressSucceeded(.enter)
+        XCTAssertEqual(tracker.heldKey, .enter)
+    }
+
+    func testReleaseClearsMatchingKey() {
+        var tracker = HeldKeyTracker()
+        tracker.pressSucceeded(.enter)
+        tracker.releaseSucceeded(.enter)
+        XCTAssertNil(tracker.heldKey)
+    }
+
+    func testReleaseIgnoresDifferentKey() {
+        var tracker = HeldKeyTracker()
+        tracker.pressSucceeded(.enter)
+        tracker.releaseSucceeded(.back)
+        XCTAssertEqual(tracker.heldKey, .enter)
+    }
+
+    func testReleaseFailedReturnsStuckKeyAndKeepsItTracked() {
+        var tracker = HeldKeyTracker()
+        tracker.pressSucceeded(.volumeUp)
+        XCTAssertEqual(tracker.releaseFailed(.volumeUp), .volumeUp)
+        // Still tracked: a later disconnect can still free it.
+        XCTAssertEqual(tracker.heldKey, .volumeUp)
+        XCTAssertNil(tracker.releaseFailed(.enter))
+    }
+
+    func testTakeForDisconnectConsumesKey() {
+        var tracker = HeldKeyTracker()
+        XCTAssertNil(tracker.takeForDisconnect())
+        tracker.pressSucceeded(.power)
+        XCTAssertEqual(tracker.takeForDisconnect(), .power)
+        XCTAssertNil(tracker.heldKey)
+        XCTAssertNil(tracker.takeForDisconnect())
+    }
+
+    func testPressReplacesHeldKey() {
+        var tracker = HeldKeyTracker()
+        tracker.pressSucceeded(.enter)
+        tracker.pressSucceeded(.back)
+        XCTAssertEqual(tracker.heldKey, .back)
+    }
+}
+
+/// Samsung queue drain (S9): keys queued while the TV was
+/// unreachable go stale — drop them after ~5 s instead of firing a
+/// key the user forgot about minutes later.
+final class SamsungQueueTests: XCTestCase {
+    func testFreshPendingKeysDropsStaleEntries() {
+        let now = Date()
+        let queued: [(key: SamsungRemote.Key, enqueuedAt: Date)] = [
+            (.enter, now.addingTimeInterval(-10)),
+            (.back, now.addingTimeInterval(-6)),
+            (.up, now.addingTimeInterval(-1)),
+        ]
+        XCTAssertEqual(SamsungRemote.freshPendingKeys(queued, now: now), [.up])
+    }
+
+    func testFreshPendingKeysKeepsBoundaryEntry() {
+        let now = Date()
+        let queued: [(key: SamsungRemote.Key, enqueuedAt: Date)] = [
+            (.enter, now.addingTimeInterval(-4.9)),
+            (.back, now.addingTimeInterval(-5)),
+            (.up, now.addingTimeInterval(-5.1)),
+        ]
+        XCTAssertEqual(SamsungRemote.freshPendingKeys(queued, now: now), [.enter, .back])
+    }
+
+    func testFreshPendingKeysEmptyInEmptyOut() {
+        XCTAssertEqual(SamsungRemote.freshPendingKeys([], now: Date()), [])
+    }
+}
+
+/// Error mapping (S1): only connection-level errors drop
+/// `isConnected` — a TV that answered (bad reply, refused pairing)
+/// is still there.
+final class ErrorConnectionLevelTests: XCTestCase {
+    func testSamsungErrors() {
+        XCTAssertTrue(SamsungRemote.SamsungError.notConnected.isConnectionLevel)
+        XCTAssertTrue(SamsungRemote.SamsungError.timeout.isConnectionLevel)
+        XCTAssertTrue(SamsungRemote.SamsungError.denied.isConnectionLevel)
+        XCTAssertFalse(SamsungRemote.SamsungError.invalidResponse.isConnectionLevel)
+    }
+
+    func testLGErrors() {
+        XCTAssertTrue(LGError.notConnected.isConnectionLevel)
+        XCTAssertTrue(LGError.timeout.isConnectionLevel)
+        XCTAssertFalse(LGError.pairingDenied.isConnectionLevel)
+        XCTAssertFalse(LGError.pairingTimeout.isConnectionLevel)
+        XCTAssertFalse(LGError.certificateChanged.isConnectionLevel)
+        XCTAssertFalse(LGError.invalidResponse.isConnectionLevel)
+        XCTAssertFalse(LGError.remoteError("x").isConnectionLevel)
+        XCTAssertFalse(LGError.blacklistOrSignature.isConnectionLevel)
+    }
+
+    func testRokuErrors() {
+        XCTAssertFalse(RokuRemote.RokuError.blocked.isConnectionLevel)
+        XCTAssertFalse(RokuRemote.RokuError.badResponse.isConnectionLevel)
+    }
+}
+
+/// Double-connect guard (S2): a second connect while one is in
+/// flight is a no-op — it must not race the socket or the busy state.
+/// Driven by setting `isBusy` directly so no network is involved.
+@MainActor
+final class RemoteSessionDoubleConnectTests: XCTestCase {
+    private func samsungDevice() -> TVDevice {
+        TVDevice(id: "test:samsung", name: "Test Samsung", brand: .samsung,
+                 host: "192.0.2.1", port: 8002, source: .sweep)
+    }
+
+    func testSecondConnectWhileBusyIsANoOp() async {
+        let session = RemoteSession(device: samsungDevice())
+        XCTAssertFalse(session.isBusy)
+        session.isBusy = true
+        let before = session.status
+        await session.connect()
+        XCTAssertTrue(session.isBusy)
+        XCTAssertEqual(session.status, before)
+    }
+
+    func testConnectWithoutControlReturnsEarly() async {
+        let device = TVDevice(id: "test:other", name: "Test Other", brand: .other,
+                              host: "192.0.2.1", source: .sweep)
+        let session = RemoteSession(device: device)
+        await session.connect()
+        XCTAssertFalse(session.isBusy)
+        XCTAssertEqual(session.status, "This device was found, but there's no public way to control it from an app.")
+    }
+}
+
+/// Discovery merge rules (S7): the SSDP port is the description
+/// URL's port, not a control port — the sweep's probed port stays;
+/// a merge never downgrades a controllable brand; in-place updates
+/// re-sort.
+@MainActor
+final class DiscoveryMergeTests: XCTestCase {
+    private func ssdp(host: String, name: String, brand: TVDevice.Brand, port: Int) -> SSDPDevice {
+        SSDPDevice(usn: "uuid:\(host)", location: "http://\(host):\(port)/desc.xml",
+                   name: name, brand: brand, host: host, port: port, model: nil, manufacturer: nil)
+    }
+
+    private func sweep(host: String, name: String, brand: TVDevice.Brand, port: Int) -> SweptDevice {
+        SweptDevice(name: name, brand: brand, host: host, port: port, model: nil, manufacturer: nil)
+    }
+
+    func testMergeSSDPKeepsSweepControlPort() {
+        let manager = DiscoveryManager()
+        manager.mergeSweep(sweep(host: "192.168.1.50", name: "Samsung TV", brand: .samsung, port: 8002))
+        manager.mergeSSDP(ssdp(host: "192.168.1.50", name: "Samsung TV", brand: .samsung, port: 80))
+        XCTAssertEqual(manager.devices.count, 1)
+        XCTAssertEqual(manager.devices[0].port, 8002)
+    }
+
+    func testMergeSSDPResortsAfterInPlaceRename() {
+        let manager = DiscoveryManager()
+        manager.mergeSweep(sweep(host: "192.168.1.2", name: "Zebra", brand: .samsung, port: 8002))
+        manager.mergeSweep(sweep(host: "192.168.1.3", name: "Alpha", brand: .samsung, port: 8002))
+        XCTAssertEqual(manager.devices.map(\.name), ["Alpha", "Zebra"])
+        manager.mergeSSDP(ssdp(host: "192.168.1.3", name: "Zulu", brand: .samsung, port: 80))
+        XCTAssertEqual(manager.devices.map(\.name), ["Zebra", "Zulu"])
+    }
+
+    func testMergeSweepDoesNotDowngradeControllableBrand() {
+        let manager = DiscoveryManager()
+        manager.mergeSweep(sweep(host: "192.168.1.50", name: "TV", brand: .samsung, port: 8002))
+        manager.mergeSweep(sweep(host: "192.168.1.50", name: "TV", brand: .other, port: 8000))
+        XCTAssertEqual(manager.devices[0].brand, .samsung)
+        XCTAssertEqual(manager.devices[0].port, 8002)
+    }
+
+    func testMergeSweepUpgradesNonControllableBrand() {
+        let manager = DiscoveryManager()
+        manager.mergeSweep(sweep(host: "192.168.1.50", name: "TV", brand: .other, port: 8000))
+        manager.mergeSweep(sweep(host: "192.168.1.50", name: "TV", brand: .samsung, port: 8002))
+        XCTAssertEqual(manager.devices[0].brand, .samsung)
+        XCTAssertEqual(manager.devices[0].port, 8002)
+    }
+
+    func testMergeSSDPDoesNotEraseControllableBrand() {
+        let manager = DiscoveryManager()
+        manager.mergeSweep(sweep(host: "192.168.1.50", name: "TV", brand: .samsung, port: 8002))
+        manager.mergeSSDP(ssdp(host: "192.168.1.50", name: "TV", brand: .other, port: 80))
+        XCTAssertEqual(manager.devices[0].brand, .samsung)
+    }
+
+    func testMergeSSDPControllableBrandReplaces() {
+        let manager = DiscoveryManager()
+        manager.mergeSweep(sweep(host: "192.168.1.50", name: "TV", brand: .other, port: 8000))
+        manager.mergeSSDP(ssdp(host: "192.168.1.50", name: "TV", brand: .lg, port: 80))
+        XCTAssertEqual(manager.devices[0].brand, .lg)
+    }
+}
+
+/// Protobuf framer edges (S6): a corrupt length prefix and an
+/// unbounded buffer both drop the buffer instead of trapping or
+/// growing forever, and framing resyncs on the next message.
+final class ProtoFramerTests: XCTestCase {
+    private func frame(_ payload: [UInt8]) -> Data {
+        Data(ProtoWriter.varint(UInt64(payload.count)) + payload)
+    }
+
+    func testValidFrameRoundTrips() {
+        var framer = ProtoFramer()
+        framer.append(frame([1, 2, 3]))
+        XCTAssertEqual(framer.next(), [1, 2, 3])
+        XCTAssertNil(framer.next())
+    }
+
+    func testPartialFrameCompletes() {
+        var framer = ProtoFramer()
+        framer.append(Data(ProtoWriter.varint(5) + [1, 2]))
+        XCTAssertNil(framer.next())
+        framer.append(Data([3, 4, 5]))
+        XCTAssertEqual(framer.next(), [1, 2, 3, 4, 5])
+    }
+
+    func testOversizedLengthPrefixReturnsNilAndClearsBuffer() {
+        var framer = ProtoFramer()
+        framer.append(Data(ProtoWriter.varint(ProtoFramer.maxFrameLength + 1)))
+        XCTAssertNil(framer.next())
+        // The buffer was dropped: a valid frame after it still parses.
+        framer.append(frame([9, 9]))
+        XCTAssertEqual(framer.next(), [9, 9])
+    }
+
+    func testHugeAppendIsCapped() {
+        var framer = ProtoFramer()
+        framer.append(Data(repeating: 0, count: ProtoFramer.maxBufferLength + 1))
+        XCTAssertNil(framer.next())
+        framer.append(frame([7]))
+        XCTAssertEqual(framer.next(), [7])
+    }
+
+    func testWireTypeTwoLengthBeyondBufferIsNil() {
+        // Field 1, wire type 2, declared length 10, only 2 bytes present.
+        XCTAssertNil(ProtoMessage([0x0A, 0x0A, 0x01, 0x02]))
+    }
+
+    func testWireTypeTwoValidBytesFieldParses() {
+        var w = ProtoWriter()
+        w.data(field: 1, [0xAA, 0xBB])
+        guard let message = ProtoMessage(w.bytes) else {
+            return XCTFail("valid bytes field should parse")
+        }
+        guard case .bytes(let bytes)? = message.fields[1]?.first else {
+            return XCTFail("expected a bytes value for field 1")
+        }
+        XCTAssertEqual(bytes, [0xAA, 0xBB])
+    }
+}
+
+/// Wake-on-LAN packet shape (N7): six 0xFF bytes, then the MAC
+/// repeated 16 times — 102 bytes total.
+final class WakeOnLANTests: XCTestCase {
+    func testMagicPacketShape() {
+        guard let packet = WakeOnLAN.magicPacket(mac: "aa:bb:cc:dd:ee:ff") else {
+            return XCTFail("valid MAC should build a packet")
+        }
+        XCTAssertEqual(packet.count, 102)
+        XCTAssertEqual(Array(packet[0..<6]), [UInt8](repeating: 0xFF, count: 6))
+        let mac: [UInt8] = [0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF]
+        for i in 0..<16 {
+            XCTAssertEqual(Array(packet[6 + i * 6..<12 + i * 6]), mac)
+        }
+    }
+
+    func testMagicPacketAcceptsDashes() {
+        XCTAssertEqual(WakeOnLAN.magicPacket(mac: "aa-bb-cc-dd-ee-ff")?.count, 102)
+    }
+
+    func testMagicPacketRejectsBadMAC() {
+        XCTAssertNil(WakeOnLAN.magicPacket(mac: "not-a-mac"))
+        XCTAssertNil(WakeOnLAN.magicPacket(mac: "aa:bb:cc:dd:ee"))
+        XCTAssertNil(WakeOnLAN.magicPacket(mac: "gg:bb:cc:dd:ee:ff"))
+    }
+
+    func testWifiBroadcastAddressIsNilOrDottedQuad() {
+        guard let broadcast = SubnetSweep.wifiBroadcastAddress() else { return }
+        let parts = broadcast.split(separator: ".")
+        XCTAssertEqual(parts.count, 4)
+        XCTAssertTrue(parts.allSatisfy { UInt8($0) != nil })
+    }
+}
+
+/// Pad geometry (v1.0.53): max tilt 8° (back from the over-rotated
+/// 14°), mute zone middle-right, tilt axis toward the finger.
+final class PadGeometryTests: XCTestCase {
+    private let pad = PadGeometry(size: CGSize(width: 360, height: 220))
+
+    func testCenterPressDoesNotTilt() {
+        XCTAssertEqual(pad.tiltAngle(isPressed: true, pressLocation: CGPoint(x: 180, y: 110)), 0, accuracy: 0.0001)
+    }
+
+    func testCornerPressTiltsAtMax() {
+        XCTAssertEqual(pad.tiltAngle(isPressed: true, pressLocation: CGPoint(x: 360, y: 220)), 8, accuracy: 0.0001)
+    }
+
+    func testQuarterPressTiltsProportionally() {
+        // dx 0.25, dy 0 → sqrt(0.0625) * 2.5 = 0.625 of max.
+        XCTAssertEqual(pad.tiltAngle(isPressed: true, pressLocation: CGPoint(x: 270, y: 110)), 5, accuracy: 0.0001)
+    }
+
+    func testNoPressDoesNotTilt() {
+        XCTAssertEqual(pad.tiltAngle(isPressed: false, pressLocation: CGPoint(x: 360, y: 220)), 0)
+    }
+
+    func testUnknownSizeDoesNotTilt() {
+        XCTAssertEqual(PadGeometry(size: .zero).tiltAngle(isPressed: true, pressLocation: CGPoint(x: 10, y: 10)), 0)
+    }
+
+    func testMuteZone() {
+        XCTAssertTrue(pad.isMuteZone(CGPoint(x: 300, y: 110)))
+        XCTAssertTrue(pad.isMuteZone(CGPoint(x: 241.2, y: 55)))
+        XCTAssertTrue(pad.isMuteZone(CGPoint(x: 360, y: 165)))
+        XCTAssertFalse(pad.isMuteZone(CGPoint(x: 180, y: 110)))
+        XCTAssertFalse(pad.isMuteZone(CGPoint(x: 300, y: 10)))
+        XCTAssertFalse(pad.isMuteZone(CGPoint(x: 300, y: 200)))
+        XCTAssertFalse(PadGeometry(size: .zero).isMuteZone(CGPoint(x: 10, y: 10)))
+    }
+
+    func testTiltAxis() {
+        let idle = pad.tiltAxis(pressLocation: nil)
+        XCTAssertEqual(idle.x, 0, accuracy: 0.0001)
+        XCTAssertEqual(idle.y, 1, accuracy: 0.0001)
+        XCTAssertEqual(idle.z, 0, accuracy: 0.0001)
+        let corner = pad.tiltAxis(pressLocation: CGPoint(x: 360, y: 220))
+        XCTAssertEqual(corner.x, -0.5, accuracy: 0.0001)
+        XCTAssertEqual(corner.y, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(corner.z, 0, accuracy: 0.0001)
+    }
+}
+
+/// DER guards (N5): an invalid OID or a negative integer must not
+/// crash or produce garbage bytes — encode an empty OID / zero.
+final class DERGuardTests: XCTestCase {
+    func testOIDGuardsReturnEmptyOID() {
+        let empty: [UInt8] = [0x06, 0x00]
+        XCTAssertEqual(DER.oid(""), empty)
+        XCTAssertEqual(DER.oid("1"), empty)
+        XCTAssertEqual(DER.oid("9.1"), empty)
+        XCTAssertEqual(DER.oid("3.1"), empty)
+        XCTAssertEqual(DER.oid("1.300"), empty)
+    }
+
+    func testIntegerNegativeEncodesZero() {
+        XCTAssertEqual(DER.integer(-1), [0x02, 0x01, 0x00])
+        XCTAssertEqual(DER.integer(0), [0x02, 0x01, 0x00])
+    }
+}
