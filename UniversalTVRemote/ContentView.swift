@@ -580,6 +580,15 @@ private struct RemoteView: View {
             // tab bar's height — the bar lives in its own strip
             // below the content and never overlaps the pad.
             let tabHeight: CGFloat = session.supportsControl ? 49 + geo.safeAreaInsets.bottom : 0
+            // v1.0.65: the strip under the tabs is capped at the
+            // standard home-indicator inset (34pt). The
+            // GeometryReader's bottom inset is inflated here
+            // (LiveContainer reports ~67pt), which made the bar
+            // ~116pt tall with a big dead area under the labels.
+            // The budget above still reserves the full inset, so
+            // the pad does not move: the bar renders at standard
+            // size (49 + 34) and the spacer absorbs the rest.
+            let tabStrip: CGFloat = min(geo.safeAreaInsets.bottom, 34)
             let layout = RemoteLayout.make(
                 height: geo.size.height - tabHeight,
                 pairingShown: session.awaitingPairingCode,
@@ -592,10 +601,19 @@ private struct RemoteView: View {
                 // content is a few points short of the full height.
                 Spacer(minLength: 0)
                 if session.supportsControl {
-                    tabBar(safeBottom: geo.safeAreaInsets.bottom)
+                    tabBar(safeBottom: tabStrip)
                 }
             }
         }
+        // v1.0.65: the tab bar must not ride up with the keyboard —
+        // it stays pinned at the bottom and the keyboard covers it,
+        // on both the Remote tab (TV text input) and the Apps tab
+        // (search). Keyboard handling here is state-driven
+        // (RemoteLayout keyboardShown shrinks the pad; the Apps
+        // search bar sits at the top), so nothing else needs the
+        // keyboard safe area — the GeometryReader's bottom inset
+        // stays at the home-indicator value with the keyboard up.
+        .ignoresSafeArea(.keyboard)
         // Page background (v1.0.48): Chrome dark gray / soft light
         // gray, not the system black/white extremes.
         .background(AppBackground.color(for: colorScheme).ignoresSafeArea())

@@ -26,9 +26,11 @@ import SwiftUI
 // (AppsCustomization, keyed by host). Hidden apps are not deleted —
 // they stay in Edit mode's Hidden section and can be shown again.
 // Newly installed apps appear visible at the end of the list.
-// Bulk select (v1.0.63): Select all / Deselect all plus Hide
-// selected — select everything, tap the keepers to unselect them,
-// hide the rest in one go.
+// Bulk select (v1.0.63) is gone in v1.0.65: first-run setup
+// means the user only ever picks the apps they want, so Select
+// all / Deselect all / Hide selected were dead weight. Edit mode
+// now uses a Toggle per row instead of the eye (ON = shown,
+// OFF = hidden).
 //
 // First-run setup (v1.0.64): the first time the Apps tab opens for
 // a TV, a setup screen asks which apps the user wants visible — a
@@ -232,12 +234,16 @@ enum AppsCustomization {
         return ordered + fresh
     }
 
-    /// Hide a set of ids in one go (bulk hide, v1.0.63): the ids
-    /// join `hidden` and leave `order` — the same state the
-    /// per-app eye produces, just for many ids at once (Select
-    /// all → unselect the keepers → Hide selected). Pure.
-    static func hide(ids: Set<String>, order: [String], hidden: Set<String>) -> (order: [String], hidden: Set<String>) {
-        (order.filter { !ids.contains($0) }, hidden.union(ids))
+    /// Show or hide one app (v1.0.65): the Toggle in Edit mode.
+    /// Showing appends the id to the order (it lands at the end
+    /// of Shown); hiding drops it from the order and adds it to
+    /// hidden. Pure, so tests drive it directly.
+    static func setShown(id: String, shown: Bool, order: [String], hidden: Set<String>) -> (order: [String], hidden: Set<String>) {
+        if shown {
+            let newOrder = order.contains(id) ? order : order + [id]
+            return (newOrder, hidden.subtracting([id]))
+        }
+        return (order.filter { $0 != id }, hidden.union([id]))
     }
 
     /// Apply a drag move inside the shown section to the saved
@@ -325,10 +331,6 @@ struct AppsView: View {
     @State private var order: [String] = []
     @State private var hidden: Set<String> = []
     @State private var isEditing = false
-    /// Bulk selection (v1.0.63): Edit-mode only — which shown
-    /// apps are selected for Hide selected. Resets when leaving
-    /// Edit mode (and on reload); never persisted.
-    @State private var selectedIDs: Set<String> = []
     /// Search (v1.0.64): one clean search bar, filters the grid,
     /// the setup checklist, and Edit mode by name as you type.
     @State private var searchText = ""
@@ -445,9 +447,6 @@ struct AppsView: View {
             Spacer()
             if case .loaded = loadState, setupDone {
                 Button {
-                    // Leaving Edit mode clears the bulk
-                    // selection — it is Edit-mode only.
-                    if isEditing { selectedIDs.removeAll() }
                     isEditing.toggle()
                 } label: {
                     HStack(spacing: 6) {
@@ -625,38 +624,33 @@ struct AppsView: View {
         let picked = items.filter { setupSelection.contains($0.id) }.map(\.id)
         order = picked
         hidden = Set(items.map(\.id)).subtracting(setupSelection)
-        savePrefs()
-        AppsCustomization.markSetupDone(host: host)
+        // Dismiss first (v1.0.65): the setup screen goes away in
+        // the same frame as the tap. The persistence runs on the
+        // next runloop turn, after the dismiss has landed — the
+        // Done tap used to do its UserDefaults writes and state
+        // flips synchronously on the main thread before the first
+        // post-tap frame could land, which read as a ~1s freeze.
         setupDone = true
+        let orderToSave = order, hiddenToSave = hidden
+        DispatchQueue.main.async {
+            AppsCustomization.save(host: host, order: orderToSave, hidden: hiddenToSave)
+            AppsCustomization.markSetupDone(host: host)
+        }
     }
 
     /// Edit mode: the full installed list, split into Shown (drag
-    /// to reorder, eye to hide) and Hidden (eye to show again).
-    /// A bulk bar on top offers Select all / Deselect all plus
-    /// Hide selected: tap Select all, tap the apps to keep to
-    /// unselect them, then Hide selected moves the rest to Hidden
-    /// in one go. Changes save immediately; Done just leaves
+    /// to reorder, toggle off to hide) and Hidden (toggle on to
+    /// show again). Changes save immediately; Done just leaves
     /// edit mode. Search filters both sections; dragging is off
     /// while searching (a filtered move would corrupt the order).
     private var editList: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 20) {
-                Button("Select all") { selectedIDs = Set(searchedVisibleItems.map(\.id)) }
-                Button("Deselect all") { selectedIDs.removeAll() }
-                Spacer()
-                Button(selectedIDs.isEmpty ? "Hide selected" : "Hide selected (\(selectedIDs.count))") {
-                    hideSelected()
-                }
-                .disabled(selectedIDs.isEmpty)
-            }
-            .font(.subheadline.bold())
-            .padding(.horizontal, 20)
-            .padding(.vertical, 8)
             List {
                 Section("Shown") {
                     if searchText.isEmpty {
                         ForEach(searchedVisibleItems) { item in
-                            shownRowButton(item: item)
+                            editRow(item: item, isHidden: false)
+                                .listRowBackground(GlassCardBackground())
                         }
                         .onMove { from, to in
                             order = AppsCustomization.move(order: order, visibleIDs: visibleItems.map(\.id),
@@ -665,7 +659,8 @@ struct AppsView: View {
                         }
                     } else {
                         ForEach(searchedVisibleItems) { item in
-                            shownRowButton(item: item)
+                            editRow(item: item, isHidden: false)
+                                .listRowBackground(GlassCardBackground())
                         }
                     }
                 }
@@ -697,71 +692,33 @@ struct AppsView: View {
         }
     }
 
-    /// One shown row in Edit mode: tapping toggles its bulk
-    /// selection; the eye button inside the row still hides that
-    /// one app (the innermost button wins the tap).
-    private func shownRowButton(item: TVAppItem) -> some View {
-        Button {
-            if selectedIDs.contains(item.id) {
-                selectedIDs.remove(item.id)
-            } else {
-                selectedIDs.insert(item.id)
-            }
-        } label: {
-            editRow(item: item, isHidden: false)
-        }
-        .buttonStyle(.plain)
-        .listRowBackground(GlassCardBackground())
-    }
-
     private func editRow(item: TVAppItem, isHidden: Bool) -> some View {
         HStack(spacing: 12) {
-            ZStack(alignment: .topTrailing) {
-                AppBrandTile(name: item.name)
-                    .frame(width: 44, height: 44)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                // Bulk selection (v1.0.63): a teal check badge on
-                // the tile while it is selected for Hide selected.
-                if selectedIDs.contains(item.id) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .font(.system(size: 20))
-                        .foregroundStyle(.teal)
-                        .offset(x: 8, y: -8)
-                }
-            }
+            AppBrandTile(name: item.name)
+                .frame(width: 44, height: 44)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
             Text(item.name)
                 .font(.subheadline)
                 .lineLimit(1)
             Spacer()
-            Button {
-                if isHidden {
-                    hidden.remove(item.id)
-                    order.append(item.id)
-                } else {
-                    hidden.insert(item.id)
-                    order.removeAll { $0 == item.id }
+            // Toggle (v1.0.65): ON = shown, OFF = hidden. The eye
+            // read as a state, not an action — a shown app wore a
+            // slashed eye, so it looked hidden. Toggling moves the
+            // app between the sections, exactly like the eye did.
+            Toggle("", isOn: Binding(
+                get: { !isHidden },
+                set: { shown in
+                    let result = AppsCustomization.setShown(id: item.id, shown: shown, order: order, hidden: hidden)
+                    order = result.order
+                    hidden = result.hidden
+                    savePrefs()
                 }
-                savePrefs()
-            } label: {
-                Image(systemName: isHidden ? "eye" : "eye.slash")
-                    .foregroundStyle(.secondary)
-                    .padding(8)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
+            ))
+            .toggleStyle(.switch)
+            .tint(remoteAccent)
+            .labelsHidden()
+            .accessibilityLabel("Show \(item.name)")
         }
-    }
-
-    /// Hide every selected app at once (bulk hide, v1.0.63):
-    /// the same hide the eye does, for the whole selection —
-    /// the apps move to Hidden and stay recoverable there.
-    /// Nothing is deleted from the TV.
-    private func hideSelected() {
-        let result = AppsCustomization.hide(ids: selectedIDs, order: order, hidden: hidden)
-        order = result.order
-        hidden = result.hidden
-        selectedIDs.removeAll()
-        savePrefs()
     }
 
     /// One app tile: the TV's own icon where it has one, over the
