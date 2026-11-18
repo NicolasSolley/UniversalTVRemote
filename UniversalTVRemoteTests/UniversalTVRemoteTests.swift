@@ -1902,15 +1902,36 @@ final class AppsCustomizationTests: XCTestCase {
     }
 
     func testSetShownOnAppendsToOrderAndRemovesFromHidden() {
-        let result = AppsCustomization.setShown(id: "b", shown: true, order: ["a"], hidden: ["b", "x"])
+        let result = AppsCustomization.setShown(id: "b", shown: true, order: ["a"], hidden: ["b", "x"], hiddenOrder: ["b", "x"])
         XCTAssertEqual(result.order, ["a", "b"])
         XCTAssertEqual(result.hidden, ["x"])
+        XCTAssertEqual(result.hiddenOrder, ["x"])
     }
 
     func testSetShownOffRemovesFromOrderAndAddsToHidden() {
-        let result = AppsCustomization.setShown(id: "a", shown: false, order: ["a", "b"], hidden: ["x"])
+        let result = AppsCustomization.setShown(id: "a", shown: false, order: ["a", "b"], hidden: ["x"], hiddenOrder: ["x"])
         XCTAssertEqual(result.order, ["b"])
         XCTAssertEqual(result.hidden, ["x", "a"])
+        XCTAssertEqual(result.hiddenOrder, ["x", "a"])
+    }
+
+    func testHiddenIDsRespectsSavedHiddenOrder() {
+        let ids = AppsCustomization.hiddenIDs(installedIDs: ["a", "b", "c"], hidden: ["a", "b", "c"], hiddenOrder: ["c", "a", "b"])
+        XCTAssertEqual(ids, ["c", "a", "b"])
+    }
+
+    func testHiddenIDsAppendsFreshHiddenInInstalledOrder() {
+        let ids = AppsCustomization.hiddenIDs(installedIDs: ["a", "b", "c"], hidden: ["a", "b"], hiddenOrder: ["b"])
+        XCTAssertEqual(ids, ["b", "a"])
+    }
+
+    func testMoveHiddenReordersAndKeepsStaleAfter() {
+        // "z" is uninstalled (not in the Hidden section) — the
+        // drag moves "a" after "b" and "z" keeps its place after
+        // them, same shape as testMoveReordersVisibleAndKeepsHiddenAfter.
+        let hiddenOrder = AppsCustomization.moveHidden(hiddenOrder: ["a", "b", "z"], hiddenIDs: ["a", "b"],
+                                                       from: IndexSet(integer: 0), to: 2)
+        XCTAssertEqual(hiddenOrder, ["b", "a", "z"])
     }
 }
 
@@ -1923,7 +1944,7 @@ final class AppsV1064Tests: XCTestCase {
     override func tearDown() {
         // The setup/cache helpers use UserDefaults keyed by host —
         // clean up after every test so nothing leaks between runs.
-        for key in ["apps.order.\(host)", "apps.hidden.\(host)", "apps.setupDone.\(host)", "apps.cache.\(host)"] {
+        for key in ["apps.order.\(host)", "apps.hidden.\(host)", "apps.hiddenOrder.\(host)", "apps.setupDone.\(host)", "apps.cache.\(host)"] {
             UserDefaults.standard.removeObject(forKey: key)
         }
         super.tearDown()
@@ -2009,7 +2030,7 @@ final class AppsV1064Tests: XCTestCase {
     func testSetupDoneSkippedWhenPrefsAlreadyExist() {
         // v1.0.63 users already configured this TV — setup must
         // not force them through it again.
-        AppsCustomization.save(host: host, order: ["a"], hidden: [])
+        AppsCustomization.save(host: host, order: ["a"], hidden: [], hiddenOrder: [])
         XCTAssertTrue(AppsCustomization.setupDone(host: host))
     }
 

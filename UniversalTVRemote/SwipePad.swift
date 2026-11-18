@@ -990,10 +990,11 @@ struct SwipePadView: View {
     @State private var trailStrokeOpen = false
     @State private var trailOpacity: Double = 1
     @State private var trailFadeTask: Task<Void, Never>?
-    /// Tap ripples (v1.0.64): one small expanding/fading circle
-    /// per touch-down — the visible mark a tap leaves. Purely
-    /// visual; pruned on spawn and by a delayed cleanup, so
-    /// nothing lingers.
+    /// Tap ripples (v1.0.64, tap-only v1.0.67): one small
+    /// expanding/fading circle per tap — the visible mark a tap
+    /// leaves. Spawned on lift, only when the touch was a tap
+    /// (never while dragging). Purely visual; pruned on spawn
+    /// and by a delayed cleanup, so nothing lingers.
     @State private var ripples: [TapRipple] = []
     /// Settings (v1.0.46), read live so the pad re-renders when
     /// they change: color theme, border effect, trail style.
@@ -1188,13 +1189,13 @@ struct SwipePadView: View {
                             onDismissKeyboard()
                             return
                         }
-                        // Tap ripple (v1.0.64): one small circle at
-                        // the touch point. isPressed is false only
-                        // on the first event of a touch, so each
-                        // touch — each tap of a double-tap included —
-                        // spawns exactly one. Purely visual: it
-                        // never emits a command.
-                        if !isPressed { spawnRipple(at: value.location) }
+                        // Tap ripple (v1.0.64, tap-only v1.0.67):
+                        // NOT spawned here — a touch that starts
+                        // still and then drags is a swipe, and the
+                        // ripple must never show while dragging.
+                        // It spawns on lift, in onEnded, only when
+                        // the touch never moved past the tap slop.
+                        // Purely visual: it never emits a command.
                         isPressed = true
                         pressLocation = value.location
                         addTrailPoint(value.location)
@@ -1232,6 +1233,17 @@ struct SwipePadView: View {
                             abortTouch()
                             onDismissKeyboard()
                             return
+                        }
+                        // Tap ripple (v1.0.67): only on a tap, never
+                        // while dragging. The gesture classifies a
+                        // touch as a swipe by the same rule — the
+                        // lift translation past the tap slop — so
+                        // the ripple matches what the pad did: a
+                        // tap (or tap-and-hold, which never moved)
+                        // ripples at the lift point; a swipe never
+                        // does. Each tap of a double-tap ripples.
+                        if abs(value.translation.width) < Self.tapSlop, abs(value.translation.height) < Self.tapSlop {
+                            spawnRipple(at: value.location)
                         }
                         isPressed = false
                         pressLocation = nil
@@ -1275,11 +1287,13 @@ struct SwipePadView: View {
         gesture.reset()
     }
 
-    /// Spawns a tap ripple (v1.0.64): a small circle at the touch
-    /// point that expands slightly and fades out over 0.35s.
-    /// Expired ripples are pruned on spawn, and a delayed cleanup
-    /// removes this one — no lingering state. The cleanup runs on
-    /// the main actor: @State must never mutate off it.
+    /// Spawns a tap ripple (v1.0.64, tap-only v1.0.67): a small
+    /// circle at the touch point that expands slightly and fades
+    /// out over 0.35s. Called on lift only, when the touch was a
+    /// tap — never while dragging. Expired ripples are pruned on
+    /// spawn, and a delayed cleanup removes this one — no
+    /// lingering state. The cleanup runs on the main actor:
+    /// @State must never mutate off it.
     private func spawnRipple(at location: CGPoint) {
         let now = Date()
         ripples.removeAll { now.timeIntervalSince($0.born) > TapRipple.lifetime }

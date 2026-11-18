@@ -27,10 +27,12 @@ import SwiftUI
 // (AppsCustomization, keyed by host). Hidden apps are not deleted —
 // they stay in Edit mode's Hidden section and can be shown again.
 // Newly installed apps appear visible at the end of the list.
-// Bulk select (v1.0.63) is gone in v1.0.65: first-run setup
-// means the user only ever picks the apps they want, so Select
-// all / Deselect all / Hide selected were dead weight. Edit mode
-// now uses a Toggle per row instead of the eye (ON = shown,
+// Bulk select (v1.0.63) is gone: Edit mode lost it in
+// v1.0.65, and first-run setup lost it in v1.0.67 (its
+// Select all / Deselect all / "N selected" row survived the
+// first pass). Setup means the user only ever picks the apps
+// they want, so the bulk row was dead weight. Edit mode now
+// uses a Toggle per row instead of the eye (ON = shown,
 // OFF = hidden).
 //
 // First-run setup (v1.0.64): the first time the Apps tab opens for
@@ -262,17 +264,20 @@ enum AndroidTVAppCatalog {
 enum AppsCustomization {
     private static func orderKey(host: String) -> String { "apps.order.\(host)" }
     private static func hiddenKey(host: String) -> String { "apps.hidden.\(host)" }
+    private static func hiddenOrderKey(host: String) -> String { "apps.hiddenOrder.\(host)" }
     private static func setupKey(host: String) -> String { "apps.setupDone.\(host)" }
 
-    static func load(host: String) -> (order: [String], hidden: Set<String>) {
+    static func load(host: String) -> (order: [String], hidden: Set<String>, hiddenOrder: [String]) {
         let order = UserDefaults.standard.stringArray(forKey: orderKey(host: host)) ?? []
         let hidden = Set(UserDefaults.standard.stringArray(forKey: hiddenKey(host: host)) ?? [])
-        return (order, hidden)
+        let hiddenOrder = UserDefaults.standard.stringArray(forKey: hiddenOrderKey(host: host)) ?? []
+        return (order, hidden, hiddenOrder)
     }
 
-    static func save(host: String, order: [String], hidden: Set<String>) {
+    static func save(host: String, order: [String], hidden: Set<String>, hiddenOrder: [String]) {
         UserDefaults.standard.set(order, forKey: orderKey(host: host))
         UserDefaults.standard.set(Array(hidden), forKey: hiddenKey(host: host))
+        UserDefaults.standard.set(hiddenOrder, forKey: hiddenOrderKey(host: host))
     }
 
     /// First-run setup done for this TV (v1.0.64): true once the
@@ -300,16 +305,33 @@ enum AppsCustomization {
         return ordered + fresh
     }
 
+    /// The hidden ids, in the user's order (v1.0.67): the saved
+    /// hidden order first, then any hidden app with no saved
+    /// position yet — newly hidden, or hidden before v1.0.67 —
+    /// in TV order. Mirrors visibleIDs: the Hidden section gets
+    /// its own drag reorder, so its order has to live somewhere
+    /// (hidden apps are dropped from order when hidden).
+    static func hiddenIDs(installedIDs: [String], hidden: Set<String>, hiddenOrder: [String]) -> [String] {
+        let hiddenInstalled = installedIDs.filter { hidden.contains($0) }
+        let ordered = hiddenOrder.filter { hiddenInstalled.contains($0) }
+        let fresh = hiddenInstalled.filter { !ordered.contains($0) }
+        return ordered + fresh
+    }
+
     /// Show or hide one app (v1.0.65): the Toggle in Edit mode.
     /// Showing appends the id to the order (it lands at the end
-    /// of Shown); hiding drops it from the order and adds it to
-    /// hidden. Pure, so tests drive it directly.
-    static func setShown(id: String, shown: Bool, order: [String], hidden: Set<String>) -> (order: [String], hidden: Set<String>) {
+    /// of Shown) and drops it from the hidden order; hiding
+    /// drops it from the order and adds it to hidden and to the
+    /// end of the hidden order (it lands at the bottom of
+    /// Hidden — the user can drag it up). Pure, so tests drive
+    /// it directly.
+    static func setShown(id: String, shown: Bool, order: [String], hidden: Set<String>, hiddenOrder: [String]) -> (order: [String], hidden: Set<String>, hiddenOrder: [String]) {
         if shown {
             let newOrder = order.contains(id) ? order : order + [id]
-            return (newOrder, hidden.subtracting([id]))
+            return (newOrder, hidden.subtracting([id]), hiddenOrder.filter { $0 != id })
         }
-        return (order.filter { $0 != id }, hidden.union([id]))
+        let newHiddenOrder = hiddenOrder.contains(id) ? hiddenOrder : hiddenOrder + [id]
+        return (order.filter { $0 != id }, hidden.union([id]), newHiddenOrder)
     }
 
     /// Apply a drag move inside the shown section to the saved
@@ -320,6 +342,18 @@ enum AppsCustomization {
         var moved = visibleIDs
         moved.move(fromOffsets: from, toOffset: to)
         let rest = order.filter { !moved.contains($0) }
+        return moved + rest
+    }
+
+    /// Apply a drag move inside the Hidden section to the saved
+    /// hidden order (v1.0.67): the moved hidden ids take their
+    /// new positions; saved hidden-order ids that are no longer
+    /// installed keep their relative order after them. Same
+    /// shape as move. Pure.
+    static func moveHidden(hiddenOrder: [String], hiddenIDs: [String], from: IndexSet, to: Int) -> [String] {
+        var moved = hiddenIDs
+        moved.move(fromOffsets: from, toOffset: to)
+        let rest = hiddenOrder.filter { !moved.contains($0) }
         return moved + rest
     }
 
@@ -396,6 +430,10 @@ struct AppsView: View {
     @State private var items: [TVAppItem] = []
     @State private var order: [String] = []
     @State private var hidden: Set<String> = []
+    /// The Hidden section's own reorder (v1.0.67) — same role
+    /// as order, but for the hidden apps (they are dropped from
+    /// order when hidden, so their position lives here).
+    @State private var hiddenOrder: [String] = []
     @State private var isEditing = false
     /// Search (v1.0.64): one clean search bar, filters the grid,
     /// the setup checklist, and Edit mode by name as you type.
@@ -422,7 +460,11 @@ struct AppsView: View {
     }
 
     private var hiddenItems: [TVAppItem] {
-        items.filter { hidden.contains($0.id) }
+        let ids = AppsCustomization.hiddenIDs(installedIDs: items.map(\.id), hidden: hidden, hiddenOrder: hiddenOrder)
+        // First wins on a duplicate id (a TV list shouldn't have
+        // one — but a duplicate must never crash the page).
+        let byID = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return ids.compactMap { byID[$0] }
     }
 
     /// The lists filtered by the search bar (v1.0.64).
@@ -632,17 +674,6 @@ struct AppsView: View {
             .padding(.horizontal, 20)
             .padding(.top, 8)
             searchBar
-            HStack(spacing: 20) {
-                Button("Select all") { setupSelection = Set(items.map(\.id)) }
-                Button("Deselect all") { setupSelection.removeAll() }
-                Spacer()
-                Text("\(setupSelection.count) selected")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-            }
-            .font(.subheadline.bold())
-            .padding(.horizontal, 20)
-            .padding(.vertical, 8)
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(searchedItems) { item in
@@ -690,6 +721,9 @@ struct AppsView: View {
         let picked = items.filter { setupSelection.contains($0.id) }.map(\.id)
         order = picked
         hidden = Set(items.map(\.id)).subtracting(setupSelection)
+        // Hidden starts in TV order (v1.0.67): the unpicked apps
+        // keep the TV's list order until the user drags them.
+        hiddenOrder = items.filter { !setupSelection.contains($0.id) }.map(\.id)
         // Dismiss first (v1.0.65): the setup screen goes away in
         // the same frame as the tap. The persistence runs on the
         // next runloop turn, after the dismiss has landed — the
@@ -697,18 +731,21 @@ struct AppsView: View {
         // flips synchronously on the main thread before the first
         // post-tap frame could land, which read as a ~1s freeze.
         setupDone = true
-        let orderToSave = order, hiddenToSave = hidden
+        let orderToSave = order, hiddenToSave = hidden, hiddenOrderToSave = hiddenOrder
         DispatchQueue.main.async {
-            AppsCustomization.save(host: host, order: orderToSave, hidden: hiddenToSave)
+            AppsCustomization.save(host: host, order: orderToSave, hidden: hiddenToSave, hiddenOrder: hiddenOrderToSave)
             AppsCustomization.markSetupDone(host: host)
         }
     }
 
     /// Edit mode: the full installed list, split into Shown (drag
-    /// to reorder, toggle off to hide) and Hidden (toggle on to
-    /// show again). Changes save immediately; Done just leaves
-    /// edit mode. Search filters both sections; dragging is off
-    /// while searching (a filtered move would corrupt the order).
+    /// to reorder, toggle off to hide) and Hidden (drag to
+    /// reorder, toggle on to show again — v1.0.67: Hidden rows
+    /// have the same drag handle as Shown rows, with their own
+    /// persisted order). Changes save immediately; Done just
+    /// leaves edit mode. Search filters both sections; dragging
+    /// is off while searching (a filtered move would corrupt
+    /// the order).
     private var editList: some View {
         VStack(spacing: 0) {
             List {
@@ -732,9 +769,22 @@ struct AppsView: View {
                 }
                 if !searchedHiddenItems.isEmpty {
                     Section("Hidden") {
-                        ForEach(searchedHiddenItems) { item in
-                            editRow(item: item, isHidden: true)
-                                .listRowBackground(GlassCardBackground())
+                        if searchText.isEmpty {
+                            ForEach(searchedHiddenItems) { item in
+                                editRow(item: item, isHidden: true)
+                                    .listRowBackground(GlassCardBackground())
+                            }
+                            .onMove { from, to in
+                                hiddenOrder = AppsCustomization.moveHidden(hiddenOrder: hiddenOrder,
+                                                                            hiddenIDs: hiddenItems.map(\.id),
+                                                                            from: from, to: to)
+                                savePrefs()
+                            }
+                        } else {
+                            ForEach(searchedHiddenItems) { item in
+                                editRow(item: item, isHidden: true)
+                                    .listRowBackground(GlassCardBackground())
+                            }
                         }
                     }
                 }
@@ -774,9 +824,10 @@ struct AppsView: View {
             Toggle("", isOn: Binding(
                 get: { !isHidden },
                 set: { shown in
-                    let result = AppsCustomization.setShown(id: item.id, shown: shown, order: order, hidden: hidden)
+                    let result = AppsCustomization.setShown(id: item.id, shown: shown, order: order, hidden: hidden, hiddenOrder: hiddenOrder)
                     order = result.order
                     hidden = result.hidden
+                    hiddenOrder = result.hiddenOrder
                     savePrefs()
                 }
             ))
@@ -807,7 +858,7 @@ struct AppsView: View {
 
     private func savePrefs() {
         guard let host = session.device.host else { return }
-        AppsCustomization.save(host: host, order: order, hidden: hidden)
+        AppsCustomization.save(host: host, order: order, hidden: hidden, hiddenOrder: hiddenOrder)
     }
 
     /// Load the app list (v1.0.64): the last good list shows
@@ -829,6 +880,7 @@ struct AppsView: View {
         let prefs = AppsCustomization.load(host: host)
         order = prefs.order
         hidden = prefs.hidden
+        hiddenOrder = prefs.hiddenOrder
         setupDone = AppsCustomization.setupDone(host: host)
         // Last good list first (v1.0.64): show it at once, then
         // refresh behind it. No cache yet → the spinner.

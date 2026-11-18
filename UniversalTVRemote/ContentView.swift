@@ -579,15 +579,22 @@ private struct RemoteView: View {
             // tab bar's height — the bar lives in its own strip
             // below the content and never overlaps the pad.
             let tabHeight: CGFloat = session.supportsControl ? 49 + geo.safeAreaInsets.bottom : 0
-            // v1.0.65: the strip under the tabs is capped at the
-            // standard home-indicator inset (34pt). The
-            // GeometryReader's bottom inset is inflated here
-            // (LiveContainer reports ~67pt), which made the bar
-            // ~116pt tall with a big dead area under the labels.
-            // The budget above still reserves the full inset, so
-            // the pad does not move: the bar renders at standard
-            // size (49 + 34) and the spacer absorbs the rest.
-            let tabStrip: CGFloat = min(geo.safeAreaInsets.bottom, 34)
+            // v1.0.67: the strip under the tabs is GONE. v1.0.65
+            // capped it at 34pt, but the bar stayed ~117pt tall
+            // on device: the visible height was 49 (tab row) +
+            // 34 (strip) + 34 (the bar's background extending
+            // through the safe area to the screen edge) — the
+            // strip and the background extension are the same
+            // region counted twice. The inset was the standard
+            // 34 all along: the pad measures exactly 452pt,
+            // which only the 49+34 budget produces, so
+            // min(34, 34) was a no-op and the "inflated ~67pt"
+            // diagnosis was wrong. With the strip deleted the
+            // row sits at the bottom of the safe area, just
+            // above the home indicator, and the background runs
+            // to the screen bottom on its own. The budget above
+            // still reserves the full 49 + inset, so the pad
+            // does not move: the spacer absorbs the difference.
             let layout = RemoteLayout.make(
                 height: geo.size.height - tabHeight,
                 pairingShown: session.awaitingPairingCode,
@@ -600,7 +607,7 @@ private struct RemoteView: View {
                 // content is a few points short of the full height.
                 Spacer(minLength: 0)
                 if session.supportsControl {
-                    tabBar(safeBottom: tabStrip)
+                    tabBar()
                 }
             }
         }
@@ -1144,18 +1151,28 @@ private struct RemoteView: View {
     /// first if it is open. The Apps tab is disabled while a
     /// pairing code is awaited — the pairing card is the focus
     /// then, and the Apps list needs a paired connection anyway.
-    private func tabBar(safeBottom: CGFloat) -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 0) {
-                tabButton(tab: .remote, icon: "appletvremote.gen1", label: "Remote")
-                tabButton(tab: .apps, icon: "square.grid.2x2", label: "Apps")
-            }
-            .frame(height: 49)
-            // The home-indicator strip: part of the bar, same
-            // background, so the bar runs to the screen bottom.
-            Color.clear.frame(height: safeBottom)
+    ///
+    /// Height (v1.0.67): the bar is JUST the 49pt tab row. There
+    /// is no strip under it — the background runs to the screen
+    /// bottom on its own (ignoresSafeAreaEdges: .bottom), so the
+    /// visible bar is the standard 49 + 34 home-indicator zone.
+    /// v1.0.65 added a capped 34pt strip under the row to fix
+    /// the tall bar, but it changed nothing on device: the bar
+    /// stayed ~117pt because the visible height was 49 (row) +
+    /// 34 (strip) + 34 (the background extending through the
+    /// safe area) — the strip and the extension are the same
+    /// region counted twice. The GeometryReader's bottom inset
+    /// was the standard 34 all along (the pad measures exactly
+    /// 452pt, which only the 49+34 budget produces), so
+    /// min(34, 34) was a no-op. Deleting the strip is the fix.
+    private func tabBar() -> some View {
+        HStack(spacing: 0) {
+            tabButton(tab: .remote, icon: "appletvremote.gen1", label: "Remote")
+            tabButton(tab: .apps, icon: "square.grid.2x2", label: "Apps")
         }
-        .background(.ultraThinMaterial)
+        .frame(height: 49)
+        .frame(maxWidth: .infinity)
+        .background(.ultraThinMaterial, ignoresSafeAreaEdges: .bottom)
         .overlay(alignment: .top) {
             Divider()
         }
