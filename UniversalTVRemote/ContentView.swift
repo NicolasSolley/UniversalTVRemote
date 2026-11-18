@@ -31,11 +31,11 @@ struct ContentView: View {
                 // The remote draws its own top bar (Devices pill, TV
                 // name, power), so the navigation bar stays hidden
                 // here — no double header.
-                RemoteView(session: session, autoOpened: autoOpened, onBack: {
+                RemoteView(session: session, onBack: {
                     autoOpened = false
                     self.session = nil
                     if discovery.devices.isEmpty { discovery.scan() }
-                }, onAutoOpenFailed: { note in
+                }, autoOpened: autoOpened, onAutoOpenFailed: { note in
                     // Auto-open fallback (v1.0.63): the remembered TV
                     // didn't connect — back to the list with a plain
                     // note, never stuck on a dead connection. The
