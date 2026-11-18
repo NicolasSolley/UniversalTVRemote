@@ -421,8 +421,36 @@ struct AppsView: View {
     /// Called after an app launches, so the tab can switch back
     /// to the remote (v1.0.63's sheet dismissed on launch).
     var onLaunch: (() -> Void)? = nil
+    /// Pill visibility (v1.0.72): the parent hides the floating
+    /// pill while setup or Edit is up. Reported up through this
+    /// binding whenever the state changes (and on appear, so the
+    /// first frame is right).
+    @Binding var hidesPill: Bool
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
+    /// Bottom safe area (v1.0.72): the pill that used to float
+    /// over the bottom strip is hidden on the setup and Edit
+    /// screens, so the bottom Done button is the lowest thing on
+    /// the page — its bottom padding clears the home indicator.
+    @Environment(\.safeAreaInsets) private var safeAreaInsets
+
+    /// The pill hides while the first-run setup checklist is up
+    /// or Edit mode is open; it shows on the Apps grid only.
+    private var pillHidden: Bool { !setupDone || isEditing }
+
+    init(session: RemoteSession, hidesPill: Binding<Bool>, onLaunch: (() -> Void)? = nil) {
+        self.session = session
+        self._hidesPill = hidesPill
+        self.onLaunch = onLaunch
+        // Seed setupDone synchronously (v1.0.72): the @State
+        // starts false and load() flips it async, so without this
+        // the pill would hide for the first frame on every Apps
+        // open even when setup is long done. Same UserDefaults
+        // key load() reads, so the two can never disagree.
+        if let host = session.device.host, !host.isEmpty {
+            self._setupDone = State(initialValue: AppsCustomization.setupDone(host: host))
+        }
+    }
 
     private enum LoadState { case loading, loaded, failed(String) }
 
@@ -538,8 +566,18 @@ struct AppsView: View {
         // available — this appearance setting is the same
         // mechanism underneath it. Scoped to this page: set on
         // appear, reset on disappear.
-        .onAppear { UIScrollView.appearance().keyboardDismissMode = .onDrag }
+        .onAppear {
+            UIScrollView.appearance().keyboardDismissMode = .onDrag
+            // Pill visibility (v1.0.72): report the current state
+            // on every open — the view is created fresh each time,
+            // so the parent must hear it even before anything
+            // changes.
+            hidesPill = pillHidden
+        }
         .onDisappear { UIScrollView.appearance().keyboardDismissMode = .none }
+        // Pill visibility (v1.0.72): setup finishing or Edit
+        // opening/closing flips the pill at once.
+        .onChange(of: pillHidden) { hidesPill = $0 }
         // Coming back from the background (v1.0.64): the session's
         // driver connection may have gone stale while away — the
         // reload re-connects if needed and refreshes the list, so
@@ -572,31 +610,34 @@ struct AppsView: View {
                     .controlSize(.small)
             }
             Spacer()
-            if case .loaded = loadState, setupDone {
+            // Enter Edit mode only (v1.0.72): while editing, the
+            // header shows no Done — the bottom Done button is
+            // the exit, the same as on first-run setup, so the two
+            // screens match. The button only ever appears when not
+            // editing, so its label is always "Edit apps".
+            if case .loaded = loadState, setupDone, !isEditing {
                 Button {
                     // No animation (v1.0.68): the Apps ↔ Edit switch
-                    // — grid/list swap, Edit/Done label, pencil/
-                    // checkmark icon — must change instantly, in the
-                    // same frame. The toggle runs in a transaction
-                    // with animations disabled, so nothing on the
-                    // switch animates. This is the only place
-                    // isEditing changes.
+                    // — grid/list swap — must change instantly, in
+                    // the same frame. The toggle runs in a
+                    // transaction with animations disabled, so
+                    // nothing on the switch animates.
                     var transaction = Transaction()
                     transaction.disablesAnimations = true
                     withTransaction(transaction) { isEditing.toggle() }
-                    // Tapping Edit/Done is tapping outside the
-                    // search field — the keyboard goes away too.
+                    // Tapping Edit is tapping outside the search
+                    // field — the keyboard goes away too.
                     searchFocused = false
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: isEditing ? "checkmark" : "pencil")
-                        Text(isEditing ? "Done" : "Edit apps")
+                        Image(systemName: "pencil")
+                        Text("Edit apps")
                     }
                     .font(.subheadline.bold())
                     .padding(.horizontal, 14)
                     .padding(.vertical, 8)
-                    .background(isEditing ? remoteAccent.opacity(0.15) : Color.primary.opacity(0.08), in: Capsule())
-                    .foregroundStyle(isEditing ? remoteAccent : .primary)
+                    .background(Color.primary.opacity(0.08), in: Capsule())
+                    .foregroundStyle(.primary)
                 }
                 .buttonStyle(.plain)
             }
@@ -693,6 +734,41 @@ struct AppsView: View {
         .simultaneousGesture(TapGesture().onEnded { searchFocused = false })
     }
 
+    /// Bottom Done button (v1.0.72): the same full-width
+    /// rounded-rect button on the first-run setup list and the
+    /// Edit list, so the two screens feel familiar — same height,
+    /// same styling, same position. Fully tappable (v1.0.70):
+    /// the styling lives inside the label and contentShape makes
+    /// the whole rect a hit target. The bottom padding clears
+    /// the home indicator — the pill that used to float over this
+    /// strip is hidden on these screens, so the button is the
+    /// lowest thing on the page.
+    private func doneButton(action: @escaping () -> Void) -> some View {
+        Button(action: action) label: {
+            Text("Done")
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(remoteAccent, in: RoundedRectangle(cornerRadius: 14))
+                .contentShape(Rectangle())
+                .foregroundStyle(.white)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 12)
+        .padding(.bottom, 12 + safeAreaInsets.bottom)
+    }
+
+    /// Leave Edit mode (v1.0.72): the bottom Done button does
+    /// the same instant, animation-free exit the header's Done
+    /// used to do — the grid/list swap must land in the same
+    /// frame (v1.0.68). The keyboard goes away with it.
+    private func leaveEditMode() {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { isEditing = false }
+        searchFocused = false
+    }
+
     /// First-run setup (v1.0.64): the first time the Apps tab
     /// opens for a TV, ask which apps the user wants visible — a
     /// searchable checklist, Done to finish. The grid starts with
@@ -736,7 +812,13 @@ struct AppsView: View {
                                     .font(.subheadline)
                                     .lineLimit(1)
                                 Spacer()
+                                // Bigger check circle (v1.0.72): the
+                                // inherited body-size circle (~17pt)
+                                // read tiny next to the 56pt tiles —
+                                // it is now 28pt, same on the Edit
+                                // list, so both screens match.
                                 Image(systemName: setupSelection.contains(item.id) ? "checkmark.circle.fill" : "circle")
+                                    .font(.system(size: 28))
                                     .foregroundStyle(setupSelection.contains(item.id) ? remoteAccent : .secondary)
                             }
                             .padding(.horizontal, 20)
@@ -750,22 +832,9 @@ struct AppsView: View {
             // (v1.0.68): simultaneous, so tapping a row still
             // selects it — the dismiss rides along.
             .simultaneousGesture(TapGesture().onEnded { searchFocused = false })
-            // Whole button tappable (v1.0.70): the frame and
-            // padding used to be modifiers on the Button, so
-            // only the "Done" text itself was the hit target.
-            // The label now is the full button rect, and
-            // contentShape makes every point in it a hit.
-            Button { finishSetup() } label: {
-                Text("Done")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 14)
-                    .background(remoteAccent, in: RoundedRectangle(cornerRadius: 14))
-                    .contentShape(Rectangle())
-                    .foregroundStyle(.white)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
+            // Same Done button as Edit (v1.0.72): shared
+            // doneButton, so the two screens match exactly.
+            doneButton { finishSetup() }
         }
     }
 
@@ -875,6 +944,10 @@ struct AppsView: View {
                     .multilineTextAlignment(.center)
             }
             .padding(16)
+            // Same Done button as first-run setup (v1.0.72): the
+            // shared doneButton at the bottom, so the two screens
+            // match — the header's Done is gone while editing.
+            doneButton { leaveEditMode() }
         }
     }
 
@@ -887,24 +960,24 @@ struct AppsView: View {
                 .font(.subheadline)
                 .lineLimit(1)
             Spacer()
-            // Toggle (v1.0.65): ON = shown, OFF = hidden. The eye
-            // read as a state, not an action — a shown app wore a
-            // slashed eye, so it looked hidden. Toggling moves the
-            // app between the sections, exactly like the eye did.
-            Toggle("", isOn: Binding(
-                get: { !isHidden },
-                set: { shown in
-                    let result = AppsCustomization.setShown(id: item.id, shown: shown, order: order, hidden: hidden, hiddenOrder: hiddenOrder)
-                    order = result.order
-                    hidden = result.hidden
-                    hiddenOrder = result.hiddenOrder
-                    savePrefs()
-                }
-            ))
-            .toggleStyle(.switch)
-            .tint(remoteAccent)
-            .labelsHidden()
-            .accessibilityLabel("Show \(item.name)")
+            // Selection circle (v1.0.72): the same 28pt circle
+            // check as the first-run setup list — the switch was
+            // the odd one out and read small next to the rows, and
+            // the two screens should feel the same. Tapping it
+            // shows/hides the app, exactly like the switch did.
+            Button {
+                let result = AppsCustomization.setShown(id: item.id, shown: isHidden, order: order, hidden: hidden, hiddenOrder: hiddenOrder)
+                order = result.order
+                hidden = result.hidden
+                hiddenOrder = result.hiddenOrder
+                savePrefs()
+            } label: {
+                Image(systemName: isHidden ? "circle" : "checkmark.circle.fill")
+                    .font(.system(size: 28))
+                    .foregroundStyle(isHidden ? .secondary : remoteAccent)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(isHidden ? "Show \(item.name)" : "Hide \(item.name)")
         }
     }
 

@@ -525,6 +525,13 @@ private struct RemoteView: View {
     /// the way of the UI). Remote shows the pad; Apps shows the
     /// apps grid in place of the pad, on the same screen.
     @State private var selectedTab: RemoteTab = .remote
+    /// Pill visibility (v1.0.72): the Apps tab hides the floating
+    /// pill while the first-run setup checklist or Edit mode is up
+    /// — it covered the bottom rows and the Done button there.
+    /// AppsView reports its state up through this binding; the
+    /// pill shows on the Remote page and the Apps grid, and on
+    /// the Apps tab only when setup is done and Edit is closed.
+    @State private var appsHidesPill = false
     /// Auto-open fallback (v1.0.63): when the remote appeared, and
     /// whether the initial connection ever succeeded. The fallback
     /// fires only for the initial attempt — once connected, a later
@@ -614,13 +621,17 @@ private struct RemoteView: View {
             }
             // Floating pill tab bar (v1.0.70): a bottom overlay
             // outside the scrollable content, pinned at the
-            // bottom on every page — Remote, Apps grid, Edit list —
-            // no matter how far the user scrolls. It sits in the
-            // same 83pt strip the old bar reserved (v1.0.71:
-            // 66pt pill + 17pt bottom gap), so the pad does not
-            // grow or shift.
+            // bottom on every page — Remote, Apps grid — no matter
+            // how far the user scrolls. It sits in the same 83pt
+            // strip the old bar reserved (v1.0.71: 66pt pill +
+            // 17pt bottom gap), so the pad does not grow or shift.
+            // Hidden (v1.0.72) while the first-run setup checklist
+            // or Edit mode is up on the Apps tab — the pill covered
+            // the bottom rows and the Done button there, and those
+            // screens are setup, not navigation. The pill's size,
+            // shape, icons, words and position are unchanged.
             .overlay(alignment: .bottom) {
-                if session.supportsControl {
+                if session.supportsControl && !(selectedTab == .apps && appsHidesPill) {
                     tabBar()
                         .padding(.bottom, Self.pillBottomGap)
                 }
@@ -763,7 +774,7 @@ private struct RemoteView: View {
                 // created fresh on every switch, so the list reloads
                 // on every open. Launching an app switches back to
                 // the Remote tab.
-                AppsView(session: session) { selectedTab = .remote }
+                AppsView(session: session, hidesPill: $appsHidesPill) { selectedTab = .remote }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -1230,7 +1241,9 @@ private struct RemoteView: View {
     /// lives in the same 83pt strip the old full-width bar
     /// reserved (66 + 17 = 49 + 34), so the pad does not move.
     /// Rendered as a bottom overlay (see body), so it stays
-    /// pinned while the Apps grid / Edit list scrolls.
+    /// pinned while the Apps grid scrolls. (v1.0.72: hidden on
+    /// the setup checklist and Edit list — those screens are
+    /// setup, not navigation.)
     /// Fit proof (v1.0.71, iPhone 15 Plus): the icon+label
     /// stack is 50pt tall (22 icon + 3 spacing + 13 label +
     /// 12 vertical padding), centered in the 66pt pill with
