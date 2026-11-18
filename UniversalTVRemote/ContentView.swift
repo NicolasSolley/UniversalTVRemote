@@ -503,6 +503,12 @@ struct RemoteLayout {
     }
 }
 
+/// The remote screen's bottom tab (v1.0.64): Remote = the swipe
+/// pad, Apps = the TV's apps grid in place of the pad.
+private enum RemoteTab {
+    case remote, apps
+}
+
 private struct RemoteView: View {
     @ObservedObject var session: RemoteSession
     var onBack: () -> Void
@@ -515,8 +521,11 @@ private struct RemoteView: View {
 
     @State private var keyboardText = ""
     @State private var showKeyboard = false
-    /// Apps sheet (v1.0.63), opened from the Apps pill at the bottom.
-    @State private var showApps = false
+    /// Bottom nav bar (v1.0.64): Remote / Apps tabs on the remote
+    /// screen only — the floating "Apps" pill is gone (it got in
+    /// the way of the UI). Remote shows the pad; Apps shows the
+    /// apps grid in place of the pad, on the same screen.
+    @State private var selectedTab: RemoteTab = .remote
     /// Auto-open fallback (v1.0.63): when the remote appeared, and
     /// whether the initial connection ever succeeded. The fallback
     /// fires only for the initial attempt — once connected, a later
@@ -562,12 +571,30 @@ private struct RemoteView: View {
         // The content lives in remoteContent(layout:) — the body got
         // too big for the compiler to type-check as one expression.
         GeometryReader { geo in
+            // Tab bar (v1.0.64): a classic bottom tab bar — 49pt
+            // of tabs plus the home-indicator safe area. Its
+            // height comes out of the layout budget, so the pad
+            // does not shrink: on an iPhone 15 Plus the pad stays
+            // at its 500 cap (849 - 343 = 506 ≥ 500). On short
+            // screens the pad is below the cap and gives up the
+            // tab bar's height — the bar lives in its own strip
+            // below the content and never overlaps the pad.
+            let tabHeight: CGFloat = session.supportsControl ? 49 + geo.safeAreaInsets.bottom : 0
             let layout = RemoteLayout.make(
-                height: geo.size.height,
+                height: geo.size.height - tabHeight,
                 pairingShown: session.awaitingPairingCode,
                 keyboardShown: showKeyboard && session.capabilities.supportsTextInput,
                 isLG: session.device.brand == .lg)
-            remoteContent(layout: layout)
+            VStack(spacing: 0) {
+                remoteContent(layout: layout)
+                // The spacer pins the tab bar to the screen bottom:
+                // on the Remote tab the pad is capped, so the
+                // content is a few points short of the full height.
+                Spacer(minLength: 0)
+                if session.supportsControl {
+                    tabBar(safeBottom: geo.safeAreaInsets.bottom)
+                }
+            }
         }
         // Page background (v1.0.48): Chrome dark gray / soft light
         // gray, not the system black/white extremes.
@@ -579,7 +606,6 @@ private struct RemoteView: View {
         // touches — so the dismissing tap never also acts.
         .onTapGesture { _ = dismissKeyboardIfOpen() }
         .task { await session.connect() }
-        .sheet(isPresented: $showApps) { AppsSheet(session: session) }
         .task {
             // Auto-open re-check (v1.0.63): a fast failure (dead host
             // refuses at once) can flip isBusy back to false before
@@ -646,50 +672,60 @@ private struct RemoteView: View {
         VStack(spacing: layout.gap) {
             topBar(layout)
 
-            pairingCard(layout: layout)
+            if selectedTab == .remote {
+                pairingCard(layout: layout)
 
-            keyboardInputRow
+                keyboardInputRow
 
-            connectionRow(layout)
+                connectionRow(layout)
 
-            // LG power note — hidden on the shortest screens (it
-            // also lives in Settings); the layout budgets for it
-            // only when shown.
-            if layout.showLGNote {
-                Text("Power turns the TV off. Turn it back on with the TV's own remote.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+                // LG power note — hidden on the shortest screens (it
+                // also lives in Settings); the layout budgets for it
+                // only when shown.
+                if layout.showLGNote {
+                    Text("Power turns the TV off. Turn it back on with the TV's own remote.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                }
+
+                // Navigation: the swipe pad is the one and only
+                // navigation control — no D-pad, no toggle. It sizes
+                // from the layout so the page fits without scrolling.
+                // Back / Home / Exit live in the pad now (v1.0.55):
+                // double-tap the bottom-left, bottom-middle, or
+                // bottom-right — the pill row is gone.
+                SwipePadView(height: layout.padSize, onCommand: { send($0, haptic: $1) }, onRepeatCommand: { sendRepeat($0, haptic: $1) }, onCancelRepeats: { session.cancelRepeats() }, isKeyboardOpen: showKeyboard, onDismissKeyboard: { dismissKeyboard() }, showZones: showZones)
                     .padding(.horizontal)
-            }
 
-            // Navigation: the swipe pad is the one and only
-            // navigation control — no D-pad, no toggle. It sizes
-            // from the layout so the page fits without scrolling.
-            // Back / Home / Exit live in the pad now (v1.0.55):
-            // double-tap the bottom-left, bottom-middle, or
-            // bottom-right — the pill row is gone.
-            SwipePadView(height: layout.padSize, onCommand: { send($0, haptic: $1) }, onRepeatCommand: { sendRepeat($0, haptic: $1) }, onCancelRepeats: { session.cancelRepeats() }, isKeyboardOpen: showKeyboard, onDismissKeyboard: { dismissKeyboard() }, showZones: showZones)
-                .padding(.horizontal)
+                bottomRow(layout: layout)
 
-            bottomRow(layout: layout)
-
-            // Diagnostic status — capped to a few lines so the page
-            // fits; the full text lives in Settings. Hidden while
-            // the pairing card or keyboard is up (they show the
-            // status themselves). When connected (v1.0.32) the pill
-            // already says so, so the "Connected to …" line is
-            // dropped — only a volume-capture problem still shows
-            // down here. A volume-capture problem (audio session
-            // failed, slider missing — v1.0.26) appends one line
-            // here so a failed field test can say why.
-            if layout.showDiagnostic, let diagnosticText {
-                Text(diagnosticText)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(layout.diagnosticLines)
-                    .padding(.horizontal)
+                // Diagnostic status — capped to a few lines so the page
+                // fits; the full text lives in Settings. Hidden while
+                // the pairing card or keyboard is up (they show the
+                // status themselves). When connected (v1.0.32) the pill
+                // already says so, so the "Connected to …" line is
+                // dropped — only a volume-capture problem still shows
+                // down here. A volume-capture problem (audio session
+                // failed, slider missing — v1.0.26) appends one line
+                // here so a failed field test can say why.
+                if layout.showDiagnostic, let diagnosticText {
+                    Text(diagnosticText)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(layout.diagnosticLines)
+                        .padding(.horizontal)
+                }
+            } else {
+                // Apps tab (v1.0.64): the apps grid in place of the
+                // pad, on the same screen — not a sheet. The view is
+                // created fresh on every switch, so the list reloads
+                // on every open. Launching an app switches back to
+                // the Remote tab.
+                AppsView(session: session) { selectedTab = .remote }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .padding(.top, layout.topPadding)
@@ -1047,16 +1083,13 @@ private struct RemoteView: View {
         }
     }
 
-    /// Bottom row (v1.0.34, Apps pill v1.0.63): the keyboard button
-    /// where it's needed, plus the slim "Apps" pill that opens the
-    /// Apps page — the pill is the only thing in the row on TVs
-    /// that pop the keyboard up on their own (Android TV, LG).
-    /// The row only exists on controllable TVs; the keyboard button
-    /// still only shows where the TV doesn't auto-pop the keyboard.
-    /// The pill shares the keyboard circle's vertical center, and
-    /// the row keeps its layout-sized cell — the pad does not
-    /// shrink. Nothing here is ever a dead button. A separate view
-    /// so the body stays small enough for the compiler to type-check.
+    /// Bottom row (v1.0.34): the keyboard button where it's needed,
+    /// centered on its own now that the "Apps" pill is gone
+    /// (v1.0.64 — Apps moved to the bottom tab bar). The row only
+    /// exists on controllable TVs; the keyboard button still only
+    /// shows where the TV doesn't auto-pop the keyboard. Nothing
+    /// here is ever a dead button. A separate view so the body
+    /// stays small enough for the compiler to type-check.
     @ViewBuilder
     private func bottomRow(layout: RemoteLayout) -> some View {
         if session.supportsControl {
@@ -1080,37 +1113,59 @@ private struct RemoteView: View {
                     .accessibilityLabel("Keyboard")
                     .frame(height: layout.bottomCell)
                 }
-                appsButton(layout: layout)
                 Spacer()
             }
             .padding(.top, layout.bottomRowTopPadding)
         }
     }
 
-    /// The slim "Apps" pill (v1.0.63): opens the Apps page. It
-    /// fills the same layout cell as the keyboard button, so the
-    /// pill sits on the circle's centerline. The keyboard is
-    /// dismissed first if it is open, like the top-bar buttons.
-    private func appsButton(layout: RemoteLayout) -> some View {
-        Button {
-            if dismissKeyboardIfOpen() { return }
-            showApps = true
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "square.grid.2x2")
-                    .font(.headline)
-                Text("Apps")
-                    .font(.headline)
+    /// The bottom tab bar (v1.0.64): a standard classic tab bar —
+    /// Remote on the left, Apps on the right, icon over label,
+    /// selected tab in the theme accent. Visible only on the
+    /// remote itself (it lives in RemoteView); the devices list
+    /// never shows it. Switching to Apps dismisses the keyboard
+    /// first if it is open. The Apps tab is disabled while a
+    /// pairing code is awaited — the pairing card is the focus
+    /// then, and the Apps list needs a paired connection anyway.
+    private func tabBar(safeBottom: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                tabButton(tab: .remote, icon: "appletvremote.gen1", label: "Remote")
+                tabButton(tab: .apps, icon: "square.grid.2x2", label: "Apps")
             }
-            .padding(.horizontal, 20)
-            .frame(height: 48)
-            .background(surfaceFill, in: Capsule())
-            .overlay(Capsule().stroke(Color.primary.opacity(0.12), lineWidth: 1))
-            .shadow(color: surfaceShadow, radius: 8, y: 2)
+            .frame(height: 49)
+            // The home-indicator strip: part of the bar, same
+            // background, so the bar runs to the screen bottom.
+            Color.clear.frame(height: safeBottom)
+        }
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .top) {
+            Divider()
+        }
+    }
+
+    private func tabButton(tab: RemoteTab, icon: String, label: String) -> some View {
+        let selected = selectedTab == tab
+        let disabled = tab == .apps && session.awaitingPairingCode
+        Button {
+            if tab == .apps { _ = dismissKeyboardIfOpen() }
+            selectedTab = tab
+        } label: {
+            VStack(spacing: 3) {
+                Image(systemName: icon)
+                    .font(.system(size: 22))
+                Text(label)
+                    .font(.caption2.bold())
+            }
+            .frame(maxWidth: .infinity)
+            .foregroundStyle(selected ? remoteAccent : .secondary)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Apps")
-        .frame(height: layout.bottomCell)
+        .disabled(disabled)
+        .opacity(disabled ? 0.4 : 1)
+        .accessibilityLabel(label)
     }
 
 }

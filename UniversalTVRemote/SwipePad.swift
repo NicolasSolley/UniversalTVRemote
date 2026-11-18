@@ -581,6 +581,63 @@ enum TrailSmoothing {
     }
 }
 
+/// One tap ripple (v1.0.64): a small circle at the tap point
+/// that expands slightly and fades out — the visible mark a tap
+/// leaves, in the pad's theme color. Purely visual, separate
+/// from the drag trail: it shows even with the trail Off.
+struct TapRipple: Identifiable {
+    /// Total life: 0.35s — quick enough to read as a tap, long
+    /// enough to see.
+    static let lifetime: TimeInterval = 0.35
+    /// Diameter: 14pt fresh, expanding slightly to 30pt by the
+    /// end of its life. Pure, so tests drive it directly.
+    static let startDiameter: CGFloat = 14
+    static let endDiameter: CGFloat = 30
+    /// Peak opacity at birth.
+    static let startOpacity: Double = 0.5
+
+    static func diameter(at age: TimeInterval) -> CGFloat {
+        let p = min(1, max(0, age / lifetime))
+        return startDiameter + (endDiameter - startDiameter) * CGFloat(p)
+    }
+
+    static func opacity(at age: TimeInterval) -> Double {
+        let p = min(1, max(0, age / lifetime))
+        return startOpacity * (1 - p)
+    }
+
+    let id = UUID()
+    var location: CGPoint
+    var born: Date
+}
+
+/// The tap ripples (v1.0.64), drawn in the pad's own coordinates.
+/// A TimelineView drives the animation — each ripple's size and
+/// opacity come from its age, so there is no per-ripple state to
+/// animate. Mounted only while a ripple is alive (the pad gates
+/// it on ripples.isEmpty), so there is no animation cost at rest.
+struct TapRippleOverlay: View {
+    var ripples: [TapRipple]
+    var color: Color = .white
+
+    var body: some View {
+        TimelineView(.animation) { timeline in
+            ZStack {
+                ForEach(ripples) { ripple in
+                    let age = timeline.date.timeIntervalSince(ripple.born)
+                    if age <= TapRipple.lifetime {
+                        Circle()
+                            .fill(color.opacity(TapRipple.opacity(at: age)))
+                            .frame(width: TapRipple.diameter(at: age), height: TapRipple.diameter(at: age))
+                            .position(ripple.location)
+                    }
+                }
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
 /// The finger trail (v1.0.44, styles in v1.0.46), drawn in the
 /// pad's own coordinates. Each touch is its own stroke (v1.0.47):
 /// lifting and touching elsewhere starts a new streak instead of
@@ -933,6 +990,11 @@ struct SwipePadView: View {
     @State private var trailStrokeOpen = false
     @State private var trailOpacity: Double = 1
     @State private var trailFadeTask: Task<Void, Never>?
+    /// Tap ripples (v1.0.64): one small expanding/fading circle
+    /// per touch-down — the visible mark a tap leaves. Purely
+    /// visual; pruned on spawn and by a delayed cleanup, so
+    /// nothing lingers.
+    @State private var ripples: [TapRipple] = []
     /// Settings (v1.0.46), read live so the pad re-renders when
     /// they change: color theme, border effect, trail style.
     @AppStorage("padTheme") private var padThemeRaw = "midnight"
@@ -1065,6 +1127,20 @@ struct SwipePadView: View {
                 PadTrailOverlay(strokes: trail, opacity: trailOpacity, style: trailStyle, color: colorScheme == .light ? theme.accent : .white)
                     .clipShape(RoundedRectangle(cornerRadius: 24))
             )
+            // Tap ripple (v1.0.64): a small expanding/fading circle
+            // at each tap point — the visible mark a tap leaves, in
+            // the theme accent. Separate from the drag trail, so it
+            // shows even with the trail Off. Mounted only while a
+            // ripple is alive, so there is no animation cost at
+            // rest. Clipped to the rounded corners like the trail.
+            .overlay(
+                Group {
+                    if !ripples.isEmpty {
+                        TapRippleOverlay(ripples: ripples, color: colorScheme == .light ? theme.accent : .white)
+                            .clipShape(RoundedRectangle(cornerRadius: 24))
+                    }
+                }
+            )
             // Zone overlay (v1.0.56): faint zone lines + icons,
             // shown on demand from the remote's top bar. Purely
             // visual — .allowsHitTesting(false) inside — so taps,
@@ -1112,6 +1188,13 @@ struct SwipePadView: View {
                             onDismissKeyboard()
                             return
                         }
+                        // Tap ripple (v1.0.64): one small circle at
+                        // the touch point. isPressed is false only
+                        // on the first event of a touch, so each
+                        // touch — each tap of a double-tap included —
+                        // spawns exactly one. Purely visual: it
+                        // never emits a command.
+                        if !isPressed { spawnRipple(at: value.location) }
                         isPressed = true
                         pressLocation = value.location
                         addTrailPoint(value.location)
@@ -1185,10 +1268,27 @@ struct SwipePadView: View {
         trailFadeTask = nil
         trail.removeAll()
         trailOpacity = 1
+        ripples.removeAll()
         cancelHoldTask()
         onCancelRepeats()
         cancelWindowTask()
         gesture.reset()
+    }
+
+    /// Spawns a tap ripple (v1.0.64): a small circle at the touch
+    /// point that expands slightly and fades out over 0.35s.
+    /// Expired ripples are pruned on spawn, and a delayed cleanup
+    /// removes this one — no lingering state. The cleanup runs on
+    /// the main actor: @State must never mutate off it.
+    private func spawnRipple(at location: CGPoint) {
+        let now = Date()
+        ripples.removeAll { now.timeIntervalSince($0.born) > TapRipple.lifetime }
+        let ripple = TapRipple(location: location, born: now)
+        ripples.append(ripple)
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            ripples.removeAll { $0.id == ripple.id }
+        }
     }
 
     /// Records one finger position for the trail (v1.0.44): points

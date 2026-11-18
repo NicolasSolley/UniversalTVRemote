@@ -1,9 +1,10 @@
 import SwiftUI
 
-// AppsSheet.swift — the Apps page (v1.0.63): a sheet opened from the
-// slim "Apps" pill at the bottom of the remote screen. It shows the
-// TV's installed apps as a grid of branded tiles — tap one and it
-// launches on the TV immediately.
+// AppsSheet.swift — the Apps page. v1.0.63 it was a sheet off a
+// floating "Apps" pill; v1.0.64 it is a tab in the bottom nav bar
+// (Remote / Apps), in place of the pad — no sheet, no pill. It
+// shows the TV's installed apps as a grid of branded tiles — tap
+// one and it launches on the TV immediately.
 //
 // App list + launch per brand:
 //   Roku: ECP /query/apps + /query/icon/<id> (the TV's own icons),
@@ -28,8 +29,25 @@ import SwiftUI
 // Bulk select (v1.0.63): Select all / Deselect all plus Hide
 // selected — select everything, tap the keepers to unselect them,
 // hide the rest in one go.
+//
+// First-run setup (v1.0.64): the first time the Apps tab opens for
+// a TV, a setup screen asks which apps the user wants visible — a
+// searchable checklist, Done to finish. The grid starts with only
+// what they picked, never 50+ apps to deselect. v1.0.63 users who
+// already configured a TV skip setup (their saved prefs count).
+//
+// Reload (v1.0.64): every Apps open reloads fresh, failed loads
+// retry automatically a few times with a short backoff, and the
+// last good list is cached per TV and shown immediately while a
+// reload runs — the page is never empty while refreshing, and the
+// user never has to tap Retry.
+//
+// Duplicates (v1.0.64): the list is deduplicated before display —
+// same launch id, or the same app under two names ("HBO Max" vs
+// "Max") — one tile. Brand tiles are matched on a normalized
+// name, so renames still get their artwork.
 
-/// One app in the Apps sheet: the TV's real installed app (Roku /
+/// One app in the Apps page: the TV's real installed app (Roku /
 /// LG / Samsung) or a curated deep-link entry on Android TV, where
 /// the protocol cannot list installed apps. `id` is the launch key:
 /// the app id on Roku / Samsung / LG, the deep link on Android TV.
@@ -60,6 +78,9 @@ enum AppBrandArt {
     /// name the app's name starts with (ported from open-tv-remote's
     /// AppCatalog, v1.0.63). Sling / ESPN / TikTok are the tiles from
     /// Nick's EVOLLY screenshot that the fork's catalog doesn't have.
+    /// v1.0.64 adds the apps Nick named while scrolling (HBO Max
+    /// rides the Max tile via the alias below; Discovery+, Fubo,
+    /// Stremio, Fandango, Universal Guide get their own tiles).
     static let catalog: [(key: String, style: BrandTileStyle)] = [
         ("netflix", BrandTileStyle(background: Color(red: 0x11 / 255, green: 0x11 / 255, blue: 0x11 / 255), foreground: Color(red: 0xE5 / 255, green: 0x09 / 255, blue: 0x14 / 255), label: "NETFLIX")),
         ("youtube tv", BrandTileStyle(background: .white, foreground: Color(red: 0xCC / 255, green: 0x00 / 255, blue: 0x00 / 255), label: "YouTube TV")),
@@ -71,7 +92,7 @@ enum AppBrandArt {
         ("apple tv", BrandTileStyle(background: Color(red: 0x1C / 255, green: 0x1C / 255, blue: 0x1E / 255), foreground: .white, label: "Apple TV")),
         ("peacock", BrandTileStyle(background: .black, foreground: .white, label: "Peacock")),
         ("paramount+", BrandTileStyle(background: Color(red: 0x00 / 255, green: 0x64 / 255, blue: 0xFF / 255), foreground: .white, label: "Paramount+")),
-        ("crunchyroll", BrandTileStyle(background: Color(red: 0x1C / 255, green: 0x1C / 255, blue: 0x1E / 255), foreground: .white, label: "Crunchyroll")),
+        ("crunchyroll", BrandTileStyle(background: Color(red: 0x1C / 255, green: 0x1C / 255, blue: 0x1E / 255), foreground: Color(red: 0xE5 / 255, green: 0xA0 / 255, blue: 0x0D / 255), label: "Crunchyroll")),
         ("tubi", BrandTileStyle(background: Color(red: 0x1C / 255, green: 0x1C / 255, blue: 0x1E / 255), foreground: .white, label: "Tubi")),
         ("pluto tv", BrandTileStyle(background: Color(red: 0x1C / 255, green: 0x1C / 255, blue: 0x1E / 255), foreground: .white, label: "Pluto TV")),
         ("twitch", BrandTileStyle(background: Color(red: 0x1C / 255, green: 0x1C / 255, blue: 0x1E / 255), foreground: .white, label: "Twitch")),
@@ -82,20 +103,48 @@ enum AppBrandArt {
         ("sling", BrandTileStyle(background: Color(red: 0x00 / 255, green: 0x2A / 255, blue: 0x5C / 255), foreground: .white, label: "sling")),
         ("espn", BrandTileStyle(background: Color(red: 0xCC / 255, green: 0x00 / 255, blue: 0x00 / 255), foreground: .white, label: "ESPN")),
         ("tiktok", BrandTileStyle(background: .black, foreground: .white, label: "TikTok")),
+        ("discovery+", BrandTileStyle(background: Color(red: 0x0E / 255, green: 0x2A / 255, blue: 0x47 / 255), foreground: .white, label: "discovery+")),
+        ("fubo", BrandTileStyle(background: Color(red: 0x00 / 255, green: 0xA8 / 255, blue: 0x96 / 255), foreground: .white, label: "fubo")),
+        ("stremio", BrandTileStyle(background: Color(red: 0x6C / 255, green: 0x4C / 255, blue: 0xF1 / 255), foreground: .white, label: "Stremio")),
+        ("fandango", BrandTileStyle(background: Color(red: 0xFF / 255, green: 0x6A / 255, blue: 0x00 / 255), foreground: .white, label: "Fandango")),
+        ("universal guide", BrandTileStyle(background: Color(red: 0x23 / 255, green: 0x2B / 255, blue: 0x3E / 255), foreground: .white, label: "Universal Guide")),
     ]
+
+    /// Renames and short forms that mean the same app as a
+    /// catalog key (v1.0.64): "HBO Max" IS Max (the app was
+    /// renamed twice), "Discovery" is Discovery+.
+    static let aliases: [String: String] = [
+        "hbo max": "max",
+        "hbomax": "max",
+        "discovery": "discovery+",
+    ]
+
+    /// A name reduced to its canonical key: lowercase, trimmed,
+    /// internal whitespace collapsed, aliases resolved. "HBO Max"
+    /// and "Max" both become "max"; "  Crunchyroll  " becomes
+    /// "crunchyroll". Pure, so tests drive it directly.
+    static func canonicalKey(for name: String) -> String {
+        let normalized = name.lowercased()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: .whitespaces).filter { !$0.isEmpty }.joined(separator: " ")
+        return aliases[normalized] ?? normalized
+    }
 
     /// The brand tile for an app name, or nil when no catalog app
     /// matches (the caller falls back to the generic tile).
+    /// Matched on the canonical key, so renames and stray spaces
+    /// still get their artwork.
     static func match(name: String) -> BrandTileStyle? {
-        let lower = name.lowercased()
-        if let hit = catalog.first(where: { $0.key == lower }) { return hit.style }
+        let key = canonicalKey(for: name)
+        if let hit = catalog.first(where: { $0.key == key }) { return hit.style }
         return catalog
-            .filter { lower.hasPrefix($0.key) }
+            .filter { key.hasPrefix($0.key) }
             .max(by: { $0.key.count < $1.key.count })?.style
     }
 
     /// Generic tile for an app with no brand match: its initial
-    /// letter on a neutral tint — never a blank tile.
+    /// letter on a neutral tint — never a blank tile, and only a
+    /// last resort for truly unknown apps.
     static func generic(name: String) -> BrandTileStyle {
         let letter = name.trimmingCharacters(in: .whitespaces).prefix(1).uppercased()
         return BrandTileStyle(background: Color.primary.opacity(0.12), foreground: .primary,
@@ -108,7 +157,7 @@ enum AppBrandArt {
 }
 
 /// The Android TV fallback list (v1.0.63): the remote protocol
-/// cannot list installed apps, so the Apps sheet offers these
+/// cannot list installed apps, so the Apps page offers these
 /// popular apps and launches each by its deep link — the app opens
 /// if it is installed on the TV. Deep links from open-tv-remote's
 /// AppCatalog, verified against the fork (Nov 17): https links open
@@ -145,6 +194,7 @@ enum AndroidTVAppCatalog {
 enum AppsCustomization {
     private static func orderKey(host: String) -> String { "apps.order.\(host)" }
     private static func hiddenKey(host: String) -> String { "apps.hidden.\(host)" }
+    private static func setupKey(host: String) -> String { "apps.setupDone.\(host)" }
 
     static func load(host: String) -> (order: [String], hidden: Set<String>) {
         let order = UserDefaults.standard.stringArray(forKey: orderKey(host: host)) ?? []
@@ -155,6 +205,20 @@ enum AppsCustomization {
     static func save(host: String, order: [String], hidden: Set<String>) {
         UserDefaults.standard.set(order, forKey: orderKey(host: host))
         UserDefaults.standard.set(Array(hidden), forKey: hiddenKey(host: host))
+    }
+
+    /// First-run setup done for this TV (v1.0.64): true once the
+    /// user finished setup, OR when this TV already has saved
+    /// prefs from v1.0.63 — those users configured their apps
+    /// already, so setup must not force them through it again.
+    static func setupDone(host: String) -> Bool {
+        if UserDefaults.standard.bool(forKey: setupKey(host: host)) { return true }
+        let prefs = load(host: host)
+        return !prefs.order.isEmpty || !prefs.hidden.isEmpty
+    }
+
+    static func markSetupDone(host: String) {
+        UserDefaults.standard.set(true, forKey: setupKey(host: host))
     }
 
     /// The ids to show, in the user's order: the saved order
@@ -186,12 +250,73 @@ enum AppsCustomization {
         let rest = order.filter { !moved.contains($0) }
         return moved + rest
     }
+
+    /// Collapse duplicate apps (v1.0.64): the same launch id
+    /// twice, or the same app under two names ("HBO Max" vs
+    /// "Max") — one tile. When the same app appears twice, the
+    /// entry with a real icon wins. Pure.
+    static func deduplicate(_ items: [TVAppItem]) -> [TVAppItem] {
+        var byID: [String: Int] = [:]
+        var byName: [String: Int] = [:]
+        var out: [TVAppItem] = []
+        for item in items {
+            let nameKey = AppBrandArt.canonicalKey(for: item.name)
+            if let idx = byID[item.id] ?? byName[nameKey] {
+                if out[idx].iconURL == nil, item.iconURL != nil { out[idx] = item }
+                continue
+            }
+            byID[item.id] = out.count
+            byName[nameKey] = out.count
+            out.append(item)
+        }
+        return out
+    }
+
+    /// Search match (v1.0.64): an empty query matches everything;
+    /// otherwise a case-insensitive substring of the name. Pure.
+    static func matchesSearch(name: String, query: String) -> Bool {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !q.isEmpty else { return true }
+        return name.lowercased().contains(q)
+    }
 }
 
-struct AppsSheet: View {
+/// The last good app list, cached per TV (v1.0.64): the Apps page
+/// shows it immediately while a reload runs, so the page is never
+/// empty on a slow or failed refresh. Saved in UserDefaults keyed
+/// by the TV's host, next to the customization prefs.
+enum AppsCache {
+    private static func key(host: String) -> String { "apps.cache.\(host)" }
+
+    static func save(host: String, items: [TVAppItem]) {
+        let dicts = items.map { ["id": $0.id, "name": $0.name, "icon": $0.iconURL?.absoluteString ?? ""] }
+        UserDefaults.standard.set(dicts, forKey: key(host: host))
+    }
+
+    static func load(host: String) -> [TVAppItem]? {
+        guard let dicts = UserDefaults.standard.array(forKey: key(host: host)) as? [[String: String]] else { return nil }
+        let items = dicts.compactMap { d -> TVAppItem? in
+            guard let id = d["id"], let name = d["name"], !id.isEmpty, !name.isEmpty else { return nil }
+            let icon = d["icon"].flatMap { $0.isEmpty ? nil : URL(string: $0) }
+            return TVAppItem(id: id, name: name, iconURL: icon)
+        }
+        return items.isEmpty ? nil : items
+    }
+}
+
+/// The Apps tab (v1.0.64): the TV's installed apps as a grid of
+/// branded tiles — tap one and it launches on the TV immediately,
+/// then the tab switches back to the remote (onLaunch). The view
+/// is created fresh every time the Apps tab is selected, so the
+/// list reloads on every open — leaving the remote and coming
+/// back can never leave a stale "couldn't load" state.
+struct AppsView: View {
     @ObservedObject var session: RemoteSession
-    @Environment(\.dismiss) private var dismiss
+    /// Called after an app launches, so the tab can switch back
+    /// to the remote (v1.0.63's sheet dismissed on launch).
+    var onLaunch: (() -> Void)? = nil
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.scenePhase) private var scenePhase
 
     private enum LoadState { case loading, loaded, failed(String) }
 
@@ -204,11 +329,26 @@ struct AppsSheet: View {
     /// apps are selected for Hide selected. Resets when leaving
     /// Edit mode (and on reload); never persisted.
     @State private var selectedIDs: Set<String> = []
+    /// Search (v1.0.64): one clean search bar, filters the grid,
+    /// the setup checklist, and Edit mode by name as you type.
+    @State private var searchText = ""
+    /// First-run setup (v1.0.64): per TV — the grid starts with
+    /// only what the user picks on first open, never 50+ apps.
+    @State private var setupDone = false
+    @State private var setupSelection: Set<String> = []
+    /// Background refresh (v1.0.64): the last good list shows
+    /// while a reload is in flight; a small note says when the
+    /// refresh failed and the list is stale.
+    @State private var isRefreshing = false
+    @State private var showingStaleNote = false
+    /// A load already in flight — .task on appear plus the
+    /// foreground refresh must never stack two loads.
+    @State private var loadInFlight = false
 
     private var visibleItems: [TVAppItem] {
         let ids = AppsCustomization.visibleIDs(installedIDs: items.map(\.id), order: order, hidden: hidden)
         // First wins on a duplicate id (a TV list shouldn't have
-        // one — but a duplicate must never crash the sheet).
+        // one — but a duplicate must never crash the page).
         let byID = Dictionary(items.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         return ids.compactMap { byID[$0] }
     }
@@ -217,27 +357,24 @@ struct AppsSheet: View {
         items.filter { hidden.contains($0.id) }
     }
 
+    /// The lists filtered by the search bar (v1.0.64).
+    private var searchedVisibleItems: [TVAppItem] {
+        visibleItems.filter { AppsCustomization.matchesSearch(name: $0.name, query: searchText) }
+    }
+
+    private var searchedHiddenItems: [TVAppItem] {
+        hiddenItems.filter { AppsCustomization.matchesSearch(name: $0.name, query: searchText) }
+    }
+
+    private var searchedItems: [TVAppItem] {
+        items.filter { AppsCustomization.matchesSearch(name: $0.name, query: searchText) }
+    }
+
     private var isAndroidTV: Bool { session.device.brand == .androidTV }
 
     var body: some View {
         VStack(spacing: 0) {
-            GlassHeaderPill(title: "Apps") { dismiss() }
-                .padding(.horizontal, 16)
-                .padding(.top, 12)
-            if case .loaded = loadState {
-                HStack {
-                    Spacer()
-                    Button(isEditing ? "Done" : "Edit") {
-                        // Leaving Edit mode clears the bulk
-                        // selection — it is Edit-mode only.
-                        if isEditing { selectedIDs.removeAll() }
-                        isEditing.toggle()
-                    }
-                        .font(.subheadline.bold())
-                }
-                .padding(.horizontal, 20)
-                .padding(.top, 4)
-            }
+            header
             switch loadState {
             case .loading:
                 Spacer()
@@ -251,21 +388,109 @@ struct AppsSheet: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
+                    // Retry is only the last resort now (v1.0.64):
+                    // loads retry automatically first.
                     Button("Retry") { Task { await load() } }
                         .font(.subheadline.bold())
                 }
                 .padding(24)
                 Spacer()
             case .loaded:
-                if isEditing {
-                    editList
+                if !setupDone {
+                    setupView
                 } else {
-                    grid
+                    searchBar
+                    if showingStaleNote {
+                        Text("Couldn't refresh — showing your saved apps.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .padding(.top, 6)
+                    }
+                    if isEditing {
+                        editList
+                    } else {
+                        grid
+                    }
                 }
             }
         }
-        .background(AppBackground.color(for: colorScheme).ignoresSafeArea())
+        // The view is created fresh on every Apps-tab open, so
+        // this fires on every open — never a stale list.
         .task { await load() }
+        // Coming back from the background (v1.0.64): the session's
+        // driver connection may have gone stale while away — the
+        // reload re-connects if needed and refreshes the list, so
+        // the user never sees a dead "couldn't load" state.
+        .onChange(of: scenePhase) { phase in
+            if phase == .active { Task { await load() } }
+        }
+    }
+
+    /// Header: "Apps" title plus the Edit control. The Edit
+    /// button (v1.0.64) is an unmistakable labeled capsule —
+    /// pencil icon + "Edit apps" text (checkmark + "Done" while
+    /// editing) — instead of the bare text "Edit" nobody
+    /// recognized as a button.
+    private var header: some View {
+        HStack {
+            Text("Apps")
+                .font(.title2.bold())
+            // A small spinner while a background refresh runs
+            // (v1.0.64): the last good list is already showing,
+            // so this is just the "still loading" cue.
+            if isRefreshing {
+                ProgressView()
+                    .controlSize(.small)
+            }
+            Spacer()
+            if case .loaded = loadState, setupDone {
+                Button {
+                    // Leaving Edit mode clears the bulk
+                    // selection — it is Edit-mode only.
+                    if isEditing { selectedIDs.removeAll() }
+                    isEditing.toggle()
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: isEditing ? "checkmark" : "pencil")
+                        Text(isEditing ? "Done" : "Edit apps")
+                    }
+                    .font(.subheadline.bold())
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(isEditing ? remoteAccent.opacity(0.15) : Color.primary.opacity(0.08), in: Capsule())
+                    .foregroundStyle(isEditing ? remoteAccent : .primary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 8)
+    }
+
+    /// One clean search bar (v1.0.64): magnifier, field, clear
+    /// button. Filters the grid, the setup checklist, and Edit
+    /// mode by name as you type.
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(.secondary)
+            TextField("Search apps", text: $searchText)
+                .autocorrectionDisabled(true)
+                .textInputAutocapitalization(.never)
+            if !searchText.isEmpty {
+                Button { searchText = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 20)
+        .padding(.top, 8)
     }
 
     /// The grid of shown apps: the TV's own icon where the brand
@@ -277,18 +502,27 @@ struct AppsSheet: View {
                     Text("All apps are hidden.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-                    Text("Tap Edit to show them again.")
+                    Text("Tap Edit apps to show them again.")
                         .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 32)
+            } else if searchedVisibleItems.isEmpty {
+                VStack(spacing: 8) {
+                    Text("No apps match \"\(searchText)\".")
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
                 .padding(.top, 32)
             } else {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 12),
                                     GridItem(.flexible(), spacing: 12)], spacing: 16) {
-                    ForEach(visibleItems) { item in
+                    ForEach(searchedVisibleItems) { item in
                         Button {
-                            Task { await session.launchAppItem(item) }
-                            dismiss()
+                            Task {
+                                await session.launchAppItem(item)
+                                onLaunch?()
+                            }
                         } label: {
                             VStack(spacing: 6) {
                                 appTile(item: item)
@@ -314,17 +548,100 @@ struct AppsSheet: View {
         }
     }
 
+    /// First-run setup (v1.0.64): the first time the Apps tab
+    /// opens for a TV, ask which apps the user wants visible — a
+    /// searchable checklist, Done to finish. The grid starts with
+    /// only what they picked; everything else is hidden (and
+    /// recoverable in Edit). Nothing is visible by default, so
+    /// nobody has to deselect 50 apps.
+    private var setupView: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Choose your apps")
+                    .font(.title2.bold())
+                Text("Pick the apps you want on this TV. You can change this anytime in Edit apps.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20)
+            .padding(.top, 8)
+            searchBar
+            HStack(spacing: 20) {
+                Button("Select all") { setupSelection = Set(items.map(\.id)) }
+                Button("Deselect all") { setupSelection.removeAll() }
+                Spacer()
+                Text("\(setupSelection.count) selected")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            .font(.subheadline.bold())
+            .padding(.horizontal, 20)
+            .padding(.vertical, 8)
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(searchedItems) { item in
+                        Button {
+                            if setupSelection.contains(item.id) {
+                                setupSelection.remove(item.id)
+                            } else {
+                                setupSelection.insert(item.id)
+                            }
+                        } label: {
+                            HStack(spacing: 12) {
+                                AppBrandTile(name: item.name)
+                                    .frame(width: 44, height: 44)
+                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                                Text(item.name)
+                                    .font(.subheadline)
+                                    .lineLimit(1)
+                                Spacer()
+                                Image(systemName: setupSelection.contains(item.id) ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(setupSelection.contains(item.id) ? remoteAccent : .secondary)
+                            }
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 8)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            Button("Done") { finishSetup() }
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 14)
+                .background(remoteAccent, in: RoundedRectangle(cornerRadius: 14))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 12)
+        }
+    }
+
+    /// Finish setup: the picked apps, in the TV's list order,
+    /// become the shown set; everything else is hidden (not
+    /// deleted — recoverable in Edit). Setup is done for this TV.
+    private func finishSetup() {
+        guard let host = session.device.host else { return }
+        let picked = items.filter { setupSelection.contains($0.id) }.map(\.id)
+        order = picked
+        hidden = Set(items.map(\.id)).subtracting(setupSelection)
+        savePrefs()
+        AppsCustomization.markSetupDone(host: host)
+        setupDone = true
+    }
+
     /// Edit mode: the full installed list, split into Shown (drag
     /// to reorder, eye to hide) and Hidden (eye to show again).
     /// A bulk bar on top offers Select all / Deselect all plus
     /// Hide selected: tap Select all, tap the apps to keep to
     /// unselect them, then Hide selected moves the rest to Hidden
     /// in one go. Changes save immediately; Done just leaves
-    /// edit mode.
+    /// edit mode. Search filters both sections; dragging is off
+    /// while searching (a filtered move would corrupt the order).
     private var editList: some View {
         VStack(spacing: 0) {
             HStack(spacing: 20) {
-                Button("Select all") { selectedIDs = Set(visibleItems.map(\.id)) }
+                Button("Select all") { selectedIDs = Set(searchedVisibleItems.map(\.id)) }
                 Button("Deselect all") { selectedIDs.removeAll() }
                 Spacer()
                 Button(selectedIDs.isEmpty ? "Hide selected" : "Hide selected (\(selectedIDs.count))") {
@@ -337,32 +654,24 @@ struct AppsSheet: View {
             .padding(.vertical, 8)
             List {
                 Section("Shown") {
-                    ForEach(visibleItems) { item in
-                        Button {
-                            // Tapping a shown row toggles its bulk
-                            // selection; the eye button inside the
-                            // row still hides that one app (the
-                            // innermost button wins the tap).
-                            if selectedIDs.contains(item.id) {
-                                selectedIDs.remove(item.id)
-                            } else {
-                                selectedIDs.insert(item.id)
-                            }
-                        } label: {
-                            editRow(item: item, isHidden: false)
+                    if searchText.isEmpty {
+                        ForEach(searchedVisibleItems) { item in
+                            shownRowButton(item: item)
                         }
-                        .buttonStyle(.plain)
-                        .listRowBackground(GlassCardBackground())
-                    }
-                    .onMove { from, to in
-                        order = AppsCustomization.move(order: order, visibleIDs: visibleItems.map(\.id),
-                                                       from: from, to: to)
-                        savePrefs()
+                        .onMove { from, to in
+                            order = AppsCustomization.move(order: order, visibleIDs: visibleItems.map(\.id),
+                                                           from: from, to: to)
+                            savePrefs()
+                        }
+                    } else {
+                        ForEach(searchedVisibleItems) { item in
+                            shownRowButton(item: item)
+                        }
                     }
                 }
-                if !hiddenItems.isEmpty {
+                if !searchedHiddenItems.isEmpty {
                     Section("Hidden") {
-                        ForEach(hiddenItems) { item in
+                        ForEach(searchedHiddenItems) { item in
                             editRow(item: item, isHidden: true)
                                 .listRowBackground(GlassCardBackground())
                         }
@@ -386,6 +695,23 @@ struct AppsSheet: View {
             }
             .padding(16)
         }
+    }
+
+    /// One shown row in Edit mode: tapping toggles its bulk
+    /// selection; the eye button inside the row still hides that
+    /// one app (the innermost button wins the tap).
+    private func shownRowButton(item: TVAppItem) -> some View {
+        Button {
+            if selectedIDs.contains(item.id) {
+                selectedIDs.remove(item.id)
+            } else {
+                selectedIDs.insert(item.id)
+            }
+        } label: {
+            editRow(item: item, isHidden: false)
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(GlassCardBackground())
     }
 
     private func editRow(item: TVAppItem, isHidden: Bool) -> some View {
@@ -461,39 +787,90 @@ struct AppsSheet: View {
         AppsCustomization.save(host: host, order: order, hidden: hidden)
     }
 
+    /// Load the app list (v1.0.64): the last good list shows
+    /// immediately while a fresh load runs in the background, so
+    /// the page is never empty on a slow refresh. The fresh load
+    /// re-connects first if the session dropped (the v1.0.63 bug:
+    /// load() fired once, parked on failure, and Retry re-ran the
+    /// same fetch against the same dead connection) and retries
+    /// automatically a few times with a short backoff before
+    /// giving up — the user never has to tap Retry.
     private func load() async {
-        loadState = .loading
-        guard session.isConnected else {
-            loadState = .failed("Not connected to a TV.")
+        guard !loadInFlight else { return }
+        loadInFlight = true
+        defer { loadInFlight = false }
+        guard let host = session.device.host else {
+            loadState = .failed("Couldn't load the apps from this TV.")
             return
         }
+        let prefs = AppsCustomization.load(host: host)
+        order = prefs.order
+        hidden = prefs.hidden
+        setupDone = AppsCustomization.setupDone(host: host)
+        // Last good list first (v1.0.64): show it at once, then
+        // refresh behind it. No cache yet → the spinner.
+        if let cached = AppsCache.load(host: host), !cached.isEmpty {
+            items = AppsCustomization.deduplicate(cached)
+            loadState = .loaded
+            isRefreshing = true
+        } else {
+            loadState = .loading
+        }
+        var ok = false
+        for attempt in 1...3 {
+            guard !Task.isCancelled else { return }
+            if await fetchOnce() { ok = true; break }
+            if attempt < 3 {
+                // Backoff: 0.5s, then 1s.
+                try? await Task.sleep(nanoseconds: UInt64(500_000_000 * attempt))
+            }
+        }
+        isRefreshing = false
+        if ok {
+            loadState = .loaded
+            showingStaleNote = false
+        } else if !items.isEmpty {
+            // Still showing the last good list — say so quietly
+            // instead of swapping it for an error screen.
+            loadState = .loaded
+            showingStaleNote = true
+        } else {
+            loadState = .failed("Couldn't load the apps from this TV.")
+        }
+    }
+
+    /// One fetch attempt: re-connect first when the session
+    /// dropped, then pull the brand's list. True when a fresh
+    /// (deduplicated) list landed — and it becomes the new cache.
+    private func fetchOnce() async -> Bool {
+        if !session.isConnected && !session.isBusy {
+            await session.connect()
+        }
         await session.loadApps()
+        let fresh = AppsCustomization.deduplicate(itemsFromSession())
+        guard !fresh.isEmpty || isAndroidTV else { return false }
+        items = fresh
+        if let host = session.device.host {
+            AppsCache.save(host: host, items: fresh)
+        }
+        return true
+    }
+
+    /// The session's brand list as sheet items. Android TV's
+    /// curated set is never empty, so it never fails a load.
+    private func itemsFromSession() -> [TVAppItem] {
         switch session.device.brand {
         case .roku:
-            items = session.rokuApps.map { TVAppItem(id: $0.id, name: $0.name, iconURL: $0.iconURL) }
+            return session.rokuApps.map { TVAppItem(id: $0.id, name: $0.name, iconURL: $0.iconURL) }
         case .samsung:
             // No icon from the Tizen API — brand tiles.
-            items = session.samsungApps.map { TVAppItem(id: $0.id, name: $0.name) }
+            return session.samsungApps.map { TVAppItem(id: $0.id, name: $0.name) }
         case .lg:
-            items = session.lgApps.map { TVAppItem(id: $0.id, name: $0.name, iconURL: $0.iconURL) }
+            return session.lgApps.map { TVAppItem(id: $0.id, name: $0.name, iconURL: $0.iconURL) }
         case .androidTV:
-            items = session.androidTVApps.map { TVAppItem(id: $0.id, name: $0.name) }
+            return session.androidTVApps.map { TVAppItem(id: $0.id, name: $0.name) }
         case .airPlay, .other:
-            items = []
-        }
-        if let host = session.device.host {
-            let prefs = AppsCustomization.load(host: host)
-            order = prefs.order
-            hidden = prefs.hidden
-            selectedIDs.removeAll()
-        }
-        // A Roku / Samsung / LG with no apps at all is a failed
-        // load, not an empty TV; Android TV always has its curated
-        // list, so it never lands here.
-        if items.isEmpty && !isAndroidTV {
-            loadState = .failed("Couldn't load the apps from this TV.")
-        } else {
-            loadState = .loaded
+            return []
         }
     }
 }

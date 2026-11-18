@@ -1915,6 +1915,127 @@ final class AppsCustomizationTests: XCTestCase {
     }
 }
 
+/// Apps page v1.0.64: deduplication (same launch id, or the same
+/// app under two names — "HBO Max" vs "Max" — one tile), search
+/// matching, first-run setup state, and the last-good-list cache.
+final class AppsV1064Tests: XCTestCase {
+    private let host = "test-host-v1064"
+
+    override func tearDown() {
+        // The setup/cache helpers use UserDefaults keyed by host —
+        // clean up after every test so nothing leaks between runs.
+        for key in ["apps.order.\(host)", "apps.hidden.\(host)", "apps.setupDone.\(host)", "apps.cache.\(host)"] {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+        super.tearDown()
+    }
+
+    func testDeduplicateSameIDCollapses() {
+        let items = [
+            TVAppItem(id: "a", name: "Netflix"),
+            TVAppItem(id: "a", name: "Netflix"),
+            TVAppItem(id: "b", name: "Hulu"),
+        ]
+        XCTAssertEqual(AppsCustomization.deduplicate(items).map(\.id), ["a", "b"])
+    }
+
+    func testDeduplicateHBOMaxAndMaxCollapse() {
+        let items = [
+            TVAppItem(id: "hbomax", name: "HBO Max"),
+            TVAppItem(id: "max", name: "Max"),
+            TVAppItem(id: "netflix", name: "Netflix"),
+        ]
+        let deduped = AppsCustomization.deduplicate(items)
+        XCTAssertEqual(deduped.count, 2)
+        XCTAssertEqual(deduped.map(\.name), ["HBO Max", "Netflix"])
+    }
+
+    func testDeduplicateKeepsIconEntry() {
+        let noIcon = TVAppItem(id: "a", name: "Hulu")
+        let withIcon = TVAppItem(id: "b", name: "Hulu", iconURL: URL(string: "http://tv/icon.png"))
+        let deduped = AppsCustomization.deduplicate([noIcon, withIcon])
+        XCTAssertEqual(deduped.count, 1)
+        XCTAssertNotNil(deduped[0].iconURL)
+    }
+
+    func testDeduplicateKeepsDistinctApps() {
+        let items = [
+            TVAppItem(id: "yt", name: "YouTube"),
+            TVAppItem(id: "yttv", name: "YouTube TV"),
+            TVAppItem(id: "espn", name: "ESPN"),
+            TVAppItem(id: "espnplus", name: "ESPN+"),
+        ]
+        XCTAssertEqual(AppsCustomization.deduplicate(items).count, 4)
+    }
+
+    func testCanonicalKeyNormalizesRenames() {
+        XCTAssertEqual(AppBrandArt.canonicalKey(for: "HBO Max"), "max")
+        XCTAssertEqual(AppBrandArt.canonicalKey(for: "Max"), "max")
+        XCTAssertEqual(AppBrandArt.canonicalKey(for: "  Crunchyroll  "), "crunchyroll")
+        XCTAssertEqual(AppBrandArt.canonicalKey(for: "Discovery"), "discovery+")
+    }
+
+    func testHBOMaxGetsMaxTile() {
+        XCTAssertEqual(AppBrandArt.match(name: "HBO Max")?.label, "max")
+    }
+
+    func testNewBrandTiles() {
+        XCTAssertEqual(AppBrandArt.match(name: "Discovery+")?.label, "discovery+")
+        XCTAssertEqual(AppBrandArt.match(name: "Fubo")?.label, "fubo")
+        XCTAssertEqual(AppBrandArt.match(name: "FuboTV")?.label, "fubo")
+        XCTAssertEqual(AppBrandArt.match(name: "Stremio")?.label, "Stremio")
+        XCTAssertEqual(AppBrandArt.match(name: "Fandango")?.label, "Fandango")
+        XCTAssertEqual(AppBrandArt.match(name: "Fandango at Home")?.label, "Fandango")
+        XCTAssertEqual(AppBrandArt.match(name: "Universal Guide")?.label, "Universal Guide")
+        XCTAssertEqual(AppBrandArt.match(name: "Crunchyroll")?.label, "Crunchyroll")
+    }
+
+    func testSearchMatchesBySubstringCaseInsensitive() {
+        XCTAssertTrue(AppsCustomization.matchesSearch(name: "Netflix", query: "net"))
+        XCTAssertTrue(AppsCustomization.matchesSearch(name: "Disney+", query: "DISNEY"))
+        XCTAssertFalse(AppsCustomization.matchesSearch(name: "Netflix", query: "hulu"))
+        XCTAssertTrue(AppsCustomization.matchesSearch(name: "Netflix", query: ""))
+        XCTAssertTrue(AppsCustomization.matchesSearch(name: "Netflix", query: "   "))
+    }
+
+    func testSetupDoneIsFalseForFreshTV() {
+        XCTAssertFalse(AppsCustomization.setupDone(host: host))
+    }
+
+    func testSetupDoneAfterMarking() {
+        AppsCustomization.markSetupDone(host: host)
+        XCTAssertTrue(AppsCustomization.setupDone(host: host))
+    }
+
+    func testSetupDoneSkippedWhenPrefsAlreadyExist() {
+        // v1.0.63 users already configured this TV — setup must
+        // not force them through it again.
+        AppsCustomization.save(host: host, order: ["a"], hidden: [])
+        XCTAssertTrue(AppsCustomization.setupDone(host: host))
+    }
+
+    func testCacheRoundTrip() {
+        let items = [
+            TVAppItem(id: "a", name: "Netflix"),
+            TVAppItem(id: "b", name: "Hulu", iconURL: URL(string: "http://tv/icon.png")),
+        ]
+        AppsCache.save(host: host, items: items)
+        XCTAssertEqual(AppsCache.load(host: host), items)
+    }
+
+    func testCacheMissReturnsNil() {
+        XCTAssertNil(AppsCache.load(host: host))
+    }
+
+    func testRippleGrowsSlightlyAndFades() {
+        XCTAssertEqual(TapRipple.diameter(at: 0), 14)
+        XCTAssertEqual(TapRipple.diameter(at: TapRipple.lifetime), 30)
+        XCTAssertEqual(TapRipple.opacity(at: 0), 0.5, accuracy: 0.001)
+        XCTAssertEqual(TapRipple.opacity(at: TapRipple.lifetime), 0, accuracy: 0.001)
+        XCTAssertEqual(TapRipple.lifetime, 0.35, accuracy: 0.001)
+    }
+}
+
 /// Apps page brand tiles (v1.0.63): bundled text-based tiles
 /// matched by name — exact, then longest prefix — with a generic
 /// initial-letter tile for anything unknown.
