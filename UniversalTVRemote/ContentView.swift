@@ -131,10 +131,12 @@ private struct DiscoveryListView: View {
         colorScheme == .light ? Color.primary.opacity(0.6) : .secondary
     }
 
-    /// True once a scan has finished at least once — drives the empty
-    /// state (still scanning vs. nothing found). View-side only; the
-    /// discovery code is untouched.
-    @State private var hasCompletedScan = false
+    /// The list as shown: the discovered TVs, plus the Demo TV
+    /// (v1.0.66) pinned at the end — always there for testing,
+    /// clearly badged, never mixed in with the real TVs. The list
+    /// is never empty while the demo is in it, so there is no
+    /// "No TVs found" state anymore.
+    private var displayedDevices: [TVDevice] { discovery.devices + [TVDevice.demo] }
 
     /// Pad-controls reminder sheet (v1.0.35), opened from the ?
     /// button in the header.
@@ -192,18 +194,15 @@ private struct DiscoveryListView: View {
                         .padding(.horizontal, 32)
                 }
 
-                // One dark card holding the whole TV list.
+                // One dark card holding the whole TV list — real
+                // TVs first, the Demo TV pinned at the end.
                 VStack(spacing: 0) {
-                    if discovery.devices.isEmpty {
-                        emptyRow
-                    } else {
-                        ForEach(discovery.devices) { device in
-                            deviceRow(device)
-                            if device.id != discovery.devices.last?.id {
-                                Divider()
-                                    .background(Color.primary.opacity(0.08))
-                                    .padding(.leading, 76)
-                            }
+                    ForEach(displayedDevices) { device in
+                        deviceRow(device)
+                        if device.id != displayedDevices.last?.id {
+                            Divider()
+                                .background(Color.primary.opacity(0.08))
+                                .padding(.leading, 76)
                         }
                     }
                 }
@@ -228,9 +227,6 @@ private struct DiscoveryListView: View {
             .padding(.bottom, 24)
         }
         .refreshable { discovery.scan() }
-        .onChange(of: discovery.isScanning) { scanning in
-            if !scanning { hasCompletedScan = true }
-        }
         // Page background (v1.0.48): Chrome dark gray / soft light
         // gray, not the system black/white extremes.
         .background(AppBackground.color(for: colorScheme).ignoresSafeArea())
@@ -238,30 +234,24 @@ private struct DiscoveryListView: View {
         .sheet(isPresented: $showSettings) { SettingsSheet() }
     }
 
-    /// The card's single row while no devices are listed: a looking
-    /// state while a scan is running (or has never run), and a
-    /// "nothing found" state once a scan has finished empty.
-    private var emptyRow: some View {
-        HStack {
-            Spacer()
-            if discovery.isScanning || !hasCompletedScan {
-                Text("Looking for TVs…")
-                    .font(.subheadline)
-                    .foregroundStyle(secondaryText)
-            } else {
-                Text("No TVs found")
-                    .font(.subheadline)
-                    .foregroundStyle(secondaryText)
-            }
-            Spacer()
-        }
-        .padding(.vertical, 16)
-    }
-
     private func deviceRow(_ device: TVDevice) -> some View {
         Button { onSelect(device) } label: {
             HStack(spacing: 12) {
-                brandBadge(for: device.brand)
+                // The Demo TV gets its own badge (v1.0.66): a flask
+                // on a tinted circle, so it never reads as a real
+                // Samsung — its brand is only Samsung so the remote
+                // shows its fullest UI.
+                if device.isDemo {
+                    ZStack {
+                        Circle().fill(remoteAccent.opacity(0.15))
+                        Image(systemName: "testtube.2")
+                            .font(.title3.bold())
+                            .foregroundStyle(remoteAccent)
+                    }
+                    .frame(width: 48, height: 48)
+                } else {
+                    brandBadge(for: device.brand)
+                }
                 VStack(alignment: .leading, spacing: 3) {
                     Text(device.name)
                         .font(.headline)
@@ -269,12 +259,21 @@ private struct DiscoveryListView: View {
                     // A remembered TV the scan didn't find is asleep,
                     // not gone (v1.0.47): tapping it wakes it when the
                     // app knows its MAC, else it just tries to connect.
-                    Text(device.isSleeping ? (device.canWake ? "Sleeping — tap to wake" : "Sleeping") : device.addressLine)
+                    // The Demo TV says what it is instead (v1.0.66).
+                    Text(device.isDemo ? "Practice remote — nothing is sent to a TV"
+                         : device.isSleeping ? (device.canWake ? "Sleeping — tap to wake" : "Sleeping")
+                         : device.addressLine)
                         .font(.caption)
                         .foregroundStyle(secondaryText)
                 }
                 Spacer()
-                if !device.brand.supportsControl {
+                if device.isDemo {
+                    Text("Demo")
+                        .font(.caption2.bold())
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(remoteAccent.opacity(0.15), in: Capsule())
+                        .foregroundStyle(remoteAccent)
+                } else if !device.brand.supportsControl {
                     Text("Discovery only")
                         .font(.caption2)
                         .padding(.horizontal, 8).padding(.vertical, 4)

@@ -13,7 +13,8 @@ import SwiftUI
 //         launcher API.
 //   Samsung Tizen: the installed-apps API lists apps, launch by app
 //         id. The API gives NO icon, so Samsung tiles are bundled
-//         brand tiles (matched by name) or a generic initial tile.
+//         brand tiles (matched by name) or a monogram tile (v1.0.66:
+//         deterministic palette color + name/initials) for the rest.
 //   Android TV: the remote protocol cannot list installed apps, so
 //         the sheet shows a curated set of popular apps
 //         (AndroidTVAppCatalog, deep links verified against the
@@ -144,13 +145,78 @@ enum AppBrandArt {
             .max(by: { $0.key.count < $1.key.count })?.style
     }
 
-    /// Generic tile for an app with no brand match: its initial
-    /// letter on a neutral tint — never a blank tile, and only a
-    /// last resort for truly unknown apps.
+    /// Generic tile for an app with no brand match (v1.0.66):
+    /// a designed monogram tile, not a gray initial — the name
+    /// written out (or clean initials when it is long) in a
+    /// matching foreground on a deterministic palette color, so
+    /// it looks intentional instead of like a missing icon.
     static func generic(name: String) -> BrandTileStyle {
-        let letter = name.trimmingCharacters(in: .whitespaces).prefix(1).uppercased()
-        return BrandTileStyle(background: Color.primary.opacity(0.12), foreground: .primary,
-                              label: letter.isEmpty ? "?" : letter)
+        monogramStyle(for: name)
+    }
+
+    /// The monogram palette (v1.0.66): a small curated set of
+    /// attractive background/foreground pairs. The pick is a
+    /// deterministic hash of the app name, so each app keeps the
+    /// same color every launch — never re-randomized per render.
+    /// Every pair is a saturated background with white (or near-
+    /// black on the two lightest backgrounds) for contrast.
+    static let monogramPalette: [(background: Color, foreground: Color)] = [
+        (Color(red: 0x6C / 255, green: 0x4C / 255, blue: 0xF1 / 255), .white), // violet
+        (Color(red: 0x0E / 255, green: 0x9F / 255, blue: 0x8A / 255), .white), // teal
+        (Color(red: 0xE8 / 255, green: 0x59 / 255, blue: 0x0C / 255), .white), // orange
+        (Color(red: 0x2B / 255, green: 0x8A / 255, blue: 0x3E / 255), .white), // green
+        (Color(red: 0x19 / 255, green: 0x71 / 255, blue: 0xC2 / 255), .white), // blue
+        (Color(red: 0xC2 / 255, green: 0x25 / 255, blue: 0x5C / 255), .white), // pink
+        (Color(red: 0xF0 / 255, green: 0x8C / 255, blue: 0x00 / 255), Color(red: 0x21 / 255, green: 0x25 / 255, blue: 0x29 / 255)), // amber
+        (Color(red: 0x70 / 255, green: 0x48 / 255, blue: 0xE8 / 255), .white), // purple
+        (Color(red: 0x08 / 255, green: 0x7F / 255, blue: 0x5B / 255), .white), // emerald
+        (Color(red: 0xD6 / 255, green: 0x33 / 255, blue: 0x6C / 255), .white), // rose
+        (Color(red: 0xFC / 255, green: 0xC4 / 255, blue: 0x19 / 255), Color(red: 0x21 / 255, green: 0x25 / 255, blue: 0x29 / 255)), // yellow
+        (Color(red: 0x10 / 255, green: 0x98 / 255, blue: 0xAD / 255), .white), // cyan
+    ]
+
+    /// The palette index for an app name: FNV-1a over the canonical
+    /// key — stable across launches and devices, spreads names
+    /// across the palette. Pure, so tests drive it directly.
+    static func monogramIndex(for name: String) -> Int {
+        var hash: UInt64 = 14695981039346656037
+        for byte in canonicalKey(for: name).utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 1099511628211
+        }
+        return Int(hash % UInt64(monogramPalette.count))
+    }
+
+    /// The monogram tile for an app name: palette pair + the
+    /// monogram label. Pure, so tests drive it directly.
+    static func monogramStyle(for name: String) -> BrandTileStyle {
+        let pair = monogramPalette[monogramIndex(for: name)]
+        return BrandTileStyle(background: pair.background, foreground: pair.foreground,
+                              label: monogramLabel(for: name))
+    }
+
+    /// The monogram label: the full name when it fits, clean
+    /// initials when it doesn't — never a truncated "NE..."
+    /// (v1.0.66). Pure, so tests drive it directly.
+    static func monogramLabel(for name: String) -> String {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "?" }
+        if trimmed.count <= 14 { return trimmed }
+        return initials(for: trimmed)
+    }
+
+    /// Clean 1–2 letter initials: first letters of the first two
+    /// words ("HBO Max" → "HM", "Universal Guide" → "UG"), or the
+    /// first two letters of a single word ("Netflix" → "NE").
+    /// Pure, so tests drive it directly.
+    static func initials(for name: String) -> String {
+        let words = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+        guard let first = words.first else { return "?" }
+        if words.count >= 2 {
+            return String((first.prefix(1) + words[1].prefix(1)).uppercased())
+        }
+        return String(first.prefix(2).uppercased())
     }
 
     static func tile(for name: String) -> BrandTileStyle {
@@ -588,7 +654,7 @@ struct AppsView: View {
                             }
                         } label: {
                             HStack(spacing: 12) {
-                                AppBrandTile(name: item.name)
+                                AppBrandTile(name: item.name, compact: true)
                                     .frame(width: 44, height: 44)
                                     .clipShape(RoundedRectangle(cornerRadius: 10))
                                 Text(item.name)
@@ -694,7 +760,7 @@ struct AppsView: View {
 
     private func editRow(item: TVAppItem, isHidden: Bool) -> some View {
         HStack(spacing: 12) {
-            AppBrandTile(name: item.name)
+            AppBrandTile(name: item.name, compact: true)
                 .frame(width: 44, height: 44)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
             Text(item.name)
@@ -833,16 +899,23 @@ struct AppsView: View {
 }
 
 /// The bundled brand tile: the brand's wordmark on the brand's
-/// color, or the app's initial letter for anything unknown.
+/// color, or a monogram tile for anything unknown (v1.0.66).
+/// Compact tiles (the 44pt rows in Edit mode and first-run setup)
+/// show clean initials instead of the wordmark — a full wordmark
+/// ("NETFLIX") cannot fit a 44pt square without truncating to
+/// "NE...", while initials read as designed, in the tile's own
+/// colors.
 struct AppBrandTile: View {
     let name: String
+    var compact: Bool = false
 
     var body: some View {
         let style = AppBrandArt.tile(for: name)
+        let label = compact ? AppBrandArt.initials(for: name) : style.label
         ZStack {
             style.background
-            Text(style.label)
-                .font(.system(size: 20, weight: .bold))
+            Text(label)
+                .font(.system(size: compact ? 17 : 20, weight: .bold))
                 .foregroundStyle(style.foreground)
                 .lineLimit(1)
                 .minimumScaleFactor(0.5)

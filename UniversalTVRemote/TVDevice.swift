@@ -36,6 +36,9 @@ struct TVDevice: Identifiable, Hashable {
         /// A TV the app connected to before, kept from the remembered
         /// store (v1.0.47) — it stays listed while asleep.
         case remembered
+        /// The Demo TV (v1.0.66) — a fake TV for testing, never
+        /// discovered, never remembered.
+        case demo
     }
 
     /// Stable identity, e.g. "ssdp:<usn>" or "bonjour:<name>|<type>".
@@ -54,6 +57,10 @@ struct TVDevice: Identifiable, Hashable {
     /// A remembered TV the current scan has not found live: asleep,
     /// not gone. Cleared the moment any discovery path finds it.
     var isSleeping: Bool = false
+    /// The Demo TV (v1.0.66): a fake TV for testing — the session
+    /// short-circuits every command for it, so nothing is ever
+    /// sent over the network. Never recorded as remembered.
+    var isDemo: Bool = false
 
     /// Whether this TV can be woken from standby: Samsung and Roku
     /// report their MAC, which the magic packet needs. LG and
@@ -70,7 +77,7 @@ struct TVDevice: Identifiable, Hashable {
 
     init(id: String, name: String, brand: Brand, host: String? = nil, port: Int = 0,
          model: String? = nil, manufacturer: String? = nil, source: Source,
-         macAddress: String? = nil, isSleeping: Bool = false) {
+         macAddress: String? = nil, isSleeping: Bool = false, isDemo: Bool = false) {
         self.id = id
         self.name = name
         self.brand = brand
@@ -81,6 +88,22 @@ struct TVDevice: Identifiable, Hashable {
         self.source = source
         self.macAddress = macAddress
         self.isSleeping = isSleeping
+        self.isDemo = isDemo
+    }
+
+    /// The Demo TV (v1.0.66): a fake TV that is always in the
+    /// devices list for testing — tapping it opens the remote as
+    /// if a real TV were connected, but nothing is ever sent over
+    /// the network (the session short-circuits every command).
+    /// Brand is Samsung so the remote shows its fullest UI (text
+    /// input, apps); host "demo" keys its own saved app picks, so
+    /// first-run setup, Edit and hide/reorder all work on it.
+    /// No MAC, so it can never be woken; never recorded as
+    /// remembered, so it can never auto-open and never shows up
+    /// as a sleeping TV.
+    static var demo: TVDevice {
+        TVDevice(id: "demo:demo-tv", name: "Demo TV", brand: .samsung, host: "demo",
+                 model: "Demo", manufacturer: "Demo", source: .demo, isDemo: true)
     }
 
     /// Convenience init for Bonjour-discovered services.
@@ -188,8 +211,10 @@ enum RememberedTVStore {
     }
 
     /// Record a TV the app just connected to (upsert by host).
+    /// The Demo TV is never recorded (v1.0.66): it must never
+    /// auto-open and never show up as a sleeping TV.
     static func record(_ device: TVDevice) {
-        guard let host = device.host else { return }
+        guard !device.isDemo, let host = device.host else { return }
         var list = load()
         let entry = RememberedTV(name: device.name, brand: device.brand, host: host,
                                  port: device.port, model: device.model,

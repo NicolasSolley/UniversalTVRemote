@@ -2036,8 +2036,9 @@ final class AppsV1064Tests: XCTestCase {
 }
 
 /// Apps page brand tiles (v1.0.63): bundled text-based tiles
-/// matched by name — exact, then longest prefix — with a generic
-/// initial-letter tile for anything unknown.
+/// matched by name — exact, then longest prefix — with a monogram
+/// tile (v1.0.66: deterministic palette color + name/initials)
+/// for anything unknown.
 final class AppBrandArtTests: XCTestCase {
     func testExactMatch() {
         XCTAssertEqual(AppBrandArt.match(name: "Netflix")?.label, "NETFLIX")
@@ -2059,8 +2060,40 @@ final class AppBrandArtTests: XCTestCase {
         XCTAssertNil(AppBrandArt.match(name: "Some Random App"))
     }
 
-    func testGenericTileUsesInitialLetter() {
-        XCTAssertEqual(AppBrandArt.tile(for: "Some Random App").label, "S")
+    func testGenericTileWritesShortNameOut() {
+        XCTAssertEqual(AppBrandArt.tile(for: "Kanopy").label, "Kanopy")
+    }
+
+    func testGenericTileUsesInitialsForLongNames() {
+        XCTAssertEqual(AppBrandArt.tile(for: "Some Random App").label, "SR")
+    }
+
+    func testMonogramLabelNeverTruncates() {
+        for name in ["Kanopy", "Some Random App", "A Very Long App Name Indeed"] {
+            XCTAssertFalse(AppBrandArt.monogramLabel(for: name).contains("..."), name)
+        }
+    }
+
+    func testInitials() {
+        XCTAssertEqual(AppBrandArt.initials(for: "HBO Max"), "HM")
+        XCTAssertEqual(AppBrandArt.initials(for: "Universal Guide"), "UG")
+        XCTAssertEqual(AppBrandArt.initials(for: "Netflix"), "NE")
+        XCTAssertEqual(AppBrandArt.initials(for: "Disney+"), "DI")
+        XCTAssertEqual(AppBrandArt.initials(for: ""), "?")
+    }
+
+    func testMonogramIndexIsDeterministicAndInRange() {
+        for name in ["Kanopy", "MUBI", "Shudder", "Acorn TV", "Some Random App"] {
+            let index = AppBrandArt.monogramIndex(for: name)
+            XCTAssertEqual(index, AppBrandArt.monogramIndex(for: name), name)
+            XCTAssertTrue(index >= 0 && index < AppBrandArt.monogramPalette.count, name)
+        }
+    }
+
+    func testMonogramPaletteSpreadsNames() {
+        let indices = Set(["Kanopy", "MUBI", "Shudder", "Acorn TV", "Some Random App",
+                           "Pluto", "Vudu", "Crackle"].map { AppBrandArt.monogramIndex(for: $0) })
+        XCTAssertGreaterThan(indices.count, 1)
     }
 }
 
@@ -2109,5 +2142,55 @@ final class RememberedTVLastTests: XCTestCase {
     func testSingleEntryIsTheLastTV() {
         let only = entry(host: "192.168.1.1", lastSeen: Date())
         XCTAssertEqual(RememberedTVStore.latest(in: [only])?.host, "192.168.1.1")
+    }
+}
+
+/// Demo TV (v1.0.66): a fake TV that is always in the devices
+/// list for testing — controllable, never remembered, with a fake
+/// streaming-app lineup.
+final class DemoTVTests: XCTestCase {
+    func testDemoDeviceIsDemoAndControllable() {
+        let demo = TVDevice.demo
+        XCTAssertTrue(demo.isDemo)
+        XCTAssertEqual(demo.id, "demo:demo-tv")
+        XCTAssertNotNil(demo.host)
+        XCTAssertTrue(demo.brand.supportsControl)
+        XCTAssertFalse(demo.canWake)
+        XCTAssertFalse(demo.isSleeping)
+    }
+
+    func testDemoAppsContainRequiredLineup() {
+        let names = DemoTV.apps.map(\.name)
+        for required in ["Netflix", "Hulu", "HBO Max", "Disney+", "Prime Video",
+                         "YouTube", "Peacock", "Paramount+", "Crunchyroll", "Apple TV"] {
+            XCTAssertTrue(names.contains(required), required)
+        }
+    }
+
+    func testDemoAppIDsAreUnique() {
+        let ids = DemoTV.apps.map(\.id)
+        XCTAssertEqual(Set(ids).count, ids.count)
+    }
+
+    func testDemoAppsGetBrandOrMonogramTiles() {
+        // Brand-tile apps keep their artwork; the monogram apps
+        // (no catalog match) get their name written out on a
+        // palette color instead of a gray initial.
+        for name in ["Kanopy", "MUBI", "Shudder"] {
+            XCTAssertNil(AppBrandArt.match(name: name), name)
+            XCTAssertEqual(AppBrandArt.tile(for: name).label, name)
+        }
+        XCTAssertEqual(AppBrandArt.match(name: "Netflix")?.label, "NETFLIX")
+    }
+
+    func testDemoIsNeverRemembered() {
+        let key = "rememberedTVs"
+        let before = RememberedTVStore.load()
+        defer {
+            UserDefaults.standard.removeObject(forKey: key)
+            for entry in before { RememberedTVStore.record(TVDevice(id: "remembered:\(entry.host)", name: entry.name, brand: entry.brand, host: entry.host, port: entry.port, model: entry.model, manufacturer: entry.manufacturer, source: .remembered, macAddress: entry.macAddress)) }
+        }
+        RememberedTVStore.record(TVDevice.demo)
+        XCTAssertFalse(RememberedTVStore.load().contains { $0.host == "demo" })
     }
 }

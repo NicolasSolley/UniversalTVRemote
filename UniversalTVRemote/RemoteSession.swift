@@ -110,6 +110,33 @@ struct RemoteCapabilities {
     }
 }
 
+/// The Demo TV's fake app lineup (v1.0.66): the streaming apps
+/// Nick tests with. Real brand tiles where the catalog has them
+/// (Netflix, Hulu, HBO Max, Disney+, Prime Video, YouTube,
+/// Peacock, Paramount+, Crunchyroll, Apple TV, Tubi, Spotify);
+/// the rest get monogram tiles (Kanopy, MUBI, Shudder). Ids are
+/// "demo:<name>" launch keys — the session never sends them
+/// anywhere; launching just says "Opening …".
+enum DemoTV {
+    static let apps: [SamsungRemote.SamsungApp] = [
+        SamsungRemote.SamsungApp(id: "demo:netflix", name: "Netflix", actionType: "NATIVE_LAUNCH"),
+        SamsungRemote.SamsungApp(id: "demo:hulu", name: "Hulu", actionType: "NATIVE_LAUNCH"),
+        SamsungRemote.SamsungApp(id: "demo:hbo-max", name: "HBO Max", actionType: "NATIVE_LAUNCH"),
+        SamsungRemote.SamsungApp(id: "demo:disney-plus", name: "Disney+", actionType: "NATIVE_LAUNCH"),
+        SamsungRemote.SamsungApp(id: "demo:prime-video", name: "Prime Video", actionType: "NATIVE_LAUNCH"),
+        SamsungRemote.SamsungApp(id: "demo:youtube", name: "YouTube", actionType: "NATIVE_LAUNCH"),
+        SamsungRemote.SamsungApp(id: "demo:peacock", name: "Peacock", actionType: "NATIVE_LAUNCH"),
+        SamsungRemote.SamsungApp(id: "demo:paramount-plus", name: "Paramount+", actionType: "NATIVE_LAUNCH"),
+        SamsungRemote.SamsungApp(id: "demo:crunchyroll", name: "Crunchyroll", actionType: "NATIVE_LAUNCH"),
+        SamsungRemote.SamsungApp(id: "demo:apple-tv", name: "Apple TV", actionType: "NATIVE_LAUNCH"),
+        SamsungRemote.SamsungApp(id: "demo:tubi", name: "Tubi", actionType: "NATIVE_LAUNCH"),
+        SamsungRemote.SamsungApp(id: "demo:spotify", name: "Spotify", actionType: "NATIVE_LAUNCH"),
+        SamsungRemote.SamsungApp(id: "demo:kanopy", name: "Kanopy", actionType: "NATIVE_LAUNCH"),
+        SamsungRemote.SamsungApp(id: "demo:mubi", name: "MUBI", actionType: "NATIVE_LAUNCH"),
+        SamsungRemote.SamsungApp(id: "demo:shudder", name: "Shudder", actionType: "NATIVE_LAUNCH"),
+    ]
+}
+
 /// Owns the connection to one selected TV and translates `RemoteCommand`s
 /// into the brand's real protocol. All failure states surface as
 /// plain-language status text; nothing is faked.
@@ -216,6 +243,16 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
 
     /// Connects (or verifies reachability) and reports progress in `status`.
     func connect() async {
+        // Demo TV (v1.0.66): instantly "connected" — nothing is
+        // ever sent over the network, so there is nothing to
+        // connect to. The fake app lineup loads here, so the
+        // Apps tab works on it like a real TV.
+        if device.isDemo {
+            isConnected = true
+            status = "Connected to \(device.name)."
+            samsungApps = DemoTV.apps
+            return
+        }
         guard supportsControl else {
             status = "This device was found, but there's no public way to control it from an app."
             return
@@ -320,6 +357,9 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
         tvTextFieldFocused = false
         awaitingPairingCode = false
         pairingError = nil
+        // Demo TV (v1.0.66): no drivers ever started, so there is
+        // nothing to tear down.
+        guard !device.isDemo else { isConnected = false; return }
         RokuRemote.resetQueue()
         Task { await samsung.disconnect() }
         Task { await lg.disconnect() }
@@ -586,6 +626,10 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
     }
 
     func send(_ command: RemoteCommand) async {
+        // Demo TV (v1.0.66): every command is a no-op by design —
+        // the UI feedback (tap ripple, haptics) still fires, but
+        // nothing leaves the phone.
+        if device.isDemo { return }
         // A send that cannot go out says so in the status instead
         // of returning silently (v1.0.53): a dead button with no
         // explanation reads as a broken remote.
@@ -829,7 +873,7 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
     }
 
     func loadSamsungApps() async {
-        guard device.brand == .samsung, let host = device.host else { return }
+        guard !device.isDemo, device.brand == .samsung, let host = device.host else { return }
         samsungApps = await samsung.installedApps(on: host) ?? []
     }
 
@@ -860,6 +904,9 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
     /// Launches an installed app by id, dispatching to the brand's
     /// launcher (used by the app shortcut cards).
     func launchApp(id: String) async {
+        // Demo TV (v1.0.66): nothing is sent — launchAppItem
+        // already said "Opening …" for the tap.
+        if device.isDemo { return }
         switch device.brand {
         case .roku:
             if let app = rokuApps.first(where: { $0.id == id }) { await launchRokuApp(app) }
@@ -876,6 +923,11 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
     /// the TV's real installed apps on Roku / Samsung / LG, the
     /// curated deep-link set on Android TV.
     func loadApps() async {
+        // Demo TV (v1.0.66): the fake lineup, no network fetch.
+        if device.isDemo {
+            samsungApps = DemoTV.apps
+            return
+        }
         switch device.brand {
         case .roku: await loadRokuApps()
         case .samsung: await loadSamsungApps()
@@ -889,6 +941,13 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
     /// Samsung / LG, by deep link on Android TV (the item's id IS
     /// the deep link there).
     func launchAppItem(_ item: TVAppItem) async {
+        // Demo TV (v1.0.66): "launching" just says so — nothing
+        // is sent, and the tab still switches back to the remote
+        // like a real launch.
+        if device.isDemo {
+            status = "Opening \(item.name)."
+            return
+        }
         if device.brand == .androidTV {
             launchAndroidTVApp(TVApp(name: item.name, launchID: item.id, iconURL: nil))
             return
