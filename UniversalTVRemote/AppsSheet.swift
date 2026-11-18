@@ -750,14 +750,22 @@ struct AppsView: View {
             // (v1.0.68): simultaneous, so tapping a row still
             // selects it — the dismiss rides along.
             .simultaneousGesture(TapGesture().onEnded { searchFocused = false })
-            Button("Done") { finishSetup() }
-                .font(.headline)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(remoteAccent, in: RoundedRectangle(cornerRadius: 14))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 12)
+            // Whole button tappable (v1.0.70): the frame and
+            // padding used to be modifiers on the Button, so
+            // only the "Done" text itself was the hit target.
+            // The label now is the full button rect, and
+            // contentShape makes every point in it a hit.
+            Button { finishSetup() } label: {
+                Text("Done")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(remoteAccent, in: RoundedRectangle(cornerRadius: 14))
+                    .contentShape(Rectangle())
+                    .foregroundStyle(.white)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 12)
         }
     }
 
