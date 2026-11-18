@@ -1900,6 +1900,19 @@ final class AppsCustomizationTests: XCTestCase {
                                            from: IndexSet(integer: 0), to: 2)
         XCTAssertEqual(order, ["b", "a", "c"])
     }
+
+    func testBulkHideRemovesFromOrderAndAddsToHidden() {
+        // Select all, unselect the keeper ("b"), Hide selected.
+        let result = AppsCustomization.hide(ids: ["a", "c"], order: ["a", "b", "c"], hidden: ["x"])
+        XCTAssertEqual(result.order, ["b"])
+        XCTAssertEqual(result.hidden, ["x", "a", "c"])
+    }
+
+    func testBulkHideEmptySelectionChangesNothing() {
+        let result = AppsCustomization.hide(ids: [], order: ["a", "b"], hidden: ["x"])
+        XCTAssertEqual(result.order, ["a", "b"])
+        XCTAssertEqual(result.hidden, ["x"])
+    }
 }
 
 /// Apps page brand tiles (v1.0.63): bundled text-based tiles

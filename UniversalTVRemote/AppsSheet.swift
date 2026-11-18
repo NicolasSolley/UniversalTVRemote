@@ -25,6 +25,9 @@ import SwiftUI
 // (AppsCustomization, keyed by host). Hidden apps are not deleted —
 // they stay in Edit mode's Hidden section and can be shown again.
 // Newly installed apps appear visible at the end of the list.
+// Bulk select (v1.0.63): Select all / Deselect all plus Hide
+// selected — select everything, tap the keepers to unselect them,
+// hide the rest in one go.
 
 /// One app in the Apps sheet: the TV's real installed app (Roku /
 /// LG / Samsung) or a curated deep-link entry on Android TV, where
@@ -165,6 +168,14 @@ enum AppsCustomization {
         return ordered + fresh
     }
 
+    /// Hide a set of ids in one go (bulk hide, v1.0.63): the ids
+    /// join `hidden` and leave `order` — the same state the
+    /// per-app eye produces, just for many ids at once (Select
+    /// all → unselect the keepers → Hide selected). Pure.
+    static func hide(ids: Set<String>, order: [String], hidden: Set<String>) -> (order: [String], hidden: Set<String>) {
+        (order.filter { !ids.contains($0) }, hidden.union(ids))
+    }
+
     /// Apply a drag move inside the shown section to the saved
     /// order: the moved visible ids take their new positions; ids
     /// not shown (hidden, or no longer installed) keep their
@@ -189,6 +200,9 @@ struct AppsSheet: View {
     @State private var order: [String] = []
     @State private var hidden: Set<String> = []
     @State private var isEditing = false
+    /// Bulk selection (v1.0.63): Edit-mode only — which shown
+    /// apps are selected for Hide selected. Resets when leaving
+    /// Edit mode (and on reload); never persisted.
 
     private var visibleItems: [TVAppItem] {
         let ids = AppsCustomization.visibleIDs(installedIDs: items.map(\.id), order: order, hidden: hidden)
@@ -212,7 +226,12 @@ struct AppsSheet: View {
             if case .loaded = loadState {
                 HStack {
                     Spacer()
-                    Button(isEditing ? "Done" : "Edit") { isEditing.toggle() }
+                    Button(isEditing ? "Done" : "Edit") {
+                        // Leaving Edit mode clears the bulk
+                        // selection — it is Edit-mode only.
+                        if isEditing { selectedIDs.removeAll() }
+                        isEditing.toggle()
+                    }
                         .font(.subheadline.bold())
                 }
                 .padding(.horizontal, 20)
@@ -296,13 +315,43 @@ struct AppsSheet: View {
 
     /// Edit mode: the full installed list, split into Shown (drag
     /// to reorder, eye to hide) and Hidden (eye to show again).
-    /// Changes save immediately; Done just leaves edit mode.
+    /// A bulk bar on top offers Select all / Deselect all plus
+    /// Hide selected: tap Select all, tap the apps to keep to
+    /// unselect them, then Hide selected moves the rest to Hidden
+    /// in one go. Changes save immediately; Done just leaves
+    /// edit mode.
     private var editList: some View {
         VStack(spacing: 0) {
+            HStack(spacing: 20) {
+                Button("Select all") { selectedIDs = Set(visibleItems.map(\.id)) }
+                Button("Deselect all") { selectedIDs.removeAll() }
+                Spacer()
+                Button(selectedIDs.isEmpty ? "Hide selected" : "Hide selected (\(selectedIDs.count))") {
+                    hideSelected()
+                }
+                .disabled(selectedIDs.isEmpty)
+            }
+            .font(.subheadline.bold())
+            .padding(.horizontal, 20)
+            .padding(.vertical, 8)
             List {
                 Section("Shown") {
                     ForEach(visibleItems) { item in
-                        editRow(item: item, isHidden: false)
+                        Button {
+                            // Tapping a shown row toggles its bulk
+                            // selection; the eye button inside the
+                            // row still hides that one app (the
+                            // innermost button wins the tap).
+                            if selectedIDs.contains(item.id) {
+                                selectedIDs.remove(item.id)
+                            } else {
+                                selectedIDs.insert(item.id)
+                            }
+                        } label: {
+                            editRow(item: item, isHidden: false)
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(GlassCardBackground())
                     }
                     .onMove { from, to in
                         order = AppsCustomization.move(order: order, visibleIDs: visibleItems.map(\.id),
@@ -314,6 +363,7 @@ struct AppsSheet: View {
                     Section("Hidden") {
                         ForEach(hiddenItems) { item in
                             editRow(item: item, isHidden: true)
+                                .listRowBackground(GlassCardBackground())
                         }
                     }
                 }
@@ -339,9 +389,19 @@ struct AppsSheet: View {
 
     private func editRow(item: TVAppItem, isHidden: Bool) -> some View {
         HStack(spacing: 12) {
-            AppBrandTile(name: item.name)
-                .frame(width: 44, height: 44)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+            ZStack(alignment: .topTrailing) {
+                AppBrandTile(name: item.name)
+                    .frame(width: 44, height: 44)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                // Bulk selection (v1.0.63): a teal check badge on
+                // the tile while it is selected for Hide selected.
+                if selectedIDs.contains(item.id) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 20))
+                        .foregroundStyle(.teal)
+                        .offset(x: 8, y: -8)
+                }
+            }
             Text(item.name)
                 .font(.subheadline)
                 .lineLimit(1)
@@ -363,7 +423,18 @@ struct AppsSheet: View {
             }
             .buttonStyle(.plain)
         }
-        .listRowBackground(GlassCardBackground())
+    }
+
+    /// Hide every selected app at once (bulk hide, v1.0.63):
+    /// the same hide the eye does, for the whole selection —
+    /// the apps move to Hidden and stay recoverable there.
+    /// Nothing is deleted from the TV.
+    private func hideSelected() {
+        let result = AppsCustomization.hide(ids: selectedIDs, order: order, hidden: hidden)
+        order = result.order
+        hidden = result.hidden
+        selectedIDs.removeAll()
+        savePrefs()
     }
 
     /// One app tile: the TV's own icon where it has one, over the
@@ -413,6 +484,7 @@ struct AppsSheet: View {
             let prefs = AppsCustomization.load(host: host)
             order = prefs.order
             hidden = prefs.hidden
+            selectedIDs.removeAll()
         }
         // A Roku / Samsung / LG with no apps at all is a failed
         // load, not an empty TV; Android TV always has its curated
