@@ -571,14 +571,16 @@ private struct RemoteView: View {
         // too big for the compiler to type-check as one expression.
         GeometryReader { geo in
             // Tab bar (v1.0.64, floating pill since v1.0.70):
-            // 49pt of tabs plus the home-indicator safe area. Its
-            // height comes out of the layout budget, so the pad
-            // does not shrink: on an iPhone 15 Plus the pad stays
-            // at its 500 cap (849 - 343 = 506 ≥ 500). On short
-            // screens the pad is below the cap and gives up the
-            // tab bar's height — the bar lives in its own strip
-            // below the content and never overlaps the pad.
-            let tabHeight: CGFloat = session.supportsControl ? 49 + geo.safeAreaInsets.bottom : 0
+            // pill height + bottom gap (v1.0.71: 66 + 17 = 83,
+            // the same 49 + 34 strip the old bar reserved on an
+            // iPhone 15 Plus). Its height comes out of the
+            // layout budget, so the pad does not shrink: on an
+            // iPhone 15 Plus the pad stays at its 500 cap
+            // (849 - 343 = 506 ≥ 500). On short screens the pad
+            // is below the cap and gives up the tab bar's height
+            // — the bar lives in its own strip below the content
+            // and never overlaps the pad.
+            let tabHeight: CGFloat = session.supportsControl ? Self.pillHeight + Self.pillBottomGap : 0
             // v1.0.67: the strip under the tabs is GONE. v1.0.65
             // capped it at 34pt, but the bar stayed ~117pt tall
             // on device: the visible height was 49 (tab row) +
@@ -614,12 +616,13 @@ private struct RemoteView: View {
             // outside the scrollable content, pinned at the
             // bottom on every page — Remote, Apps grid, Edit list —
             // no matter how far the user scrolls. It sits in the
-            // same 49 + safe-area strip the old bar reserved, so
-            // the pad does not grow or shift.
+            // same 83pt strip the old bar reserved (v1.0.71:
+            // 66pt pill + 17pt bottom gap), so the pad does not
+            // grow or shift.
             .overlay(alignment: .bottom) {
                 if session.supportsControl {
                     tabBar()
-                        .padding(.bottom, geo.safeAreaInsets.bottom)
+                        .padding(.bottom, Self.pillBottomGap)
                 }
             }
         }
@@ -1191,22 +1194,50 @@ private struct RemoteView: View {
     /// spaced wide at ~25% / ~75%; Nick asked for the cleaner
     /// single-item bar instead.)
     ///
-    /// Lowered (v1.0.69): the icon+label stack sits
+    /// Lowered (v1.0.69): the icon+label stack sat
     /// tabItemVerticalOffset below vertical center — Nick's
-    /// call from the same field test. One constant so the
-    /// next round can tune it in one place; in the v1.0.70
-    /// pill the label bottom lands ~38pt above the screen
-    /// bottom, well clear of the home indicator.
-    private static let tabItemVerticalOffset: CGFloat = 8
+    /// call from the same field test. v1.0.71 sets it to 0:
+    /// the offset is what pushed the label out of the 49pt
+    /// pill and clipped it (stack 50pt + 8pt offset = label
+    /// bottom 8.5pt below the pill edge). The geometry forces
+    /// it: with the offset kept, the label needs a 78pt pill
+    /// for 6pt of breathing room, which would poke above the
+    /// 83pt strip into the pad; at the tallest pill that fits
+    /// the strip the margin is 0.5pt. In the pill the stack
+    /// is centered instead. The constant stays so a future
+    /// round can tune it in one place.
+    private static let tabItemVerticalOffset: CGFloat = 0
+
+    /// Pill size (v1.0.71): 66pt tall, bottom edge 17pt above
+    /// the screen bottom — moved down from the v1.0.70 gap of
+    /// one safe-area inset (34pt), taller than the v1.0.70
+    /// 49pt pill. It floats just above the home indicator
+    /// (5pt tall, 8–13pt above the screen bottom): 4pt of gap
+    /// from the pill bottom to the indicator top, 17pt of gap
+    /// to the screen edge, so it never touches the bottom.
+    /// 66 + 17 = 83, the same strip the old 49 + 34 bar
+    /// reserved, so the pill's top edge is unchanged and the
+    /// pad does not move.
+    private static let pillHeight: CGFloat = 66
+    private static let pillBottomGap: CGFloat = 17
 
     /// Floating pill (v1.0.70): the single-item bar is a detached
     /// rounded capsule — 16pt side margins, Capsule clip, soft
-    /// shadow, 49pt tall, bottom edge one safe-area inset (34pt
-    /// on iPhone 15 Plus) above the screen bottom, so it floats
-    /// just above the home indicator. It lives in the same
-    /// 49 + inset strip the old full-width bar reserved, so the
-    /// pad does not move. Rendered as a bottom overlay (see body),
-    /// so it stays pinned while the Apps grid / Edit list scrolls.
+    /// shadow, 66pt tall (v1.0.71, was 49pt — the 49pt pill
+    /// clipped the label), bottom edge 17pt above the screen
+    /// bottom (v1.0.71, was one safe-area inset = 34pt), so it
+    /// floats just above the home indicator with a 4pt gap. It
+    /// lives in the same 83pt strip the old full-width bar
+    /// reserved (66 + 17 = 49 + 34), so the pad does not move.
+    /// Rendered as a bottom overlay (see body), so it stays
+    /// pinned while the Apps grid / Edit list scrolls.
+    /// Fit proof (v1.0.71, iPhone 15 Plus): the icon+label
+    /// stack is 50pt tall (22 icon + 3 spacing + 13 label +
+    /// 12 vertical padding), centered in the 66pt pill with
+    /// the offset at 0, so it has 8pt of breathing room top
+    /// and bottom; the label bottom lands 25pt above the
+    /// screen bottom — 8pt inside the pill, 12pt clear of
+    /// the home indicator top (13pt).
     private func tabBar() -> some View {
         HStack(spacing: 0) {
             // Single centered item (v1.0.70): only the other
@@ -1219,7 +1250,7 @@ private struct RemoteView: View {
                 tabButton(tab: .remote, icon: "appletvremote.gen1", label: "Remote")
             }
         }
-        .frame(height: 49)
+        .frame(height: Self.pillHeight)
         .frame(maxWidth: .infinity)
         .background(.ultraThinMaterial)
         .clipShape(Capsule())
@@ -1244,9 +1275,11 @@ private struct RemoteView: View {
             // fills the bar, so the icon+label stack is centered
             // in the middle of the bar. (v1.0.69: each button
             // took half the bar, items at ~25% / ~75%.)
-            // Lowered by tabItemVerticalOffset (v1.0.69): the
-            // offset shifts only the rendered stack, so the
-            // tap target stays the full-width button.
+            // tabItemVerticalOffset (v1.0.71: 0 — the v1.0.69
+            // 8pt lowering is what clipped the label in the
+            // pill; the stack is centered now). The offset
+            // shifts only the rendered stack, so the tap target
+            // stays the full-width button.
             .offset(y: Self.tabItemVerticalOffset)
             .frame(maxWidth: .infinity)
             .foregroundStyle(selected ? remoteAccent : .secondary)
