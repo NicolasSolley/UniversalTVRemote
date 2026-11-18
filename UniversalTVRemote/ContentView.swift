@@ -759,15 +759,21 @@ private struct RemoteView: View {
         // Real-sized (200×44, v1.0.26) — MPVolumeView only
         // creates its slider when laid out at a real size, and
         // the view reports when it is in the hierarchy so the
-        // anchor can be applied for real. Still near-invisible
-        // and touch-disabled, in the background so it takes no
-        // layout space and can never swallow pad input.
+        // anchor can be applied for real. In the background so
+        // it takes no layout space and can never swallow pad
+        // input. Opacity 0 (v1.0.68): 0.01 left the slider's
+        // track and thumb faintly visible — a ghost circle on a
+        // horizontal bar at the center of the page, showing
+        // through the Apps page's transparent list gaps. Opacity
+        // 0 draws nothing but the view stays in the hierarchy
+        // at real size, so the slider is still created and the
+        // volume HUD is still suppressed.
         .background(
             HiddenVolumeView(volumeView: hardwareVolume.volumeView) {
                 hardwareVolume.volumeViewDidAppear()
             }
             .frame(width: 200, height: 44)
-            .opacity(0.01)
+            .opacity(0)
         )
     }
 
@@ -1165,10 +1171,17 @@ private struct RemoteView: View {
     /// was the standard 34 all along (the pad measures exactly
     /// 452pt, which only the 49+34 budget produces), so
     /// min(34, 34) was a no-op. Deleting the strip is the fix.
+    ///
+    /// Centered (v1.0.68): the two items sit grouped in the
+    /// middle of the bar (fixed widths, Spacers on both sides)
+    /// instead of spread to the quarters — each used to take
+    /// half the width, so Remote sat at ~25% and Apps at ~75%.
     private func tabBar() -> some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 28) {
+            Spacer()
             tabButton(tab: .remote, icon: "appletvremote.gen1", label: "Remote")
             tabButton(tab: .apps, icon: "square.grid.2x2", label: "Apps")
+            Spacer()
         }
         .frame(height: 49)
         .frame(maxWidth: .infinity)
@@ -1191,7 +1204,11 @@ private struct RemoteView: View {
                 Text(label)
                     .font(.caption2.bold())
             }
-            .frame(maxWidth: .infinity)
+            // Fixed width (v1.0.68): the pair is centered as a
+            // group by the tab bar's Spacers — the old
+            // maxWidth: .infinity here spread each item to half
+            // the bar. 76pt keeps a comfortable tap target.
+            .frame(width: 76)
             .foregroundStyle(selected ? remoteAccent : .secondary)
             .padding(.vertical, 6)
             .contentShape(Rectangle())

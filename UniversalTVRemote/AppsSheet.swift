@@ -438,6 +438,12 @@ struct AppsView: View {
     /// Search (v1.0.64): one clean search bar, filters the grid,
     /// the setup checklist, and Edit mode by name as you type.
     @State private var searchText = ""
+    /// Keyboard focus (v1.0.68): Return, tapping outside the
+    /// field, and scrolling the list all dismiss the keyboard —
+    /// before this the field had no focus state, so Return did
+    /// nothing and the keyboard got stuck once the field was
+    /// focused.
+    @FocusState private var searchFocused: Bool
     /// First-run setup (v1.0.64): per TV — the grid starts with
     /// only what the user picks on first open, never 50+ apps.
     @State private var setupDone = false
@@ -527,6 +533,13 @@ struct AppsView: View {
         // The view is created fresh on every Apps-tab open, so
         // this fires on every open — never a stale list.
         .task { await load() }
+        // Scroll dismisses the keyboard (v1.0.68): the target is
+        // iOS 15, so .scrollDismissesKeyboard (iOS 16+) is not
+        // available — this appearance setting is the same
+        // mechanism underneath it. Scoped to this page: set on
+        // appear, reset on disappear.
+        .onAppear { UIScrollView.appearance().keyboardDismissMode = .onDrag }
+        .onDisappear { UIScrollView.appearance().keyboardDismissMode = .none }
         // Coming back from the background (v1.0.64): the session's
         // driver connection may have gone stale while away — the
         // reload re-connects if needed and refreshes the list, so
@@ -555,7 +568,19 @@ struct AppsView: View {
             Spacer()
             if case .loaded = loadState, setupDone {
                 Button {
-                    isEditing.toggle()
+                    // No animation (v1.0.68): the Apps ↔ Edit switch
+                    // — grid/list swap, Edit/Done label, pencil/
+                    // checkmark icon — must change instantly, in the
+                    // same frame. The toggle runs in a transaction
+                    // with animations disabled, so nothing on the
+                    // switch animates. This is the only place
+                    // isEditing changes.
+                    var transaction = Transaction()
+                    transaction.disablesAnimations = true
+                    withTransaction(transaction) { isEditing.toggle() }
+                    // Tapping Edit/Done is tapping outside the
+                    // search field — the keyboard goes away too.
+                    searchFocused = false
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: isEditing ? "checkmark" : "pencil")
@@ -584,6 +609,9 @@ struct AppsView: View {
             TextField("Search apps", text: $searchText)
                 .autocorrectionDisabled(true)
                 .textInputAutocapitalization(.never)
+                .focused($searchFocused)
+                // Return dismisses the keyboard (v1.0.68).
+                .onSubmit { searchFocused = false }
             if !searchText.isEmpty {
                 Button { searchText = "" } label: {
                     Image(systemName: "xmark.circle.fill")
@@ -653,6 +681,10 @@ struct AppsView: View {
                     .padding(.bottom, 24)
             }
         }
+        // Tap outside the search field dismisses the keyboard
+        // (v1.0.68): simultaneous, so tapping a tile still
+        // launches it — the dismiss rides along.
+        .simultaneousGesture(TapGesture().onEnded { searchFocused = false })
     }
 
     /// First-run setup (v1.0.64): the first time the Apps tab
@@ -702,6 +734,10 @@ struct AppsView: View {
                     }
                 }
             }
+            // Tap outside the search field dismisses the keyboard
+            // (v1.0.68): simultaneous, so tapping a row still
+            // selects it — the dismiss rides along.
+            .simultaneousGesture(TapGesture().onEnded { searchFocused = false })
             Button("Done") { finishSetup() }
                 .font(.headline)
                 .frame(maxWidth: .infinity)
@@ -730,6 +766,8 @@ struct AppsView: View {
         // Done tap used to do its UserDefaults writes and state
         // flips synchronously on the main thread before the first
         // post-tap frame could land, which read as a ~1s freeze.
+        // The keyboard goes away with it (v1.0.68).
+        searchFocused = false
         setupDone = true
         let orderToSave = order, hiddenToSave = hidden, hiddenOrderToSave = hiddenOrder
         DispatchQueue.main.async {
@@ -798,6 +836,10 @@ struct AppsView: View {
             // shows through (the app has no other Lists).
             .onAppear { UITableView.appearance().backgroundColor = .clear }
             .onDisappear { UITableView.appearance().backgroundColor = nil }
+            // Tap outside the search field dismisses the keyboard
+            // (v1.0.68): simultaneous, so tapping a row's toggle
+            // still toggles it — the dismiss rides along.
+            .simultaneousGesture(TapGesture().onEnded { searchFocused = false })
             VStack {
                 Text("Hidden apps stay on the TV — they just don't show here.")
                     .font(.footnote)
