@@ -665,36 +665,45 @@ struct PadTrailOverlay: View {
     }
 }
 
-/// Source glyph (v1.0.61): the TV-input icon, drawn with
-/// explicit shapes — a screen with an arrow pointing into it
-/// from the top-right, the classic "change input" pictogram.
-/// The v1.0.60 SF Symbol (`rectangle.and.arrow.up.right`)
-/// rendered as a blank circle on device, so the glyph is
-/// drawn instead: shapes always render, no symbol name to
-/// trust. 20pt, same visual weight as the other zone icons
-/// at .subheadline.bold().
+/// Source glyph (v1.0.62): the TV-input icon, drawn with
+/// explicit shapes — a screen with a bold arrow pointing into
+/// it from the top-right, the classic "change input" pictogram.
+/// v1.0.60's SF Symbol (`rectangle.and.arrow.up.right`)
+/// rendered as a blank circle on device (that name doesn't
+/// exist), and v1.0.61's drawn version looked horrible on
+/// device: 1.75pt strokes, a 14x10 screen floating in the
+/// frame, and a stroked two-barb arrowhead that read as a
+/// squiggle. This redraw keeps the same concept but fills
+/// the 20pt frame — a 16x11.5 screen on 2.75pt strokes and a
+/// thick shaft ending in a FILLED triangular arrowhead, so
+/// it matches the bold SF Symbols in the other zones at a
+/// glance. Shapes always render, no symbol name to trust.
 struct SourceGlyph: View {
     var tint: Color
 
     var body: some View {
         ZStack {
-            // Screen, lower-left.
+            // Screen, lower-left, filling most of the frame.
             RoundedRectangle(cornerRadius: 2.5)
-                .stroke(tint, lineWidth: 1.75)
-                .frame(width: 14, height: 10)
-                .offset(x: -2, y: 3)
-            // Arrow entering from the top-right, pointing
-            // down-left into the screen.
+                .stroke(tint, lineWidth: 2.75)
+                .frame(width: 16, height: 11.5)
+                .offset(x: -1.75, y: 4.25)
+            // Bold arrow entering from the top-right, pointing
+            // down-left into the screen: thick shaft, round
+            // cap, and a filled arrowhead whose tip lands just
+            // inside the screen's top edge.
             Path { path in
-                path.move(to: CGPoint(x: 9, y: -9))
-                path.addLine(to: CGPoint(x: 1.5, y: 1.5))
-                // Arrowhead at the tip.
-                path.move(to: CGPoint(x: 1.5, y: 1.5))
-                path.addLine(to: CGPoint(x: 6, y: 1))
-                path.move(to: CGPoint(x: 1.5, y: 1.5))
-                path.addLine(to: CGPoint(x: 2.5, y: -2.5))
+                path.move(to: CGPoint(x: 19.5, y: 0.5))
+                path.addLine(to: CGPoint(x: 11.5, y: 8.5))
             }
-            .stroke(tint, style: StrokeStyle(lineWidth: 1.75, lineCap: .round, lineJoin: .round))
+            .stroke(tint, style: StrokeStyle(lineWidth: 2.75, lineCap: .round))
+            Path { path in
+                path.move(to: CGPoint(x: 10.5, y: 9.5))
+                path.addLine(to: CGPoint(x: 17.2, y: 7.7))
+                path.addLine(to: CGPoint(x: 12.3, y: 2.8))
+                path.closeSubpath()
+            }
+            .fill(tint)
         }
         .frame(width: 20, height: 20)
     }
@@ -768,10 +777,11 @@ struct PadZoneOverlay: View {
     /// One zone's icon: the help sheet's icon + tint, on a
     /// faint tinted chip so it reads on any pad color or cover
     /// photo. Small on purpose — the pad stays a pad, not a
-    /// legend. Source draws its own glyph (v1.0.61): the
-    /// v1.0.60 SF Symbol rendered as a blank circle on device,
-    /// so the screen-with-arrow is drawn with explicit shapes
-    /// (see SourceGlyph above).
+    /// legend. Source draws its own glyph (v1.0.62 redraw):
+    /// the v1.0.60 SF Symbol rendered as a blank circle on
+    /// device, and the v1.0.61 drawn version was too thin, so
+    /// the screen-with-arrow is drawn big and bold with
+    /// explicit shapes (see SourceGlyph above).
     @ViewBuilder
     private func zoneIcon(_ zone: PadZone) -> some View {
         if zone == .source {
