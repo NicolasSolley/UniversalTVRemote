@@ -570,8 +570,8 @@ private struct RemoteView: View {
         // The content lives in remoteContent(layout:) — the body got
         // too big for the compiler to type-check as one expression.
         GeometryReader { geo in
-            // Tab bar (v1.0.64): a classic bottom tab bar — 49pt
-            // of tabs plus the home-indicator safe area. Its
+            // Tab bar (v1.0.64, floating pill since v1.0.70):
+            // 49pt of tabs plus the home-indicator safe area. Its
             // height comes out of the layout budget, so the pad
             // does not shrink: on an iPhone 15 Plus the pad stays
             // at its 500 cap (849 - 343 = 506 ≥ 500). On short
@@ -602,12 +602,24 @@ private struct RemoteView: View {
                 isLG: session.device.brand == .lg)
             VStack(spacing: 0) {
                 remoteContent(layout: layout)
-                // The spacer pins the tab bar to the screen bottom:
-                // on the Remote tab the pad is capped, so the
-                // content is a few points short of the full height.
+                // The spacer fills the tab strip below the
+                // content: on the Remote tab the pad is capped, so
+                // the content is a few points short of the full
+                // height. The pill tab bar floats over this strip
+                // as a bottom overlay (see below), so it never
+                // scrolls away with the Apps content.
                 Spacer(minLength: 0)
+            }
+            // Floating pill tab bar (v1.0.70): a bottom overlay
+            // outside the scrollable content, pinned at the
+            // bottom on every page — Remote, Apps grid, Edit list —
+            // no matter how far the user scrolls. It sits in the
+            // same 49 + safe-area strip the old bar reserved, so
+            // the pad does not grow or shift.
+            .overlay(alignment: .bottom) {
                 if session.supportsControl {
                     tabBar()
+                        .padding(.bottom, geo.safeAreaInsets.bottom)
                 }
             }
         }
@@ -1172,31 +1184,47 @@ private struct RemoteView: View {
     /// 452pt, which only the 49+34 budget produces), so
     /// min(34, 34) was a no-op. Deleting the strip is the fix.
     ///
-    /// Wide spacing (v1.0.69): each item takes half the bar,
-    /// icon centered horizontally over its label within its
-    /// half — Remote at ~25%, Apps at ~75%. v1.0.68 grouped
-    /// the pair in the middle (fixed 76pt widths, Spacers on
-    /// both sides); Nick's field test said that was too close
-    /// together, so the quarters layout is back.
+    /// Single item (v1.0.70): the bar shows only the OTHER
+    /// page's item, centered in the middle of the bar — Remote
+    /// page shows Apps, Apps page shows Remote. The current
+    /// page's item is not shown at all. (v1.0.69 had both items
+    /// spaced wide at ~25% / ~75%; Nick asked for the cleaner
+    /// single-item bar instead.)
     ///
     /// Lowered (v1.0.69): the icon+label stack sits
     /// tabItemVerticalOffset below vertical center — Nick's
     /// call from the same field test. One constant so the
-    /// next round can tune it in one place; the label bottom
-    /// still clears the home indicator by ~17pt.
+    /// next round can tune it in one place; in the v1.0.70
+    /// pill the label bottom lands ~38pt above the screen
+    /// bottom, well clear of the home indicator.
     private static let tabItemVerticalOffset: CGFloat = 8
 
+    /// Floating pill (v1.0.70): the single-item bar is a detached
+    /// rounded capsule — 16pt side margins, Capsule clip, soft
+    /// shadow, 49pt tall, bottom edge one safe-area inset (34pt
+    /// on iPhone 15 Plus) above the screen bottom, so it floats
+    /// just above the home indicator. It lives in the same
+    /// 49 + inset strip the old full-width bar reserved, so the
+    /// pad does not move. Rendered as a bottom overlay (see body),
+    /// so it stays pinned while the Apps grid / Edit list scrolls.
     private func tabBar() -> some View {
         HStack(spacing: 0) {
-            tabButton(tab: .remote, icon: "appletvremote.gen1", label: "Remote")
-            tabButton(tab: .apps, icon: "square.grid.2x2", label: "Apps")
+            // Single centered item (v1.0.70): only the other
+            // page's item shows — tapping it switches pages.
+            // Icons and labels unchanged: appletvremote.gen1 /
+            // "Remote", square.grid.2x2 / "Apps".
+            if selectedTab == .remote {
+                tabButton(tab: .apps, icon: "square.grid.2x2", label: "Apps")
+            } else {
+                tabButton(tab: .remote, icon: "appletvremote.gen1", label: "Remote")
+            }
         }
         .frame(height: 49)
         .frame(maxWidth: .infinity)
-        .background(.ultraThinMaterial, ignoresSafeAreaEdges: .bottom)
-        .overlay(alignment: .top) {
-            Divider()
-        }
+        .background(.ultraThinMaterial)
+        .clipShape(Capsule())
+        .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+        .padding(.horizontal, 16)
     }
 
     private func tabButton(tab: RemoteTab, icon: String, label: String) -> some View {
@@ -1212,13 +1240,13 @@ private struct RemoteView: View {
                 Text(label)
                     .font(.caption2.bold())
             }
-            // Half the bar (v1.0.69): the icon+label stack is
-            // centered in the button's half, so the items sit
-            // at ~25% / ~75% — the v1.0.68 fixed 76pt widths
-            // grouped them too close together in the middle.
+            // Full bar width (v1.0.70): the single item's button
+            // fills the bar, so the icon+label stack is centered
+            // in the middle of the bar. (v1.0.69: each button
+            // took half the bar, items at ~25% / ~75%.)
             // Lowered by tabItemVerticalOffset (v1.0.69): the
             // offset shifts only the rendered stack, so the
-            // tap target stays the full half-width button.
+            // tap target stays the full-width button.
             .offset(y: Self.tabItemVerticalOffset)
             .frame(maxWidth: .infinity)
             .foregroundStyle(selected ? remoteAccent : .secondary)
