@@ -1147,7 +1147,7 @@ private struct RemoteView: View {
     private func tabButton(tab: RemoteTab, icon: String, label: String) -> some View {
         let selected = selectedTab == tab
         let disabled = tab == .apps && session.awaitingPairingCode
-        Button {
+        return Button {
             if tab == .apps { _ = dismissKeyboardIfOpen() }
             selectedTab = tab
         } label: {
