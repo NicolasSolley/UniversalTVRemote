@@ -445,8 +445,12 @@ actor LGRemote {
             return points.compactMap { point -> LGApp? in
                 guard let id = point["id"] as? String,
                       let title = point["title"] as? String else { return nil }
+                // webOS usually returns absolute icon URLs, but
+                // some sets return a path — resolve it against the
+                // TV's resource server (port 3000) so the Apps sheet
+                // (v1.0.63) gets a usable icon either way.
                 let icon = (point["largeIcon"] as? String ?? point["icon"] as? String)
-                    .flatMap(URL.init(string:))
+                    .flatMap { URL(string: $0, relativeTo: URL(string: "http://\(host):3000")) }?.absoluteURL
                 return LGApp(id: id, name: title, iconURL: icon)
             }
         } catch {

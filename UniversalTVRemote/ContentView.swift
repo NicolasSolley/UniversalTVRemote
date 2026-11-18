@@ -13,6 +13,15 @@ struct ContentView: View {
     /// Appearance (v1.0.46): the whole app follows this — dark is
     /// the default, the way the app has always looked.
     @AppStorage("appearance") private var appearanceRaw = "system"
+    /// Auto-open last TV (v1.0.63): setting, default ON — the app
+    /// opens straight to the last TV used, when one is remembered.
+    @AppStorage("openLastTV") private var openLastTV = true
+    /// True while the current remote came from an auto-open (not a
+    /// tap) — drives the unreachable-TV fallback in RemoteView.
+    @State private var autoOpened = false
+    /// Plain note shown on the devices list when an auto-open
+    /// failed ("Couldn't reach …"), until the user picks a TV.
+    @State private var autoOpenNote: String?
 
     var body: some View {
         // NavigationView (not NavigationStack): the deployment target is
@@ -22,10 +31,24 @@ struct ContentView: View {
                 // The remote draws its own top bar (Devices pill, TV
                 // name, power), so the navigation bar stays hidden
                 // here — no double header.
-                RemoteView(session: session, onBack: { self.session = nil })
+                RemoteView(session: session, autoOpened: autoOpened, onBack: {
+                    autoOpened = false
+                    self.session = nil
+                    if discovery.devices.isEmpty { discovery.scan() }
+                }, onAutoOpenFailed: { note in
+                    // Auto-open fallback (v1.0.63): the remembered TV
+                    // didn't connect — back to the list with a plain
+                    // note, never stuck on a dead connection. The
+                    // list re-scans if it is empty (the launch scan
+                    // never ran — see .task).
+                    autoOpenNote = note
+                    autoOpened = false
+                    self.session = nil
+                    if discovery.devices.isEmpty { discovery.scan() }
+                })
                     .navigationBarHidden(true)
             } else {
-                DiscoveryListView(discovery: discovery) { device in
+                DiscoveryListView(discovery: discovery, autoOpenNote: autoOpenNote) { device in
                     // Stop the scan first, then navigate: the auto-scan
                     // is still sweeping the subnet when the TV is tapped,
                     // and its steady stream of main-actor merges starves
@@ -37,6 +60,7 @@ struct ContentView: View {
                     // pill follows Connecting / Not connected / Connected.
                     // The device list is kept (stop() never clears it),
                     // and pull-to-refresh re-scans on the way back.
+                    autoOpenNote = nil
                     discovery.stop()
                     session = RemoteSession(device: device)
                 }
@@ -53,6 +77,16 @@ struct ContentView: View {
             // is unchanged (subnet sweep, scan-only, no manual IP entry).
             guard !didAutoScan else { return }
             didAutoScan = true
+            // Auto-open last TV (v1.0.63): setting on (default) and a
+            // remembered TV → straight to its remote, no scan (like a
+            // manual tap, which stops it — see onSelect). If the TV
+            // isn't reachable, RemoteView falls back to the list with
+            // a note. Coming back to an empty list re-scans (onBack).
+            if openLastTV, let last = RememberedTVStore.lastTV(), last.brand.supportsControl {
+                session = RemoteSession(device: last.asSleepingDevice())
+                autoOpened = true
+                return
+            }
             if !discovery.isScanning {
                 discovery.scan()
             }
@@ -70,6 +104,9 @@ struct ContentView: View {
 /// list simply populates as TVs are found. Pull-to-refresh re-scans.
 private struct DiscoveryListView: View {
     @ObservedObject var discovery: DiscoveryManager
+    /// Plain note from a failed auto-open ("Couldn't reach …",
+    /// v1.0.63) — shown under the header until a TV is picked.
+    var autoOpenNote: String?
     var onSelect: (TVDevice) -> Void
 
     /// Resolved color scheme (v1.0.48): the page background comes
@@ -146,6 +183,14 @@ private struct DiscoveryListView: View {
                     }
                 }
                 .padding(.horizontal)
+
+                if let note = autoOpenNote {
+                    Text(note)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
+                }
 
                 // One dark card holding the whole TV list.
                 VStack(spacing: 0) {
@@ -461,9 +506,24 @@ struct RemoteLayout {
 private struct RemoteView: View {
     @ObservedObject var session: RemoteSession
     var onBack: () -> Void
+    /// True when this remote came from an auto-open (v1.0.63), not
+    /// a tap — enables the unreachable-TV fallback below.
+    var autoOpened: Bool = false
+    /// Called once when an auto-opened remote fails to connect, so
+    /// ContentView falls back to the devices list with a note.
+    var onAutoOpenFailed: ((String) -> Void)? = nil
 
     @State private var keyboardText = ""
     @State private var showKeyboard = false
+    /// Apps sheet (v1.0.63), opened from the Apps pill at the bottom.
+    @State private var showApps = false
+    /// Auto-open fallback (v1.0.63): when the remote appeared, and
+    /// whether the initial connection ever succeeded. The fallback
+    /// fires only for the initial attempt — once connected, a later
+    /// disconnect stays on the remote (the pill says Not connected).
+    @State private var appearedAt = Date()
+    @State private var autoOpenFallbackDone = false
+    @State private var autoOpenEverConnected = false
     /// Zone overlay toggle (v1.0.56): shows the faint zone
     /// lines + icons on the pad. @State, not persisted — it
     /// resets when the remote closes.
@@ -519,6 +579,23 @@ private struct RemoteView: View {
         // touches — so the dismissing tap never also acts.
         .onTapGesture { _ = dismissKeyboardIfOpen() }
         .task { await session.connect() }
+        .sheet(isPresented: $showApps) { AppsSheet(session: session) }
+        .task {
+            // Auto-open re-check (v1.0.63): a fast failure (dead host
+            // refuses at once) can flip isBusy back to false before
+            // the 2s grace in checkAutoOpenFallback, so no onChange
+            // would ever re-check it. One delayed re-check at 3s
+            // catches that case; a slow failure is still caught by
+            // the onChange handlers below.
+            guard autoOpened else { return }
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            checkAutoOpenFallback()
+        }
+        .onChange(of: session.isConnected) { connected in
+            if connected { autoOpenEverConnected = true }
+            checkAutoOpenFallback()
+        }
+        .onChange(of: session.isBusy) { _ in checkAutoOpenFallback() }
         .onChange(of: session.tvTextFieldFocused) { focused in
             // Auto keyboard (v1.0.34): the TV announced a focused
             // text field, so the keyboard shows itself; focus
@@ -853,6 +930,22 @@ private struct RemoteView: View {
         return session.status + (hardwareVolume.captureIssue.map { "\n" + $0 } ?? "")
     }
 
+    /// Auto-open fallback (v1.0.63): an auto-opened remote whose
+    /// initial connection attempt resolved to failure — not
+    /// connected, not busy — goes back to the devices list with a
+    /// plain note, once. The 2s grace covers the window before
+    /// connect() sets isBusy (the connect call starts in .task
+    /// right after appear); the ever-connected guard keeps a
+    /// mid-use disconnect on the remote instead of yanking the
+    /// user back to the list.
+    private func checkAutoOpenFallback() {
+        guard autoOpened, !autoOpenFallbackDone, !autoOpenEverConnected,
+              !session.isConnected, !session.isBusy,
+              Date().timeIntervalSince(appearedAt) > 2 else { return }
+        autoOpenFallbackDone = true
+        onAutoOpenFailed?("Couldn't reach \(session.device.name).")
+    }
+
     /// True while the session is actively connecting — busy in any
     /// form, including waiting on the TV's own allow prompt. The
     /// prompt wait is the long part (Samsung/LG sit in it for the
@@ -954,39 +1047,70 @@ private struct RemoteView: View {
         }
     }
 
-    /// Bottom row (v1.0.34): just the keyboard button, centered.
-    /// The row only exists where the button is needed: on TVs that
-    /// announce a focused text field (Android TV, LG) the keyboard
-    /// pops up on its own and the button hides.
-    /// The control sits in a layout-sized cell. Icons only — the
-    /// words underneath were removed in v1.0.19. Nothing here is
-    /// ever a dead button. A separate view so the body stays small
-    /// enough for the compiler to type-check.
+    /// Bottom row (v1.0.34, Apps pill v1.0.63): the keyboard button
+    /// where it's needed, plus the slim "Apps" pill that opens the
+    /// Apps page — the pill is the only thing in the row on TVs
+    /// that pop the keyboard up on their own (Android TV, LG).
+    /// The row only exists on controllable TVs; the keyboard button
+    /// still only shows where the TV doesn't auto-pop the keyboard.
+    /// The pill shares the keyboard circle's vertical center, and
+    /// the row keeps its layout-sized cell — the pad does not
+    /// shrink. Nothing here is ever a dead button. A separate view
+    /// so the body stays small enough for the compiler to type-check.
     @ViewBuilder
     private func bottomRow(layout: RemoteLayout) -> some View {
-        if session.capabilities.supportsTextInput && !session.capabilities.supportsAutoKeyboard {
+        if session.supportsControl {
             HStack(alignment: .top, spacing: 16) {
                 Spacer()
-                Button { showKeyboard.toggle() } label: {
-                    ZStack {
-                        Circle()
-                            .fill(surfaceFill)
-                        Circle()
-                            .stroke(showKeyboard ? remoteAccent : Color.primary.opacity(0.08), lineWidth: 2.5)
-                        Image(systemName: "keyboard")
-                            .font(.title)
-                            .foregroundStyle(.primary)
+                if session.capabilities.supportsTextInput && !session.capabilities.supportsAutoKeyboard {
+                    Button { showKeyboard.toggle() } label: {
+                        ZStack {
+                            Circle()
+                                .fill(surfaceFill)
+                            Circle()
+                                .stroke(showKeyboard ? remoteAccent : Color.primary.opacity(0.08), lineWidth: 2.5)
+                            Image(systemName: "keyboard")
+                                .font(.title)
+                                .foregroundStyle(.primary)
+                        }
+                        .frame(width: layout.circleSize, height: layout.circleSize)
+                        .shadow(color: surfaceShadow, radius: 8, y: 2)
                     }
-                    .frame(width: layout.circleSize, height: layout.circleSize)
-                    .shadow(color: surfaceShadow, radius: 8, y: 2)
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Keyboard")
+                    .frame(height: layout.bottomCell)
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Keyboard")
-                .frame(height: layout.bottomCell)
+                appsButton(layout: layout)
                 Spacer()
             }
             .padding(.top, layout.bottomRowTopPadding)
         }
+    }
+
+    /// The slim "Apps" pill (v1.0.63): opens the Apps page. It
+    /// fills the same layout cell as the keyboard button, so the
+    /// pill sits on the circle's centerline. The keyboard is
+    /// dismissed first if it is open, like the top-bar buttons.
+    private func appsButton(layout: RemoteLayout) -> some View {
+        Button {
+            if dismissKeyboardIfOpen() { return }
+            showApps = true
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "square.grid.2x2")
+                    .font(.headline)
+                Text("Apps")
+                    .font(.headline)
+            }
+            .padding(.horizontal, 20)
+            .frame(height: 48)
+            .background(surfaceFill, in: Capsule())
+            .overlay(Capsule().stroke(Color.primary.opacity(0.12), lineWidth: 1))
+            .shadow(color: surfaceShadow, radius: 8, y: 2)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Apps")
+        .frame(height: layout.bottomCell)
     }
 
 }
@@ -1008,6 +1132,9 @@ private struct SettingsSheet: View {
     @AppStorage("appearance") private var appearanceRaw = "system"
     /// Guide button (v1.0.58): Settings toggle, default shown.
     @AppStorage("showGuideButton") private var showGuideButton = true
+    /// Open last TV (v1.0.63): Settings toggle, default ON — the
+    /// app opens straight to the last TV used when it opens.
+    @AppStorage("openLastTV") private var openLastTV = true
     @AppStorage("padCoverVersion") private var coverVersion = 0
     /// Cover flow (v1.0.57): the picker is still a sheet, but
     /// the cropper is NOT — two sheet-based cropper
@@ -1074,6 +1201,12 @@ private struct SettingsSheet: View {
                     GlassSection("GUIDE") {
                         Toggle("Show guide button", isOn: $showGuideButton)
                         Text("Show the button that turns on the zone guide on the pad.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    GlassSection("STARTUP") {
+                        Toggle("Open last TV", isOn: $openLastTV)
+                        Text("Automatically open the last TV you used when the app opens.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }

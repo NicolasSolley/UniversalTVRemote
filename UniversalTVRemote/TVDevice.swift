@@ -207,6 +207,15 @@ enum RememberedTVStore {
         save(list)
     }
 
+    /// The most recently connected TV, if any (v1.0.63 auto-open):
+    /// the record with the latest lastSeen.
+    static func lastTV() -> RememberedTV? { latest(in: load()) }
+
+    /// Pure helper so tests can drive the recency pick directly.
+    static func latest(in list: [RememberedTV]) -> RememberedTV? {
+        list.max(by: { $0.lastSeen < $1.lastSeen })
+    }
+
     /// A driver learned a MAC after connect — attach it to the
     /// record so the TV can be woken next time it sleeps.
     static func updateMAC(host: String, mac: String) {

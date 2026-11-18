@@ -138,6 +138,9 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
     @Published var rokuApps: [RokuRemote.RokuApp] = []
     @Published var samsungApps: [SamsungRemote.SamsungApp] = []
     @Published var lgApps: [LGApp] = []
+    /// Android TV cannot list installed apps (v1.0.63): the curated
+    /// deep-link set the Apps sheet offers instead.
+    @Published var androidTVApps: [TVApp] = []
     /// True while the TV has a text field focused (v1.0.34 auto
     /// keyboard): Android TV reports it from the field-22 show
     /// request, LG from the registerRemoteKeyboard subscription.
@@ -867,5 +870,37 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
         case .androidTV, .airPlay, .other:
             return
         }
+    }
+
+    /// Load the Apps sheet's list for the connected brand (v1.0.63):
+    /// the TV's real installed apps on Roku / Samsung / LG, the
+    /// curated deep-link set on Android TV.
+    func loadApps() async {
+        switch device.brand {
+        case .roku: await loadRokuApps()
+        case .samsung: await loadSamsungApps()
+        case .lg: await loadLGApps()
+        case .androidTV: androidTVApps = AndroidTVAppCatalog.apps
+        case .airPlay, .other: break
+        }
+    }
+
+    /// Launch one Apps-sheet item (v1.0.63): by app id on Roku /
+    /// Samsung / LG, by deep link on Android TV (the item's id IS
+    /// the deep link there).
+    func launchAppItem(_ item: TVAppItem) async {
+        if device.brand == .androidTV {
+            launchAndroidTVApp(TVApp(name: item.name, launchID: item.id, iconURL: nil))
+            return
+        }
+        await launchApp(id: item.id)
+    }
+
+    /// Launch a deep-link app on Android TV (v1.0.63): the fork
+    /// driver's launch sends the link in field 90.
+    func launchAndroidTVApp(_ app: TVApp) {
+        guard device.brand == .androidTV else { return }
+        status = "Opening \(app.name)."
+        androidTVDriver?.launch(app)
     }
 }

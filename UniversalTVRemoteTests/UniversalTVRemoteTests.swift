@@ -1862,3 +1862,119 @@ final class TopBarLayoutTests: XCTestCase {
         XCTAssertEqual(layout.padSize, 500)
     }
 }
+
+/// Apps page customization (v1.0.63): per-TV show/hide + drag
+/// reorder, saved in UserDefaults keyed by host. The ordering is
+/// pure (visibleIDs / move), so tests drive it directly — no TV,
+/// no UserDefaults.
+final class AppsCustomizationTests: XCTestCase {
+    func testVisibleIDsRespectsSavedOrder() {
+        let ids = AppsCustomization.visibleIDs(installedIDs: ["a", "b", "c"], order: ["c", "a", "b"], hidden: [])
+        XCTAssertEqual(ids, ["c", "a", "b"])
+    }
+
+    func testNewlyInstalledAppsAppearVisibleAtTheEnd() {
+        let ids = AppsCustomization.visibleIDs(installedIDs: ["a", "b", "c"], order: ["b", "a"], hidden: [])
+        XCTAssertEqual(ids, ["b", "a", "c"])
+    }
+
+    func testHiddenAppsAreExcluded() {
+        let ids = AppsCustomization.visibleIDs(installedIDs: ["a", "b", "c"], order: ["a", "b", "c"], hidden: ["b"])
+        XCTAssertEqual(ids, ["a", "c"])
+    }
+
+    func testEmptySavedOrderKeepsInstalledOrder() {
+        let ids = AppsCustomization.visibleIDs(installedIDs: ["a", "b", "c"], order: [], hidden: [])
+        XCTAssertEqual(ids, ["a", "b", "c"])
+    }
+
+    func testSavedOrderForUninstalledAppsIsIgnored() {
+        let ids = AppsCustomization.visibleIDs(installedIDs: ["a", "b"], order: ["z", "b", "a"], hidden: [])
+        XCTAssertEqual(ids, ["b", "a"])
+    }
+
+    func testMoveReordersVisibleAndKeepsHiddenAfter() {
+        // "c" is hidden (not in the shown section) — the drag
+        // moves "a" after "b" and "c" keeps its place after them.
+        let order = AppsCustomization.move(order: ["a", "b", "c"], visibleIDs: ["a", "b"],
+                                           from: IndexSet(integer: 0), to: 2)
+        XCTAssertEqual(order, ["b", "a", "c"])
+    }
+}
+
+/// Apps page brand tiles (v1.0.63): bundled text-based tiles
+/// matched by name — exact, then longest prefix — with a generic
+/// initial-letter tile for anything unknown.
+final class AppBrandArtTests: XCTestCase {
+    func testExactMatch() {
+        XCTAssertEqual(AppBrandArt.match(name: "Netflix")?.label, "NETFLIX")
+    }
+
+    func testMatchIsCaseInsensitive() {
+        XCTAssertEqual(AppBrandArt.match(name: "netflix")?.label, "NETFLIX")
+    }
+
+    func testPrefixMatch() {
+        XCTAssertEqual(AppBrandArt.match(name: "Netflix 4K")?.label, "NETFLIX")
+    }
+
+    func testLongestPrefixWins() {
+        XCTAssertEqual(AppBrandArt.match(name: "YouTube TV 4K")?.label, "YouTube TV")
+    }
+
+    func testUnknownAppHasNoMatch() {
+        XCTAssertNil(AppBrandArt.match(name: "Some Random App"))
+    }
+
+    func testGenericTileUsesInitialLetter() {
+        XCTAssertEqual(AppBrandArt.tile(for: "Some Random App").label, "S")
+    }
+}
+
+/// Android TV fallback list (v1.0.63): the protocol cannot list
+/// installed apps, so the sheet offers this curated deep-link set.
+/// Every entry must be a launchable link.
+final class AndroidTVAppCatalogTests: XCTestCase {
+    func testEveryAppHasALaunchableLink() {
+        XCTAssertFalse(AndroidTVAppCatalog.apps.isEmpty)
+        for app in AndroidTVAppCatalog.apps {
+            XCTAssertFalse(app.launchID.isEmpty, app.name)
+            XCTAssertNotNil(URL(string: app.launchID), app.name)
+        }
+    }
+
+    func testNamesAreUnique() {
+        let names = AndroidTVAppCatalog.apps.map(\.name)
+        XCTAssertEqual(Set(names).count, names.count)
+    }
+
+    func testNetflixDeepLink() {
+        let netflix = AndroidTVAppCatalog.apps.first { $0.name == "Netflix" }
+        XCTAssertEqual(netflix?.launchID, "https://www.netflix.com/title")
+    }
+}
+
+/// Auto-open last TV (v1.0.63): the remembered TV is the record
+/// with the latest lastSeen. Pure helper, so tests drive it
+/// directly — no UserDefaults.
+final class RememberedTVLastTests: XCTestCase {
+    private func entry(host: String, lastSeen: Date) -> RememberedTV {
+        RememberedTV(name: host, brand: .samsung, host: host, port: 8001,
+                     model: nil, manufacturer: nil, macAddress: nil, lastSeen: lastSeen)
+    }
+
+    func testLatestLastSeenWins() {
+        let older = entry(host: "192.168.1.1", lastSeen: Date(timeIntervalSince1970: 1000))
+        let newer = entry(host: "192.168.1.2", lastSeen: Date(timeIntervalSince1970: 2000))
+        XCTAssertEqual(RememberedTVStore.latest(in: [older, newer])?.host, "192.168.1.2")
+    }
+
+    func testEmptyListHasNoLastTV() {
+        XCTAssertNil(RememberedTVStore.latest(in: []))
+    }
+
+    func testSingleEntryIsTheLastTV() {
+        let only = entry(host: "192.168.1.1", lastSeen: Date())
+        XCTAssertEqual(RememberedTVStore.latest(in: [only])?.host, "192.168.1.1")
+    }
+}
