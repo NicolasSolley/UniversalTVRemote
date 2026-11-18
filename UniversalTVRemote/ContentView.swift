@@ -1172,16 +1172,24 @@ private struct RemoteView: View {
     /// 452pt, which only the 49+34 budget produces), so
     /// min(34, 34) was a no-op. Deleting the strip is the fix.
     ///
-    /// Centered (v1.0.68): the two items sit grouped in the
-    /// middle of the bar (fixed widths, Spacers on both sides)
-    /// instead of spread to the quarters — each used to take
-    /// half the width, so Remote sat at ~25% and Apps at ~75%.
+    /// Wide spacing (v1.0.69): each item takes half the bar,
+    /// icon centered horizontally over its label within its
+    /// half — Remote at ~25%, Apps at ~75%. v1.0.68 grouped
+    /// the pair in the middle (fixed 76pt widths, Spacers on
+    /// both sides); Nick's field test said that was too close
+    /// together, so the quarters layout is back.
+    ///
+    /// Lowered (v1.0.69): the icon+label stack sits
+    /// tabItemVerticalOffset below vertical center — Nick's
+    /// call from the same field test. One constant so the
+    /// next round can tune it in one place; the label bottom
+    /// still clears the home indicator by ~17pt.
+    private static let tabItemVerticalOffset: CGFloat = 8
+
     private func tabBar() -> some View {
-        HStack(spacing: 28) {
-            Spacer()
+        HStack(spacing: 0) {
             tabButton(tab: .remote, icon: "appletvremote.gen1", label: "Remote")
             tabButton(tab: .apps, icon: "square.grid.2x2", label: "Apps")
-            Spacer()
         }
         .frame(height: 49)
         .frame(maxWidth: .infinity)
@@ -1204,11 +1212,15 @@ private struct RemoteView: View {
                 Text(label)
                     .font(.caption2.bold())
             }
-            // Fixed width (v1.0.68): the pair is centered as a
-            // group by the tab bar's Spacers — the old
-            // maxWidth: .infinity here spread each item to half
-            // the bar. 76pt keeps a comfortable tap target.
-            .frame(width: 76)
+            // Half the bar (v1.0.69): the icon+label stack is
+            // centered in the button's half, so the items sit
+            // at ~25% / ~75% — the v1.0.68 fixed 76pt widths
+            // grouped them too close together in the middle.
+            // Lowered by tabItemVerticalOffset (v1.0.69): the
+            // offset shifts only the rendered stack, so the
+            // tap target stays the full half-width button.
+            .offset(y: Self.tabItemVerticalOffset)
+            .frame(maxWidth: .infinity)
             .foregroundStyle(selected ? remoteAccent : .secondary)
             .padding(.vertical, 6)
             .contentShape(Rectangle())

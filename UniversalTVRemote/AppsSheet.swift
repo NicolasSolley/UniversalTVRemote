@@ -556,8 +556,14 @@ struct AppsView: View {
     /// recognized as a button.
     private var header: some View {
         HStack {
-            Text("Apps")
-                .font(.title2.bold())
+            // No "Apps" title during first-run setup (v1.0.69):
+            // setupView already says "Choose your apps", so the
+            // header title doubled the heading. The title stays
+            // for the grid and Edit mode.
+            if setupDone {
+                Text("Apps")
+                    .font(.title2.bold())
+            }
             // A small spinner while a background refresh runs
             // (v1.0.64): the last good list is already showing,
             // so this is just the "still loading" cue.
@@ -717,9 +723,15 @@ struct AppsView: View {
                             }
                         } label: {
                             HStack(spacing: 12) {
+                                // Taller rows (v1.0.69): the 44pt tile
+                                // + 8pt padding made 60pt rows that
+                                // felt tiny to tap — the tile is now
+                                // 56pt with 10pt padding, so each row
+                                // is 76pt. Setup list only; the Edit
+                                // list and Apps grid are untouched.
                                 AppBrandTile(name: item.name, compact: true)
-                                    .frame(width: 44, height: 44)
-                                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                                    .frame(width: 56, height: 56)
+                                    .clipShape(RoundedRectangle(cornerRadius: 13))
                                 Text(item.name)
                                     .font(.subheadline)
                                     .lineLimit(1)
@@ -728,7 +740,7 @@ struct AppsView: View {
                                     .foregroundStyle(setupSelection.contains(item.id) ? remoteAccent : .secondary)
                             }
                             .padding(.horizontal, 20)
-                            .padding(.vertical, 8)
+                            .padding(.vertical, 10)
                         }
                         .buttonStyle(.plain)
                     }
