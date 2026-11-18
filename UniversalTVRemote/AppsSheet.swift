@@ -203,6 +203,7 @@ struct AppsSheet: View {
     /// Bulk selection (v1.0.63): Edit-mode only — which shown
     /// apps are selected for Hide selected. Resets when leaving
     /// Edit mode (and on reload); never persisted.
+    @State private var selectedIDs: Set<String> = []
 
     private var visibleItems: [TVAppItem] {
         let ids = AppsCustomization.visibleIDs(installedIDs: items.map(\.id), order: order, hidden: hidden)
