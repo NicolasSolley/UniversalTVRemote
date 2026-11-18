@@ -848,6 +848,14 @@ struct AppsView: View {
                 }
             }
             .listStyle(.plain)
+            // Gap under the search bar (v1.0.70): the plain
+            // list's sticky section headers pin to the List's
+            // top edge, which sat flush against the search
+            // bar — the "Shown"/"Hidden" header touched it
+            // while scrolling. The List now starts 12pt lower,
+            // so the pinned header keeps that gap. Edit mode
+            // only; the grid and setup list are untouched.
+            .padding(.top, 12)
             .listRowSeparator(.hidden)
             .environment(\.editMode, .constant(.active))
             .background(AppBackground.color(for: colorScheme))
