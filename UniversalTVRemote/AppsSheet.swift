@@ -428,12 +428,6 @@ struct AppsView: View {
     @Binding var hidesPill: Bool
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.scenePhase) private var scenePhase
-    /// Bottom safe area (v1.0.72): the pill that used to float
-    /// over the bottom strip is hidden on the setup and Edit
-    /// screens, so the bottom Done button is the lowest thing on
-    /// the page — its bottom padding clears the home indicator.
-    @Environment(\.safeAreaInsets) private var safeAreaInsets
-
     /// The pill hides while the first-run setup checklist is up
     /// or Edit mode is open; it shows on the Apps grid only.
     private var pillHidden: Bool { !setupDone || isEditing }
@@ -742,9 +736,14 @@ struct AppsView: View {
     /// the whole rect a hit target. The bottom padding clears
     /// the home indicator — the pill that used to float over this
     /// strip is hidden on these screens, so the button is the
-    /// lowest thing on the page.
+    /// lowest thing on the page. The 17pt gap matches the pill's
+    /// own bottom gap (ContentView.pillBottomGap); the
+    /// @Environment(\.safeAreaInsets) read does not compile in
+    /// this configuration, so the value is fixed like the pill's.
+    private static let doneButtonBottomGap: CGFloat = 17
+
     private func doneButton(action: @escaping () -> Void) -> some View {
-        Button(action: action) label: {
+        Button(action: action) {
             Text("Done")
                 .font(.headline)
                 .frame(maxWidth: .infinity)
@@ -755,7 +754,7 @@ struct AppsView: View {
         }
         .padding(.horizontal, 20)
         .padding(.top, 12)
-        .padding(.bottom, 12 + safeAreaInsets.bottom)
+        .padding(.bottom, 12 + Self.doneButtonBottomGap)
     }
 
     /// Leave Edit mode (v1.0.72): the bottom Done button does
