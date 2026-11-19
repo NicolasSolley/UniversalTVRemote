@@ -672,6 +672,11 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
             // It does clear a previous send failure (v1.0.74): the
             // user fixed the problem, so the error line goes away.
             lastSendError = nil
+            // And it restores the connected state (v1.0.75, the
+            // fork's rule): one timed-out press used to leave the
+            // pill stuck on "Not connected" even while later presses
+            // worked, because only a fresh connect set this back.
+            isConnected = true
         } catch let error as SamsungRemote.SamsungError {
             // Only connection-level errors drop `isConnected`
             // (v1.0.53): an unexpected reply means the TV answered.
