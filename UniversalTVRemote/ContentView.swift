@@ -1014,10 +1014,14 @@ private struct RemoteView: View {
     /// the pill (v1.0.32 — Nick: the "Connected to …" line at
     /// the bottom just repeated the pill). Unconnected states
     /// keep the full status (it carries the error detail the
-    /// pill can't), and a capture problem always shows.
+    /// pill can't), and a capture problem always shows. A send
+    /// failure while connected (v1.0.74) shows too — a Roku
+    /// blocking remote apps used to fail silently here because
+    /// the session stays connected and `status` is hidden then.
     private var diagnosticText: String? {
         if session.isConnected {
-            return hardwareVolume.captureIssue
+            let parts = [session.lastSendError, hardwareVolume.captureIssue].compactMap { $0 }
+            return parts.isEmpty ? nil : parts.joined(separator: "\n")
         }
         return session.status + (hardwareVolume.captureIssue.map { "\n" + $0 } ?? "")
     }

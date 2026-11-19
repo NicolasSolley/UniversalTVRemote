@@ -148,6 +148,13 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
     let capabilities: RemoteCapabilities
 
     @Published var status: String = ""
+    /// The last send failure, if any (v1.0.74): a non-connection
+    /// error — e.g. a Roku blocking remote apps (403) — leaves the
+    /// session connected, so `status` alone never surfaces it (the
+    /// pad hides `status` while connected). This is shown under
+    /// the pad instead, and clears on a successful send or a fresh
+    /// connect.
+    @Published var lastSendError: String? = nil
     @Published var isConnected = false
     @Published var isBusy = false
     /// True while the user must do something on the TV (accept a prompt).
@@ -243,6 +250,8 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
 
     /// Connects (or verifies reachability) and reports progress in `status`.
     func connect() async {
+        // A fresh connect clears a stale send failure (v1.0.74).
+        lastSendError = nil
         // Demo TV (v1.0.66): instantly "connected" — nothing is
         // ever sent over the network, so there is nothing to
         // connect to. The fake app lineup loads here, so the
@@ -357,6 +366,7 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
         tvTextFieldFocused = false
         awaitingPairingCode = false
         pairingError = nil
+        lastSendError = nil
         // Demo TV (v1.0.66): no drivers ever started, so there is
         // nothing to tear down.
         guard !device.isDemo else { isConnected = false; return }
@@ -635,10 +645,12 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
         // explanation reads as a broken remote.
         guard supportsControl else {
             status = "This device was found, but there's no public way to control it from an app."
+            lastSendError = status
             return
         }
         guard let host = device.host else {
             status = "Still waiting for this TV's address — try scanning again."
+            lastSendError = status
             return
         }
         do {
@@ -657,20 +669,27 @@ final class RemoteSession: ObservableObject, TVDriverDelegate {
             // A successful send leaves `status` untouched — the TV
             // reflecting the change is the confirmation, so nothing
             // flashes "Sent." at the bottom after every press.
+            // It does clear a previous send failure (v1.0.74): the
+            // user fixed the problem, so the error line goes away.
+            lastSendError = nil
         } catch let error as SamsungRemote.SamsungError {
             // Only connection-level errors drop `isConnected`
             // (v1.0.53): an unexpected reply means the TV answered.
             if error.isConnectionLevel { isConnected = false }
             status = error.localizedDescription
+            lastSendError = status
         } catch let error as RokuRemote.RokuError {
             if error.isConnectionLevel { isConnected = false }
             status = error.localizedDescription
+            lastSendError = status
         } catch let error as LGError {
             if error.isConnectionLevel { isConnected = false }
             status = error.localizedDescription
+            lastSendError = status
         } catch {
             isConnected = false
             status = "Couldn't reach the TV. Check that it's on and on the same Wi-Fi network."
+            lastSendError = status
         }
     }
 
