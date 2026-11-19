@@ -253,6 +253,8 @@ enum AndroidTVAppCatalog {
         TVApp(name: "Plex", launchID: "plex://", iconURL: nil),
         TVApp(name: "Jellyfin", launchID: "market://launch?id=org.jellyfin.androidtv", iconURL: nil),
         TVApp(name: "Emby", launchID: "market://launch?id=com.mb.android", iconURL: nil),
+        TVApp(name: "Stremio", launchID: "market://launch?id=com.stremio.one", iconURL: nil),
+        TVApp(name: "Nuvio", launchID: "market://launch?id=com.nuvio.tv", iconURL: nil),
     ]
 }
 
