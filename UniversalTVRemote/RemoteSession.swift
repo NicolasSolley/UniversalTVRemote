@@ -64,6 +64,13 @@ struct RemoteCapabilities {
     /// focus. Samsung and Roku send no such signal, so the button
     /// stays there.
     let supportsAutoKeyboard: Bool
+    /// The TV has a real exit key (v1.0.78): Samsung's KEY_EXIT
+    /// and LG's EXIT button. Roku ECP has no exit key at all —
+    /// our code maps exit to Home — and Android TV's protocol
+    /// maps exit to the same code as back (4), so on those two
+    /// brands Exit is just a duplicate of Home / Back and the
+    /// bottom-right zone and its guide card are hidden instead.
+    let supportsExit: Bool
 
     static func forBrand(_ brand: TVDevice.Brand) -> RemoteCapabilities {
         switch brand {
@@ -72,19 +79,19 @@ struct RemoteCapabilities {
                 supportsDigits: false, supportsTextInput: true, supportsApps: true,
                 supportsSeparatePause: false, supportsPlayback: true,
                 supportsVoice: false, needsTVPrompt: false, needsPairingCode: false,
-                supportsAutoKeyboard: false)
+                supportsAutoKeyboard: false, supportsExit: false)
         case .samsung:
             return RemoteCapabilities(
                 supportsDigits: true, supportsTextInput: true, supportsApps: true,
                 supportsSeparatePause: true, supportsPlayback: true,
                 supportsVoice: false, needsTVPrompt: true, needsPairingCode: false,
-                supportsAutoKeyboard: false)
+                supportsAutoKeyboard: false, supportsExit: true)
         case .lg:
             return RemoteCapabilities(
                 supportsDigits: true, supportsTextInput: true, supportsApps: true,
                 supportsSeparatePause: true, supportsPlayback: true,
                 supportsVoice: false, needsTVPrompt: true, needsPairingCode: false,
-                supportsAutoKeyboard: true)
+                supportsAutoKeyboard: true, supportsExit: true)
         case .androidTV:
             // Text input IS implemented: AndroidTVDriver.sendText builds
             // the field-21 IME batch edit and the incoming-message
@@ -99,13 +106,13 @@ struct RemoteCapabilities {
                 supportsDigits: true, supportsTextInput: true, supportsApps: false,
                 supportsSeparatePause: true, supportsPlayback: true,
                 supportsVoice: true, needsTVPrompt: false, needsPairingCode: true,
-                supportsAutoKeyboard: true)
+                supportsAutoKeyboard: true, supportsExit: false)
         case .airPlay, .other:
             return RemoteCapabilities(
                 supportsDigits: false, supportsTextInput: false, supportsApps: false,
                 supportsSeparatePause: false, supportsPlayback: false,
                 supportsVoice: false, needsTVPrompt: false, needsPairingCode: false,
-                supportsAutoKeyboard: false)
+                supportsAutoKeyboard: false, supportsExit: false)
         }
     }
 }

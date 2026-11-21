@@ -1574,6 +1574,21 @@ final class PadGeometryTests: XCTestCase {
         XCTAssertNil(PadGeometry(size: .zero).zone(at: CGPoint(x: 10, y: 10)))
     }
 
+    func testExitZoneDisabledWithoutExitSupport() {
+        // v1.0.78: on TVs without a real exit key (Roku, Android
+        // TV) the bottom-right is plain pad — no exit zone, so a
+        // double-tap there is just OK twice. Back and Home are
+        // untouched, and the default pad still has Exit.
+        let noExit = PadGeometry(size: CGSize(width: 360, height: 220), supportsExit: false)
+        XCTAssertFalse(noExit.isExitZone(CGPoint(x: 330, y: 200)))
+        XCTAssertFalse(noExit.isExitZone(CGPoint(x: 360, y: 220)))
+        XCTAssertNil(noExit.zone(at: CGPoint(x: 330, y: 200)))
+        XCTAssertEqual(noExit.zone(at: CGPoint(x: 30, y: 200)), .back)
+        XCTAssertEqual(noExit.zone(at: CGPoint(x: 180, y: 200)), .home)
+        XCTAssertTrue(pad.isExitZone(CGPoint(x: 330, y: 200)))
+        XCTAssertEqual(pad.zone(at: CGPoint(x: 330, y: 200)), .exit)
+    }
+
     func testZoneCenters() {
         // Zone overlay (v1.0.56): on a 360x220 pad the mute icon
         // sits at (0.835, 0.5) and the bottom icons at y 0.875,
@@ -1608,6 +1623,21 @@ final class PadGeometryTests: XCTestCase {
         XCTAssertEqual(corner.x, -0.5, accuracy: 0.0001)
         XCTAssertEqual(corner.y, 0.5, accuracy: 0.0001)
         XCTAssertEqual(corner.z, 0, accuracy: 0.0001)
+    }
+}
+
+/// Exit capability (v1.0.78): only Samsung and LG have a real
+/// exit key. Roku ECP has none (exit maps to Home) and Android
+/// TV's protocol maps exit to the same code as back, so on those
+/// brands the Exit zone and guide card are hidden.
+final class ExitCapabilityTests: XCTestCase {
+    func testSupportsExitByBrand() {
+        XCTAssertTrue(RemoteCapabilities.forBrand(.samsung).supportsExit)
+        XCTAssertTrue(RemoteCapabilities.forBrand(.lg).supportsExit)
+        XCTAssertFalse(RemoteCapabilities.forBrand(.roku).supportsExit)
+        XCTAssertFalse(RemoteCapabilities.forBrand(.androidTV).supportsExit)
+        XCTAssertFalse(RemoteCapabilities.forBrand(.airPlay).supportsExit)
+        XCTAssertFalse(RemoteCapabilities.forBrand(.other).supportsExit)
     }
 }
 

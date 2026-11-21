@@ -344,6 +344,15 @@ enum PadZone: Equatable, Hashable {
 /// unit tests can drive it directly. Extracted from SwipePadView
 /// when the pad moved into its own file.
 struct PadGeometry {
+    /// Whether the connected TV has a real exit key (v1.0.78):
+    /// false on Roku and Android TV, whose protocols have no
+    /// exit key — on those brands the bottom-right zone is plain
+    /// pad (a double-tap there is just OK twice) and the Exit
+    /// icon and guide card are hidden. Defaults true so the
+    /// zone math stays exactly as before unless a caller says
+    /// otherwise.
+    let supportsExit: Bool = true
+
     /// Max tilt: 4° (v1.0.58) — back from 6° in v1.0.54, whose field
     /// test still found it slightly too strong. Same single-spring
     /// behavior, just a lower max.
@@ -446,9 +455,11 @@ struct PadGeometry {
 
     /// True when a tap location falls in the bottom-right zone
     /// (Exit). Same strict-below-y = 0.75 rule as the other bottom
-    /// zones. False until the size is known.
+    /// zones. False until the size is known — and always false
+    /// when the TV has no exit key (v1.0.78): the zone is plain
+    /// pad there, not an Exit tap.
     func isExitZone(_ location: CGPoint) -> Bool {
-        guard size.width > 0, size.height > 0 else { return false }
+        guard supportsExit, size.width > 0, size.height > 0 else { return false }
         let x = location.x / size.width
         let y = location.y / size.height
         let eps: CGFloat = 1e-9
@@ -781,12 +792,18 @@ struct SourceGlyph: View {
 /// plain pad stays clean.
 struct PadZoneOverlay: View {
     var size: CGSize
+    /// Whether the connected TV has a real exit key (v1.0.78):
+    /// when false the Exit icon is left out — the bottom-right
+    /// is plain pad there. The divider lines stay as they are:
+    /// the x = 2/3 line is still Home's right edge, a real
+    /// boundary either way.
+    var supportsExit: Bool = true
 
     var body: some View {
         ZStack {
             if size.width > 0, size.height > 0 {
                 zoneLines
-                ForEach([PadZone.mute, .source, .back, .home, .exit], id: \.self) { zone in
+                ForEach(zonesShown, id: \.self) { zone in
                     if let center = PadGeometry(size: size).center(of: zone) {
                         zoneIcon(zone)
                             .position(center)
@@ -795,6 +812,14 @@ struct PadZoneOverlay: View {
             }
         }
         .allowsHitTesting(false)
+    }
+
+    /// The zones that get an icon: everything, except Exit on
+    /// TVs without a real exit key (v1.0.78).
+    private var zonesShown: [PadZone] {
+        supportsExit
+            ? [.mute, .source, .back, .home, .exit]
+            : [.mute, .source, .back, .home]
     }
 
     /// The divider lines: the mute zone's left and top edges,
@@ -925,12 +950,17 @@ struct SwipePadView: View {
     /// A plain value from RemoteView — @State there, not
     /// persisted: it resets when the remote closes.
     var showZones: Bool
+    /// Whether the connected TV has a real exit key (v1.0.78):
+    /// from the session's capabilities. When false the
+    /// bottom-right double-tap zone is plain pad and the Exit
+    /// icon and guide card are hidden.
+    var supportsExit: Bool
 
     /// Explicit init (v1.0.53): the synthesized memberwise init is
     /// private to this file because of the private @State /
     /// @AppStorage properties below, so RemoteView in ContentView.swift
     /// needs this to construct the pad.
-    init(height: CGFloat, onCommand: @escaping (RemoteCommand, Bool) -> Void, onRepeatCommand: @escaping (RemoteCommand, Bool) -> Void, onCancelRepeats: @escaping () -> Void, isKeyboardOpen: Bool, onDismissKeyboard: @escaping () -> Void, showZones: Bool) {
+    init(height: CGFloat, onCommand: @escaping (RemoteCommand, Bool) -> Void, onRepeatCommand: @escaping (RemoteCommand, Bool) -> Void, onCancelRepeats: @escaping () -> Void, isKeyboardOpen: Bool, onDismissKeyboard: @escaping () -> Void, showZones: Bool, supportsExit: Bool) {
         self.height = height
         self.onCommand = onCommand
         self.onRepeatCommand = onRepeatCommand
@@ -938,6 +968,7 @@ struct SwipePadView: View {
         self.isKeyboardOpen = isKeyboardOpen
         self.onDismissKeyboard = onDismissKeyboard
         self.showZones = showZones
+        self.supportsExit = supportsExit
     }
 
     /// A touch that landed while the keyboard was open (v1.0.53):
@@ -1027,7 +1058,7 @@ struct SwipePadView: View {
     private static let tapSlop: CGFloat = 14
     /// Pad geometry (v1.0.53): the tilt + mute-zone math, as the
     /// pure PadGeometry type — see below.
-    private var padGeometry: PadGeometry { PadGeometry(size: padSize) }
+    private var padGeometry: PadGeometry { PadGeometry(size: padSize, supportsExit: supportsExit) }
 
     /// The pad's border (v1.0.46, Flow fixed in v1.0.51, inset in
     /// v1.0.52): off is the plain static stroke; glow adds a soft
@@ -1149,7 +1180,7 @@ struct SwipePadView: View {
             .overlay(
                 Group {
                     if showZones {
-                        PadZoneOverlay(size: padSize)
+                        PadZoneOverlay(size: padSize, supportsExit: supportsExit)
                             .clipShape(RoundedRectangle(cornerRadius: 24))
                     }
                 }

@@ -10,6 +10,11 @@ struct PadHelpSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
 
+    /// Whether the connected TV has a real exit key (v1.0.78):
+    /// when false the Exit card is left out — the guide only
+    /// shows gestures that actually do something on this TV.
+    var supportsExit: Bool = true
+
     var body: some View {
         VStack(spacing: 0) {
             GlassHeaderPill(title: "Pad controls") { dismiss() }
@@ -26,7 +31,9 @@ struct PadHelpSheet: View {
                     helpCard(tile: SourceGlyph(tint: .teal), tint: .teal, title: "Double-tap top left", subtitle: "Change input / source")
                     helpCard(icon: "arrow.left", tint: .orange, title: "Double-tap bottom left", subtitle: "Go back")
                     helpCard(icon: "house", tint: .purple, title: "Double-tap bottom middle", subtitle: "Go home")
-                    helpCard(icon: "rectangle.portrait.and.arrow.right", tint: .pink, title: "Double-tap bottom right", subtitle: "Exit")
+                    if supportsExit {
+                        helpCard(icon: "rectangle.portrait.and.arrow.right", tint: .pink, title: "Double-tap bottom right", subtitle: "Exit")
+                    }
                 }
                 .padding(16)
                 .padding(.bottom, 24)

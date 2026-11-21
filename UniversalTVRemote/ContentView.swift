@@ -230,7 +230,7 @@ private struct DiscoveryListView: View {
         // Page background (v1.0.48): Chrome dark gray / soft light
         // gray, not the system black/white extremes.
         .background(AppBackground.color(for: colorScheme).ignoresSafeArea())
-        .sheet(isPresented: $showPadHelp) { PadHelpSheet() }
+        .sheet(isPresented: $showPadHelp) { PadHelpSheet(supportsExit: session.capabilities.supportsExit) }
         .sheet(isPresented: $showSettings) { SettingsSheet() }
     }
 
@@ -746,7 +746,7 @@ private struct RemoteView: View {
                 // Back / Home / Exit live in the pad now (v1.0.55):
                 // double-tap the bottom-left, bottom-middle, or
                 // bottom-right — the pill row is gone.
-                SwipePadView(height: layout.padSize, onCommand: { send($0, haptic: $1) }, onRepeatCommand: { sendRepeat($0, haptic: $1) }, onCancelRepeats: { session.cancelRepeats() }, isKeyboardOpen: showKeyboard, onDismissKeyboard: { dismissKeyboard() }, showZones: showZones)
+                SwipePadView(height: layout.padSize, onCommand: { send($0, haptic: $1) }, onRepeatCommand: { sendRepeat($0, haptic: $1) }, onCancelRepeats: { session.cancelRepeats() }, isKeyboardOpen: showKeyboard, onDismissKeyboard: { dismissKeyboard() }, showZones: showZones, supportsExit: session.capabilities.supportsExit)
                     .padding(.horizontal)
 
                 bottomRow(layout: layout)
