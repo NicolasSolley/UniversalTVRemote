@@ -230,7 +230,10 @@ private struct DiscoveryListView: View {
         // Page background (v1.0.48): Chrome dark gray / soft light
         // gray, not the system black/white extremes.
         .background(AppBackground.color(for: colorScheme).ignoresSafeArea())
-        .sheet(isPresented: $showPadHelp) { PadHelpSheet(supportsExit: session.capabilities.supportsExit) }
+        // No TV is connected on the devices list, so there is no
+        // session to ask about exit support — the full guide
+        // shows (supportsExit defaults to true).
+        .sheet(isPresented: $showPadHelp) { PadHelpSheet() }
         .sheet(isPresented: $showSettings) { SettingsSheet() }
     }
 

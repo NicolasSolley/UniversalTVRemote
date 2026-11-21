@@ -378,6 +378,17 @@ struct PadGeometry {
 
     let size: CGSize
 
+    /// Explicit init (v1.0.78): the synthesized memberwise init
+    /// takes its parameters in declaration order (supportsExit,
+    /// then size), so the call-site order (size, supportsExit)
+    /// does not compile — this init takes them in call-site order
+    /// and keeps the supportsExit default, so the plain size-only
+    /// callers (tests, zone overlay) keep working unchanged.
+    init(size: CGSize, supportsExit: Bool = true) {
+        self.size = size
+        self.supportsExit = supportsExit
+    }
+
     /// The zone a tap location falls in, if any. Mute wins on the
     /// shared y = 0.75 boundary (a tap there is still a mute tap,
     /// as before); back wins on the x = 1/3 boundary, home on
