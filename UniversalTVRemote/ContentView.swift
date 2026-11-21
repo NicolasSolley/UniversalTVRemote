@@ -787,19 +787,22 @@ private struct RemoteView: View {
         // the view reports when it is in the hierarchy so the
         // anchor can be applied for real. In the background so
         // it takes no layout space and can never swallow pad
-        // input. Opacity 0 (v1.0.68): 0.01 left the slider's
-        // track and thumb faintly visible — a ghost circle on a
-        // horizontal bar at the center of the page, showing
-        // through the Apps page's transparent list gaps. Opacity
-        // 0 draws nothing but the view stays in the hierarchy
-        // at real size, so the slider is still created and the
-        // volume HUD is still suppressed.
+        // input. Offscreen, NOT transparent (v1.0.77): v1.0.68
+        // set opacity 0 to kill the ghost the 0.01 slider left
+        // showing through the Apps page — but a fully transparent
+        // MPVolumeView is dead to iOS: no slider, no HUD
+        // suppression, no anchor reset. The phone volume then
+        // just climbed with every press until it hit max after
+        // ~10 presses, and the buttons stopped working in both
+        // directions. Alpha 1, parked 2000pt above the screen:
+        // live to the system, invisible to the user, and no
+        // ghost can ever show through again.
         .background(
             HiddenVolumeView(volumeView: hardwareVolume.volumeView) {
                 hardwareVolume.volumeViewDidAppear()
             }
             .frame(width: 200, height: 44)
-            .opacity(0)
+            .offset(y: -2000)
         )
     }
 

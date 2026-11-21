@@ -43,6 +43,18 @@ import SwiftUI
 /// moved the slider, the view is real-sized (200×44) and reports
 /// readiness, and activation is retried on every start with
 /// failures surfaced in the diagnostic line.
+/// v1.0.77: the capture layer is rebuilt around one lesson from
+/// v1.0.68 — the hidden MPVolumeView must be OPAQUE. v1.0.68 set
+/// it to opacity 0 to kill the ghost, and a fully transparent
+/// MPVolumeView is dead to iOS: its slider is never created, the
+/// system HUD is no longer suppressed, and the anchor reset never
+/// lands, so the phone volume saturates after ~10 presses and the
+/// buttons stop working in both directions (and the old "volume
+/// down does nothing on the QM7" note was this same bug, not the
+/// TV — up and down travel the identical key path). The view is
+/// now parked offscreen at full opacity instead, and a failed
+/// anchor reset surfaces in the diagnostic line the moment it
+/// happens instead of failing silently.
 final class HardwareVolumeController: NSObject, ObservableObject {
     /// Called with true for up, false for down. Runs on the main actor.
     var onStep: ((Bool) -> Void)?
@@ -59,7 +71,9 @@ final class HardwareVolumeController: NSObject, ObservableObject {
     /// swallow touches meant for the swipe pad, which it would
     /// otherwise sit on top of (it lives in the remote view's
     /// background). HUD suppression only needs the view in the
-    /// hierarchy.
+    /// hierarchy. Opaque and offscreen (v1.0.77) — never opacity 0:
+    /// a fully transparent MPVolumeView is dead to iOS (no slider,
+    /// no HUD suppression, no anchor reset); see ContentView.
     let volumeView: MPVolumeView = {
         let view = MPVolumeView()
         view.showsRouteButton = false
@@ -175,6 +189,18 @@ final class HardwareVolumeController: NSObject, ObservableObject {
         // reads as zero delta from the anchor, so it is ignored),
         // then read the step against the real previous volume.
         let resetOk = setSystemVolume(Self.anchorVolume)
+        if !resetOk {
+            // The anchor is the only thing standing between the
+            // buttons and saturation: without it the phone volume
+            // walks to an extreme in ~10 presses and that
+            // direction stops firing KVO at all (v1.0.77 — the
+            // v1.0.68 opacity-0 view starved the slider). Say so
+            // in the diagnostic line right away instead of failing
+            // silently; refreshCaptureIssue otherwise only runs at
+            // start and on appear, which is too late once presses
+            // are live.
+            refreshCaptureIssue()
+        }
         guard let up = tracker.step(to: newVolume, resetSucceeded: resetOk) else { return }
         onStep?(up)
     }

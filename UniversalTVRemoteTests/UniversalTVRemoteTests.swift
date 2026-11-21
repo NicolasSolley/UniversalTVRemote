@@ -657,6 +657,33 @@ final class VolumeStepTrackerTests: XCTestCase {
         tracker.noteAnchorApplied()
         XCTAssertEqual(tracker.lastVolume, 0.5)
     }
+
+    func testFailedResetsSaturateAtMax() {
+        // v1.0.77 regression: with the anchor reset failing (the
+        // v1.0.68 opacity-0 MPVolumeView starved the slider), ten
+        // up-presses from 0.375 walk the phone volume to 1.0 — and
+        // an 11th up press then fires no KVO event at all, so the
+        // TV stops responding. The anchor is what makes the buttons
+        // work indefinitely.
+        var tracker = VolumeStepTracker(startingVolume: 0.375)
+        for _ in 0..<10 {
+            let next = tracker.lastVolume + 0.0625
+            XCTAssertEqual(tracker.step(to: next, resetSucceeded: false), Optional(true))
+        }
+        XCTAssertEqual(tracker.lastVolume, 1.0)
+    }
+
+    func testFailedResetsSaturateAtMin() {
+        // Same failure in the other direction: ten down-presses
+        // from 0.625 walk the phone volume to 0.0, and further
+        // down presses fire nothing.
+        var tracker = VolumeStepTracker(startingVolume: 0.625)
+        for _ in 0..<10 {
+            let next = tracker.lastVolume - 0.0625
+            XCTAssertEqual(tracker.step(to: next, resetSucceeded: false), Optional(false))
+        }
+        XCTAssertEqual(tracker.lastVolume, 0.0)
+    }
 }
 
 /// Swipe pad gesture decisions (v1.0.25, swipe-and-hold repeat

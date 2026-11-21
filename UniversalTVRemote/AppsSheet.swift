@@ -229,10 +229,16 @@ enum AppBrandArt {
 /// The Android TV fallback list (v1.0.63): the remote protocol
 /// cannot list installed apps, so the Apps page offers these
 /// popular apps and launches each by its deep link — the app opens
-/// if it is installed on the TV. Deep links from open-tv-remote's
-/// AppCatalog, verified against the fork (Nov 17): https links open
-/// the app directly, `market://launch?id=<package>` launches any
-/// app by package name (Home Assistant deep-link guide).
+/// if it is installed on the TV. Every entry is the app's own deep
+/// link (Home Assistant deep-link guide; Stremio's own docs for
+/// `stremio:///`, Nuvio's `nuvio://` per its link handling).
+/// v1.0.76: the `market://launch?id=<package>` entries are gone —
+/// a Google Play Store change (Aug 2026) broke launching by
+/// package name: the TV now checks the Store instead of opening
+/// the app, so those taps opened the Store page or nothing.
+/// Jellyfin is the one holdout: no published deep link exists yet
+/// (a `jellyfin://` scheme is only a proposal), so it keeps the
+/// package launch until Jellyfin ships one.
 enum AndroidTVAppCatalog {
     static let apps: [TVApp] = [
         TVApp(name: "Netflix", launchID: "https://www.netflix.com/title", iconURL: nil),
@@ -245,16 +251,16 @@ enum AndroidTVAppCatalog {
         TVApp(name: "YouTube TV", launchID: "https://tv.youtube.com", iconURL: nil),
         TVApp(name: "Peacock", launchID: "https://www.peacocktv.com", iconURL: nil),
         TVApp(name: "Paramount+", launchID: "https://www.paramountplus.com", iconURL: nil),
-        TVApp(name: "Crunchyroll", launchID: "market://launch?id=com.crunchyroll.crunchyroid", iconURL: nil),
-        TVApp(name: "Tubi", launchID: "market://launch?id=com.tubitv", iconURL: nil),
-        TVApp(name: "Pluto TV", launchID: "market://launch?id=tv.pluto.android", iconURL: nil),
-        TVApp(name: "Twitch", launchID: "market://launch?id=tv.twitch.android.app", iconURL: nil),
+        TVApp(name: "Crunchyroll", launchID: "crunchyroll://", iconURL: nil),
+        TVApp(name: "Tubi", launchID: "https://tubitv.com/", iconURL: nil),
+        TVApp(name: "Pluto TV", launchID: "https://pluto.tv/en/live-tv", iconURL: nil),
+        TVApp(name: "Twitch", launchID: "twitch://home", iconURL: nil),
         TVApp(name: "Spotify", launchID: "spotify://", iconURL: nil),
         TVApp(name: "Plex", launchID: "plex://", iconURL: nil),
         TVApp(name: "Jellyfin", launchID: "market://launch?id=org.jellyfin.androidtv", iconURL: nil),
-        TVApp(name: "Emby", launchID: "market://launch?id=com.mb.android", iconURL: nil),
-        TVApp(name: "Stremio", launchID: "market://launch?id=com.stremio.one", iconURL: nil),
-        TVApp(name: "Nuvio", launchID: "market://launch?id=com.nuvio.tv", iconURL: nil),
+        TVApp(name: "Emby", launchID: "embyatv://tv.emby.embyatv/startapp", iconURL: nil),
+        TVApp(name: "Stremio", launchID: "stremio:///", iconURL: nil),
+        TVApp(name: "Nuvio", launchID: "nuvio://", iconURL: nil),
     ]
 }
 
