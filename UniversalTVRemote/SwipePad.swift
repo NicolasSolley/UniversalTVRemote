@@ -348,10 +348,10 @@ struct PadGeometry {
     /// false on Roku and Android TV, whose protocols have no
     /// exit key — on those brands the bottom-right zone is plain
     /// pad (a double-tap there is just OK twice) and the Exit
-    /// icon and guide card are hidden. Defaults true so the
-    /// zone math stays exactly as before unless a caller says
-    /// otherwise.
-    let supportsExit: Bool = true
+    /// icon and guide card are hidden. Defaults true in the init
+    /// below, so the zone math stays exactly as before unless a
+    /// caller says otherwise.
+    let supportsExit: Bool
 
     /// Max tilt: 4° (v1.0.58) — back from 6° in v1.0.54, whose field
     /// test still found it slightly too strong. Same single-spring
