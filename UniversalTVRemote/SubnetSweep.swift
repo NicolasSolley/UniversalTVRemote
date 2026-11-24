@@ -342,6 +342,48 @@ final class SubnetSweep {
         return dottedQuad(ip | ~mask)
     }
 
+    /// Whether a remembered TV's host sits on the phone's current
+    /// Wi-Fi subnet (v1.0.79): the auto-open gate. A TV whose
+    /// address is not on this subnet lives on a network the phone
+    /// is not on — opening it from here just spins on a dead
+    /// connection, so the app stays on the devices list instead.
+    /// False when the phone has no Wi-Fi address (cellular / no
+    /// network) or the host is not a dotted quad. Uses the same
+    /// en0 lookup and /24 capping as the sweep itself.
+    static func isHostOnCurrentSubnet(_ host: String) -> Bool {
+        guard let (address, netmask) = wifiIPv4(),
+              let hostValue = ipv4Value(host) else { return false }
+        return isOnSubnet(host: hostValue,
+                          address: UInt32(bigEndian: address.s_addr),
+                          mask: UInt32(bigEndian: netmask.s_addr))
+    }
+
+    /// Pure subnet-membership check, so tests can drive it directly
+    /// (v1.0.79): true when `host` is inside the subnet defined by
+    /// `address` + `netmask`. Mirrors wifiSubnet's capping — wider
+    /// than /24 counts the phone's /24 only.
+    static func host(_ host: String, isOnSubnetWithAddress address: String, netmask: String) -> Bool {
+        guard let hostValue = ipv4Value(host),
+              let addressValue = ipv4Value(address),
+              let maskValue = ipv4Value(netmask) else { return false }
+        return isOnSubnet(host: hostValue, address: addressValue, mask: maskValue)
+    }
+
+    /// Core check on host-order values: the host is on the subnet
+    /// when it shares the network bits. Wider than /24 counts the
+    /// phone's /24 only, exactly like wifiSubnet's sweep range.
+    private static func isOnSubnet(host: UInt32, address: UInt32, mask: UInt32) -> Bool {
+        let effectiveMask: UInt32 = mask.nonzeroBitCount < 24 ? 0xFFFFFF00 : mask
+        return (host & effectiveMask) == (address & effectiveMask)
+    }
+
+    /// Dotted quad → host-order UInt32, nil when not an IPv4 literal.
+    private static func ipv4Value(_ dotted: String) -> UInt32? {
+        var addr = in_addr()
+        guard inet_pton(AF_INET, dotted, &addr) == 1 else { return nil }
+        return UInt32(bigEndian: addr.s_addr)
+    }
+
     /// The phone's Wi-Fi subnet: host addresses to sweep plus a label
     /// like "192.168.1.0/24". Returns nil when the phone has no Wi-Fi
     /// IPv4 address. Wider masks are capped to the /24 containing the

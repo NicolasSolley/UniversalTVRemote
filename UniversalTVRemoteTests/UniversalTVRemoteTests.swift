@@ -2272,3 +2272,38 @@ final class DemoTVTests: XCTestCase {
         XCTAssertFalse(RememberedTVStore.load().contains { $0.host == "demo" })
     }
 }
+
+/// Auto-open subnet gate (v1.0.79): the last TV only auto-opens
+/// when its address is on the phone's current Wi-Fi subnet.
+final class SubnetGateTests: XCTestCase {
+    func testSameSubnetOpens() {
+        XCTAssertTrue(SubnetSweep.host("192.168.1.117", isOnSubnetWithAddress: "192.168.1.10", netmask: "255.255.255.0"))
+    }
+
+    func testDifferentSubnetDoesNotOpen() {
+        XCTAssertFalse(SubnetSweep.host("192.168.1.117", isOnSubnetWithAddress: "192.168.2.10", netmask: "255.255.255.0"))
+    }
+
+    func testWideMaskCountsOnlyPhonesSlash24() {
+        // A /16 at home: the sweep caps to the phone's /24, and so
+        // does the gate — a TV in another /24 of the same /16 is
+        // not on the swept subnet.
+        XCTAssertTrue(SubnetSweep.host("10.0.5.20", isOnSubnetWithAddress: "10.0.5.9", netmask: "255.255.0.0"))
+        XCTAssertFalse(SubnetSweep.host("10.0.6.20", isOnSubnetWithAddress: "10.0.5.9", netmask: "255.255.0.0"))
+    }
+
+    func testNarrowMaskIsRespected() {
+        XCTAssertTrue(SubnetSweep.host("192.168.1.100", isOnSubnetWithAddress: "192.168.1.10", netmask: "255.255.255.128"))
+        XCTAssertFalse(SubnetSweep.host("192.168.1.200", isOnSubnetWithAddress: "192.168.1.10", netmask: "255.255.255.128"))
+    }
+
+    func testNonIPHostDoesNotOpen() {
+        XCTAssertFalse(SubnetSweep.host("my-tv.local", isOnSubnetWithAddress: "192.168.1.10", netmask: "255.255.255.0"))
+        XCTAssertFalse(SubnetSweep.host("", isOnSubnetWithAddress: "192.168.1.10", netmask: "255.255.255.0"))
+    }
+
+    func testBadAddressOrNetmaskDoesNotOpen() {
+        XCTAssertFalse(SubnetSweep.host("192.168.1.117", isOnSubnetWithAddress: "not-an-ip", netmask: "255.255.255.0"))
+        XCTAssertFalse(SubnetSweep.host("192.168.1.117", isOnSubnetWithAddress: "192.168.1.10", netmask: "bad-mask"))
+    }
+}

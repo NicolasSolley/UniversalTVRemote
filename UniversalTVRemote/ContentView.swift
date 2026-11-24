@@ -14,7 +14,8 @@ struct ContentView: View {
     /// the default, the way the app has always looked.
     @AppStorage("appearance") private var appearanceRaw = "system"
     /// Auto-open last TV (v1.0.63): setting, default ON — the app
-    /// opens straight to the last TV used, when one is remembered.
+    /// opens straight to the last TV used, when one is remembered
+    /// and on the phone's current Wi-Fi subnet (v1.0.79).
     @AppStorage("openLastTV") private var openLastTV = true
     /// True while the current remote came from an auto-open (not a
     /// tap) — drives the unreachable-TV fallback in RemoteView.
@@ -82,7 +83,13 @@ struct ContentView: View {
             // manual tap, which stops it — see onSelect). If the TV
             // isn't reachable, RemoteView falls back to the list with
             // a note. Coming back to an empty list re-scans (onBack).
-            if openLastTV, let last = RememberedTVStore.lastTV(), last.brand.supportsControl {
+            // v1.0.79: only when the last TV is on the phone's
+            // current Wi-Fi subnet — from another network the app
+            // would just spin on a dead connection, so it stays on
+            // the list and scans instead. A sleeping TV at home is
+            // still on the subnet, so the wake flow is unchanged.
+            if openLastTV, let last = RememberedTVStore.lastTV(), last.brand.supportsControl,
+               SubnetSweep.isHostOnCurrentSubnet(last.host) {
                 session = RemoteSession(device: last.asSleepingDevice())
                 autoOpened = true
                 return
