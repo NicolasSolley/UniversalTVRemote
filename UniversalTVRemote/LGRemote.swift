@@ -543,7 +543,7 @@ actor LGRemote {
         // TVs (plain ws://:3000 only) omitting it re-triggers the
         // pairing prompt on every connect (fork's register()).
         if let key = UserDefaults.standard.string(forKey: clientKeyKey) {
-            payloadParts.append("\"client-key\":\(jsonString(key))")
+            payloadParts.append("\"client-key\":\(Self.jsonString(key))")
         }
         let manifest = simple ? Self.simpleManifestJSON : Self.signedManifestJSON
         payloadParts.append("\"manifest\":\(manifest)")
@@ -681,8 +681,14 @@ actor LGRemote {
     }
 
     /// JSON-encodes a string value (with quotes).
-    private func jsonString(_ value: String) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: value),
+    /// Must use JSONEncoder, NOT JSONSerialization.data(withJSONObject:):
+    /// a bare String is an invalid top-level type for NSJSONSerialization
+    /// and it raises an NSException — which Swift's try? cannot catch —
+    /// crashing the app. That is what killed every LG reconnect once a
+    /// client-key was stored: register() calls this only when a key
+    /// exists, so the first pairing worked and every reconnect crashed.
+    static func jsonString(_ value: String) -> String {
+        guard let data = try? JSONEncoder().encode(value),
               let text = String(data: data, encoding: .utf8) else { return "\"\"" }
         return text
     }

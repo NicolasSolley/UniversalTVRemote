@@ -1293,6 +1293,21 @@ final class ErrorConnectionLevelTests: XCTestCase {
         XCTAssertFalse(LGError.blacklistOrSignature.isConnectionLevel)
     }
 
+    func testLGJsonStringEncodesClientKey() {
+        // Regression test (v1.0.80): jsonString used to pass a bare String
+        // to JSONSerialization, which raises an NSException ("Invalid
+        // top-level type in JSON write") that try? cannot catch — every LG
+        // reconnect crashed once a client-key was stored.
+        XCTAssertEqual(LGRemote.jsonString("abc123"), "\"abc123\"")
+        XCTAssertEqual(LGRemote.jsonString(""), "\"\"")
+        // Special characters must be escaped, and the result must decode
+        // back to the original string.
+        let tricky = "a\"b\\c\nd"
+        let encoded = LGRemote.jsonString(tricky)
+        let decoded = try? JSONDecoder().decode(String.self, from: Data(encoded.utf8))
+        XCTAssertEqual(decoded, tricky)
+    }
+
     func testRokuErrors() {
         XCTAssertFalse(RokuRemote.RokuError.blocked.isConnectionLevel)
         XCTAssertFalse(RokuRemote.RokuError.badResponse.isConnectionLevel)
